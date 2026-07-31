@@ -10,7 +10,7 @@ def _write(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-def _oracle(*, raw: bool = True, all_pass: bool = True, count: int = 1200) -> dict:
+def _oracle(*, raw: bool = True, all_pass: bool = True, count: int = 137) -> dict:
     return {
         "audit_mode": "raw" if raw else "stored",
         "row_count": count,
@@ -21,7 +21,7 @@ def _oracle(*, raw: bool = True, all_pass: bool = True, count: int = 1200) -> di
     }
 
 
-def _targets(*, complete: bool = True, count: int = 1200) -> dict:
+def _targets(*, complete: bool = True, count: int = 548) -> dict:
     return {
         "contract": "PROJECT6_V42_PAPER_WORKFLOW_V1",
         "detail_count": count,
@@ -63,15 +63,32 @@ def test_formal_training_blocks_partial_hydraulic_target_pool(tmp_path: Path):
     assert "hydraulic_target_coverage_incomplete" in admission.reasons
 
 
-def test_formal_training_authorized_only_when_both_independent_gates_pass(tmp_path: Path):
+def test_formal_training_has_no_fixed_1200_quota(tmp_path: Path):
     oracle = tmp_path / "oracle.json"
     targets = tmp_path / "targets.json"
-    _write(oracle, _oracle())
-    _write(targets, _targets())
+    _write(oracle, _oracle(count=137))
+    # Target audit may count four raw branch details per case; it is an
+    # independent coverage population and must be complete, not equal 1200.
+    _write(targets, _targets(count=548))
     admission = audit_training_admission(
         independent_oracle_summary=oracle,
         hydraulic_target_audit=targets,
     )
     assert admission.authorized
     assert admission.reasons == ()
-    assert admission.expected_sample_count == 1200
+    assert admission.expected_sample_count is None
+    assert admission.admitted_sample_count == 137
+
+
+def test_explicit_frozen_experiment_count_is_still_enforced(tmp_path: Path):
+    oracle = tmp_path / "oracle.json"
+    targets = tmp_path / "targets.json"
+    _write(oracle, _oracle(count=137))
+    _write(targets, _targets())
+    admission = audit_training_admission(
+        independent_oracle_summary=oracle,
+        hydraulic_target_audit=targets,
+        expected_sample_count=1200,
+    )
+    assert not admission.authorized
+    assert any(x.startswith("oracle_row_count_mismatch") for x in admission.reasons)

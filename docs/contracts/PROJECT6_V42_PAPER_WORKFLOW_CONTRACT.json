@@ -5,6 +5,14 @@
   "authoritative_for": "paper_scientific_workflow",
   "legacy_pipeline_authorizes_formal": false,
   "network_variant": "rainfall_only_no_dwf",
+  "mainline_order": [
+    "phase_r0",
+    "step1_sparse_state_reconstruction",
+    "step2_multi_reference_hydraulic_surrogate",
+    "step3_pfv_first_rolling_mpc",
+    "step4_closed_loop_and_blind_evaluation"
+  ],
+  "mainline_auditor": "sewerrtc.v4.v42_mainline_workflow.audit_v42_mainline",
   "timing": {
     "state_record_min": 5,
     "control_interval_min": 10,
@@ -15,6 +23,19 @@
     "horizon_steps": 12,
     "horizon_semantics": "t+10,t+20,...,t+120"
   },
+  "phase_r0": {
+    "role": "project_wide_physical_swmm_evidence_pool",
+    "strict_auditor": "sewerrtc.v4.v42_r0_strict.audit_existing_swmm_pool_strict",
+    "strict_reusable_builder": "sewerrtc.v4.v42_reusable_pool_strict.build_reusable_paper_pool_strict",
+    "full_finite_audit_required": true,
+    "numeric_four_reference_alignment_required": true,
+    "rainfall_series_split_isolation_required": true,
+    "historical_revealed_evidence_role": "consumed_development_not_fresh_blind",
+    "reserved_challenge_formal_reuse_forbidden": true,
+    "action_authority": "actual_readback_setting",
+    "missing_target_imputation_allowed": false,
+    "counterfactual_requires_all_four_roles_finite": true
+  },
   "step1_sparse_state_reconstruction": {
     "role": "state_estimation_only_not_policy",
     "inputs": [
@@ -22,7 +43,7 @@
       "sensor_mask",
       "rainfall_history",
       "network_topology",
-      "historical_actions",
+      "historical_actual_readback_actions",
       "node_static_attributes",
       "link_static_attributes"
     ],
@@ -40,10 +61,13 @@
     "legacy_sr0p15_status": "historical_single_snapshot_depth_reconstructor_not_full_step1_contract",
     "legacy_sr0p15_can_authorize_formal_gat_integrated_loop": false,
     "formal_reconstructor_requires_new_training_and_compatibility_audit": true,
+    "formal_training_action_authority": "actual_readback_setting",
     "future_hydraulic_truth_forbidden": true,
     "offline_truth_must_not_be_labelled_reconstructed": true,
     "missing_flow_must_not_be_zero_filled": true,
     "missing_ood_blocks_formal_online_control": true,
+    "uncertainty_calibration_required": true,
+    "ood_calibration_required": true,
     "physical_head_and_filling_are_derived_from_inp_metadata": true
   },
   "step2_multi_reference_hydraulic_surrogate": {
@@ -58,8 +82,16 @@
     ],
     "formal_model": "sewerrtc.v4.models_v42.hydraulic_multi_reference.MultiReferenceHydraulicSurrogate",
     "formal_loss": "sewerrtc.v4.models_v42.hydraulic_trajectory_losses.HydraulicTrajectoryLoss",
+    "formal_dataset_builder": "sewerrtc.v4.v42_r0_paper_dataset.build_r0_paper_dataset",
+    "formal_raw_independent_oracle": "sewerrtc.v4.v42_r0_independent_oracle.audit_r0_manifest_raw",
     "formal_training_admission": "sewerrtc.v4.v42_paper_training_admission.audit_training_admission",
     "legacy_direct_kpi_trainer_status": "development_only_not_formal_authority",
+    "history_input_contract": "gat_compatible_causal_state",
+    "history_input_features": [
+      "network_node_depth"
+    ],
+    "historical_actual_readback_actions_required": true,
+    "full_network_flooding_history_as_online_input": false,
     "trajectory_targets": [
       "node_depth",
       "node_flooding_rate",
@@ -74,7 +106,6 @@
       "Peak": "max(candidate system flooding-rate) minus max(dynamic_internal system flooding-rate)"
     },
     "independent_free_standing_kpi_head_authoritative": false,
-    "historical_actions_required": true,
     "missing_reference_policy": "fail_closed_no_substitution",
     "formal_target_coverage": {
       "node_depth": "required",
@@ -85,6 +116,7 @@
       "system_flooding_rate_sequence": "derived_from_node_flooding_rate"
     },
     "authoritative_raw_recorder": "sewerrtc.simulation.v42_hydraulic_recorder.record_v42_hydraulic_targets",
+    "fixed_train1200_or_train1600_quota_required": false,
     "current_known_data_gap": {
       "legacy_detail_outfall_flow": "absent_in_existing_generic_detail_writer",
       "formal_training_before_new_target_coverage_audit_passes": false
@@ -110,7 +142,11 @@
     "safety_violation_can_be_compensated_by_performance": false,
     "safe_set_empty": "execute_frozen_fallback",
     "solver_or_selection_error": "execute_frozen_fallback",
-    "max_changed_facilities": 8
+    "max_changed_facilities": 8,
+    "formal_evidence_requires_engineering_status_derived_from_execution": true,
+    "formal_evidence_requires_changed_facilities_derived_from_executed_action": true,
+    "formal_evidence_requires_actual_readback_verification": true,
+    "formal_evidence_requires_calibrated_uncertainty_and_ood_lineage": true
   },
   "step4_closed_loop_and_blind_evaluation": {
     "ordered_stages": [
@@ -126,17 +162,26 @@
     "old_calibration_can_substitute_formal": false,
     "old_locked_can_substitute_formal": false,
     "development_results_can_substitute_formal": false,
+    "policy_lock_lineage": {
+      "challenge_and_formal_must_match_policy_sha256": true,
+      "challenge_and_formal_must_match_model_sha256": true,
+      "challenge_and_formal_must_match_fallback_contract_sha256": true
+    },
     "formal_blind": {
       "minimum_events": 24,
       "new_rainfall_sha_required": true,
+      "explicit_unique_rainfall_sha_list_required": true,
+      "revealed_rainfall_overlap_count_required": 0,
       "post_reveal_exclusion_allowed": false,
       "policy_lock_required_before_reveal": true
     }
   },
   "scientific_stop_conditions": [
-    "do_not_train formal Step1 temporal GAT until independent sparse-sensor training/validation data and uncertainty calibration are available",
-    "do_not_train formal trajectory surrogate until raw Independent Oracle passes and all required hydraulic target groups have audited coverage",
+    "do not authorize R0 until full finite, numeric four-reference alignment, and rainfall-isolation manifests pass",
+    "do_not_train formal Step1 temporal GAT until independent sparse-sensor training/validation data and uncertainty/OOD calibration are available",
+    "do_not_train formal trajectory surrogate until the strict R0 materializer, raw Independent Oracle, and all required hydraulic target groups pass",
     "do_not_run closed loop until true-state offline validation passes",
+    "do_not accept Step3 engineering/K/readback flags unless derived from actual projected/written/readback execution",
     "do_not lock policy until exact, surrogate, and GAT-integrated closed loops pass",
     "do not use Challenge or Formal events for development or retraining",
     "do not claim Formal Blind from development, Calibration, or historical Locked evidence"

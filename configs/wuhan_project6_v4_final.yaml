@@ -98,7 +98,10 @@ partial:
     noop_ratio_max: 0.2
     projection_collapse_ratio_max: 0.2
 
+# Historical fixed-size production configuration.  These assets remain reusable
+# evidence, but this quota does not define the V4.2 formal training population.
 train1600:
+  legacy_fixed_pool_only: true
   accepted_target: 1600
   primary_events: 64
   reserve_events: 16
@@ -146,6 +149,9 @@ mpc_v42:
 paper_workflow:
   contract_id: PROJECT6_V42_PAPER_WORKFLOW_V1
   model_line: v42_trajectory_first_multi_reference
+  mainline_auditor: sewerrtc.v4.v42_mainline_workflow.audit_v42_mainline
+  r0_auditor: sewerrtc.v4.v42_r0_strict.audit_existing_swmm_pool_strict
+  r0_reusable_builder: sewerrtc.v4.v42_reusable_pool_strict.build_reusable_paper_pool_strict
   state_role: state_estimation_only_not_policy
   formal_state_reconstructor: sewerrtc.models.temporal_sparse_gat_v42.TemporalSparseGATReconstructorV42
   state_adapter: sewerrtc.state.v42_sparse_state.build_sparse_state_estimate
@@ -154,11 +160,16 @@ paper_workflow:
   surrogate_role: hydraulic_surrogate_not_policy
   formal_surrogate: sewerrtc.v4.models_v42.hydraulic_multi_reference.MultiReferenceHydraulicSurrogate
   formal_surrogate_loss: sewerrtc.v4.models_v42.hydraulic_trajectory_losses.HydraulicTrajectoryLoss
-  paper_dataset_builder: sewerrtc.v4.v42_paper_dataset.build_paper_dataset
+  paper_dataset_builder: sewerrtc.v4.v42_r0_paper_dataset.build_r0_paper_dataset
+  raw_independent_oracle: sewerrtc.v4.v42_r0_independent_oracle.audit_r0_manifest_raw
   hydraulic_target_audit: sewerrtc.v4.v42_hydraulic_target_audit.audit_detail_pool
   training_admission: sewerrtc.v4.v42_paper_training_admission.audit_training_admission
   raw_hydraulic_recorder: sewerrtc.simulation.v42_hydraulic_recorder.record_v42_hydraulic_targets
   training_action_authority: actual_readback_setting
+  step2_history_input_contract: gat_compatible_causal_state
+  step2_history_features:
+    - depth_m
+  full_network_flood_history_as_online_input: false
   ordered_stages:
     - true_state_offline_validation
     - exact_swmm_closed_loop
@@ -178,6 +189,8 @@ paper_workflow:
     formal_step2_requires_raw_independent_oracle: true
     formal_step2_requires_complete_hydraulic_targets: true
     formal_step2_requires_explicit_outfall_flow: true
+    formal_step3_requires_execution_derived_engineering_guards: true
+    formal_step3_requires_actual_readback_verification: true
 
 formal_blind:
   minimum_events: 24

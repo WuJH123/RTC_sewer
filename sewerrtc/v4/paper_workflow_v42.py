@@ -1,9 +1,9 @@
 """Fail-closed stage gate for the final V4.2 paper workflow.
 
-This module intentionally does not reuse the V4.1 compact-model gate.  It owns
-the scientific ordering of the paper line and refuses to accept evidence whose
-contract ID, model line, policy-lock lineage, or event reveal semantics do not
-match V4.2.
+The gate owns the formal evidence sequence.  It additionally verifies that the
+Step-1/Step-2/Step-3 prerequisites represented in each stage payload are real,
+and that Challenge/Formal-Blind reuse exactly the policy/model/fallback hashes
+frozen at Policy Lock.
 """
 from __future__ import annotations
 
@@ -36,6 +36,8 @@ EVIDENCE_RELATIVE_PATHS = {
     "challenge": "v42_paper/challenge/evidence.json",
     "formal_blind": "v42_paper/formal_blind/evidence.json",
 }
+
+LOCK_HASH_KEYS = ("policy_sha256", "model_sha256", "fallback_contract_sha256")
 
 
 @dataclass(frozen=True)
@@ -102,6 +104,11 @@ def _common_reasons(stage: str, payload: Mapping[str, Any]) -> list[str]:
     return reasons
 
 
+def _require_hash(payload: Mapping[str, Any], key: str, reasons: list[str]) -> None:
+    if not str(payload.get(key, "")).strip():
+        reasons.append(f"missing_{key}")
+
+
 def _stage_specific_reasons(stage: str, payload: Mapping[str, Any]) -> list[str]:
     reasons: list[str] = []
     if stage == "true_state_offline_validation":
@@ -111,16 +118,28 @@ def _stage_specific_reasons(stage: str, payload: Mapping[str, Any]) -> list[str]
             reasons.append("four_reference_surrogate_not_verified")
         if payload.get("trajectory_first_kpi_derivation") is not True:
             reasons.append("trajectory_first_kpi_derivation_not_verified")
+        if payload.get("training_admission_authorized") is not True:
+            reasons.append("formal_step2_training_admission_not_proven")
+        if payload.get("raw_independent_oracle_all_pass") is not True:
+            reasons.append("raw_independent_oracle_not_proven")
+        _require_hash(payload, "surrogate_model_sha256", reasons)
     elif stage == "exact_swmm_closed_loop":
         if payload.get("authoritative_engine") != "SWMM":
             reasons.append("exact_closed_loop_not_authoritative_swmm")
         if payload.get("online_future_hydraulic_truth_used") is True:
             reasons.append("future_hydraulic_truth_used_online")
+        if payload.get("canonical_pfvfirst_mpc_v42") is not True:
+            reasons.append("canonical_pfvfirst_mpc_not_used")
+        if payload.get("engineering_status_derived_from_execution") is not True:
+            reasons.append("engineering_guards_not_derived_from_execution")
+        if payload.get("readback_verified") is not True:
+            reasons.append("actual_readback_not_verified")
     elif stage == "surrogate_closed_loop":
         if payload.get("surrogate_role") != "hydraulic_surrogate_not_policy":
             reasons.append("surrogate_role_contract_violation")
         if payload.get("pfvfirst_mpc_v42") is not True:
             reasons.append("canonical_pfvfirst_mpc_not_used")
+        _require_hash(payload, "surrogate_model_sha256", reasons)
     elif stage == "gat_integrated_closed_loop":
         if payload.get("state_source") != "gat_sparse_reconstruction":
             reasons.append("gat_integrated_loop_requires_sparse_gat_state")
@@ -128,10 +147,15 @@ def _stage_specific_reasons(stage: str, payload: Mapping[str, Any]) -> list[str]
             reasons.append("gat_uncertainty_not_used")
         if payload.get("ood_gate_used") is not True:
             reasons.append("ood_gate_not_used")
+        if payload.get("uncertainty_calibrated") is not True:
+            reasons.append("gat_uncertainty_not_calibrated")
+        if payload.get("ood_calibrated") is not True:
+            reasons.append("gat_ood_not_calibrated")
+        _require_hash(payload, "gat_model_sha256", reasons)
     elif stage == "policy_lock":
-        for key in ("policy_sha256", "model_sha256", "fallback_contract_sha256"):
-            if not str(payload.get(key, "")).strip():
-                reasons.append(f"missing_{key}")
+        for key in LOCK_HASH_KEYS:
+            _require_hash(payload, key, reasons)
+        _require_hash(payload, "gat_model_sha256", reasons)
         if payload.get("post_lock_parameter_updates_allowed") is not False:
             reasons.append("policy_lock_allows_post_lock_updates")
     elif stage == "challenge":
@@ -139,6 +163,8 @@ def _stage_specific_reasons(stage: str, payload: Mapping[str, Any]) -> list[str]
             reasons.append("challenge_revealed_before_policy_lock")
         if payload.get("used_for_retraining") is True:
             reasons.append("challenge_used_for_retraining")
+        for key in LOCK_HASH_KEYS:
+            _require_hash(payload, key, reasons)
     elif stage == "formal_blind":
         try:
             event_count = int(payload.get("event_count", 0))
@@ -154,10 +180,48 @@ def _stage_specific_reasons(stage: str, payload: Mapping[str, Any]) -> list[str]
             reasons.append("formal_post_reveal_exclusion_forbidden")
         if payload.get("used_for_retraining") is True:
             reasons.append("formal_used_for_retraining")
+        rainfall_shas = payload.get("rainfall_sha256s")
+        if not isinstance(rainfall_shas, list) or len(rainfall_shas) != event_count:
+            reasons.append("formal_rainfall_sha_list_missing_or_count_mismatch")
+        elif len({str(x) for x in rainfall_shas if str(x).strip()}) != event_count:
+            reasons.append("formal_rainfall_sha_not_unique")
+        if payload.get("revealed_rainfall_overlap_count") not in (0, "0"):
+            reasons.append("formal_rainfall_overlaps_revealed_development")
+        for key in LOCK_HASH_KEYS:
+            _require_hash(payload, key, reasons)
     return reasons
 
 
-def audit_stage_evidence(stage: str, evidence_path: Path) -> StageAudit:
+def _policy_lineage_reasons(
+    *,
+    stage: str,
+    payload: Mapping[str, Any],
+    output_root: Path,
+) -> list[str]:
+    if stage not in {"challenge", "formal_blind"}:
+        return []
+    lock_path = output_root / EVIDENCE_RELATIVE_PATHS["policy_lock"]
+    if not lock_path.exists():
+        return ["policy_lock_evidence_missing_for_lineage"]
+    try:
+        lock = _read_json(lock_path)
+    except Exception:
+        return ["policy_lock_evidence_unreadable_for_lineage"]
+    reasons: list[str] = []
+    for key in LOCK_HASH_KEYS:
+        expected = str(lock.get(key, ""))
+        observed = str(payload.get(key, ""))
+        if not expected or observed != expected:
+            reasons.append(f"{key}_does_not_match_policy_lock")
+    return reasons
+
+
+def audit_stage_evidence(
+    stage: str,
+    evidence_path: Path,
+    *,
+    output_root: str | Path | None = None,
+) -> StageAudit:
     if stage not in PAPER_STAGE_ORDER:
         raise KeyError(f"unknown paper stage: {stage}")
     path = Path(evidence_path)
@@ -175,6 +239,12 @@ def audit_stage_evidence(stage: str, evidence_path: Path) -> StageAudit:
         )
     reasons = _common_reasons(stage, payload)
     reasons.extend(_stage_specific_reasons(stage, payload))
+    if output_root is not None:
+        reasons.extend(
+            _policy_lineage_reasons(
+                stage=stage, payload=payload, output_root=Path(output_root)
+            )
+        )
     return StageAudit(stage, not reasons, tuple(reasons), str(path), _sha256(path))
 
 
@@ -186,7 +256,7 @@ def audit_paper_workflow(output_root: str | Path) -> WorkflowAudit:
     next_stage: str | None = None
     for stage in PAPER_STAGE_ORDER:
         evidence = root / EVIDENCE_RELATIVE_PATHS[stage]
-        audit = audit_stage_evidence(stage, evidence)
+        audit = audit_stage_evidence(stage, evidence, output_root=root)
         audits.append(audit)
         if not audit.passed:
             next_stage = stage
@@ -215,7 +285,11 @@ def assert_stage_authorized(stage: str, output_root: str | Path) -> None:
     root = Path(output_root)
     stage_idx = PAPER_STAGE_ORDER.index(stage)
     for prior in PAPER_STAGE_ORDER[:stage_idx]:
-        audit = audit_stage_evidence(prior, root / EVIDENCE_RELATIVE_PATHS[prior])
+        audit = audit_stage_evidence(
+            prior,
+            root / EVIDENCE_RELATIVE_PATHS[prior],
+            output_root=root,
+        )
         if not audit.passed:
             raise RuntimeError(
                 f"{stage} is not authorized because prerequisite {prior} failed: "

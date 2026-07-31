@@ -39,9 +39,25 @@ The pool audit uses six classes:
 Old calibration/locked/formal evidence that has already been revealed is
 `consumed_development`, not new Formal Blind evidence.
 
-## Discovery adapters
+## Discovery adapters and serialized schema
 
-`sewerrtc/v4/v42_existing_pool_audit.py` discovers both:
+`sewerrtc/v4/v42_existing_pool_audit.py` contains the low-level heterogeneous
+reader. The formal command goes through `sewerrtc/v4/v42_r0_strict.py`, which
+owns the frozen action-hash semantics, schema validation, deterministic case
+classification and post-scan resume checkpoint.
+
+The physical inventory has a single authoritative naming contract:
+
+```text
+TargetAvailability.<field>  ->  available_<field>
+```
+
+For example `depth_semantics` is serialized as
+`available_depth_semantics`. Downstream R0 code must not guess or recreate an
+unprefixed alias. The strict layer derives this mapping from the dataclass fields
+and fails immediately if the serialized schema drifts.
+
+The discovery adapters include both:
 
 - `completion.json`-managed runs; and
 - orphan/legacy `detail.csv` or `*_detail.csv` files not represented by a
@@ -49,7 +65,9 @@ Old calibration/locked/formal evidence that has already been revealed is
 
 A manifest row is never assumed to equal one physical SWMM run. Exact duplicate
 physical evidence is collapsed in the canonical inventory while provenance is
-retained in `duplicate_lineage_audit.csv`.
+retained in `duplicate_lineage_audit.csv`. If duplicate physical rows exist for
+the same branch role, case classification and numeric alignment use deterministic
+role-wise admission rather than dictionary/arrival order.
 
 ## Target rules
 
@@ -79,7 +97,8 @@ learning. `v42_case_alignment_audit.py` reopens Candidate/NC/DI/Hold details and
 compares the real 13-frame prefix numerically (node depth, Storage volume,
 Engineering36 flow and readback setting) and verifies that H120 rainfall forcing
 is identical. Counterfactual case supervision remains false until this audit
-passes.
+passes. The alignment output records the exact physical ID selected for each of
+the four roles.
 
 Legacy whole-event files with no formal checkpoint can still contribute to
 single-branch dynamics/action-effect pretraining when their timestamps contain
@@ -117,23 +136,44 @@ Use the local Project6 virtual environment:
 ```powershell
 Set-Location -LiteralPath 'E:\RTC_sewer\Project6'
 $Py = 'E:\RTC_sewer\Project6\.venv\Scripts\python.exe'
+$R0 = '.\outputs\project6_dual_reference_v4\final_v4\v42_paper\data_reuse'
 ```
 
-### 1. Fast project-wide discovery pass
+### 1. R0.1 + R0.2 combined full finite audit (canonical default)
 
 ```powershell
-& $Py .\scripts\audit_v42_existing_swmm_pool.py
+& $Py .\scripts\audit_v42_existing_swmm_pool.py --workers 16
 ```
 
-This is for inventory/reporting only. It must **not** authorize a training pool.
+The default is now the **full finite audit**. `--full-finite-check` remains a
+backward-compatible no-op. Use `--metadata-only` only for a diagnostic discovery
+pass that cannot authorize training.
 
-### 2. Full finite-value audit
+Immediately after the expensive detail-file scan completes, before case
+classification starts, the command atomically writes:
+
+```text
+_r0_logical_detail_cache.parquet
+_r0_logical_detail_cache.parquet.meta.json
+```
+
+The cache is guarded by schema ID, project root, outputs root, active network
+SHA, row count and finite-audit mode. A post-processing exception therefore does
+not require another multi-hour CSV scan.
+
+### 2. Resume only the post-scan phase after a classification/reporting failure
 
 ```powershell
-& $Py .\scripts\audit_v42_existing_swmm_pool.py --full-finite-check
+& $Py .\scripts\audit_v42_existing_swmm_pool.py --resume-scan-cache
 ```
 
-This rewrites the audit inventory with finite-value evidence.
+This skips all historical `detail.csv` reads and resumes from the validated
+logical-detail cache. Do not use `--resume-scan-cache` after changing the network,
+outputs root or finite-audit mode; the command fails closed on those mismatches.
+
+A run made **before** this checkpoint feature cannot be reconstructed from the
+console progress log alone. If no logical cache exists, one new full scan is
+required; subsequent post-processing retries use the cache.
 
 ### 3. Numeric four-reference alignment audit
 
@@ -169,7 +209,7 @@ columns. After a separately authorized representative run using the new recorder
 ```powershell
 & $Py .\scripts\validate_v42_outfall_reconstruction.py `
   --detail <NEW_DETAIL_WITH_EXPLICIT_OUTFALL.csv> `
-  --output .\outputs\project6_dual_reference_v4\final_v4\v42_paper\data_reuse\outfall_reconstruction_validation.json
+  --output "$R0\outfall_reconstruction_validation.json"
 ```
 
 If and only if that report is `status=pass`, historical structural candidates
@@ -177,7 +217,7 @@ can be recovered into sidecars:
 
 ```powershell
 & $Py .\scripts\recover_v42_outfall_sidecars.py `
-  --validation-json .\outputs\project6_dual_reference_v4\final_v4\v42_paper\data_reuse\outfall_reconstruction_validation.json
+  --validation-json "$R0\outfall_reconstruction_validation.json"
 ```
 
 Expected output root:
@@ -189,6 +229,8 @@ outputs/project6_dual_reference_v4/final_v4/v42_paper/data_reuse/
 Key files:
 
 ```text
+_r0_logical_detail_cache.parquet
+_r0_logical_detail_cache.parquet.meta.json
 physical_run_inventory.csv
 physical_run_inventory.parquet
 target_coverage_by_branch.csv
