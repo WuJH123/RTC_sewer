@@ -883,10 +883,6 @@ def _audit_single_row(
     try:
         detail_sha, raw_bytes = _read_file_once(path)
         df = pd.read_csv(io.BytesIO(raw_bytes))
-        # Pre-compute window_anchor_count while df is in memory.
-        if "elapsed_min" in df.columns:
-            elapsed_arr = pd.to_numeric(df["elapsed_min"], errors="coerce").to_numpy(float)
-            window_anchor = _window_anchor_count_from_elapsed(elapsed_arr)
         action_sha = _action_sha(path, facility_ids, _df=df)
         checkpoint = None if row.checkpoint_min is None or (isinstance(row.checkpoint_min, float) and math.isnan(row.checkpoint_min)) else float(row.checkpoint_min)
         cache_key = (detail_sha, checkpoint)
@@ -896,8 +892,7 @@ def _audit_single_row(
             target, missing, cached_action, cached_wac = cached
             if not action_sha:
                 action_sha = cached_action
-            if not window_anchor:
-                window_anchor = cached_wac
+            window_anchor = cached_wac
         else:
             target, missing = _audit_target_availability(
                 path,
@@ -911,6 +906,12 @@ def _audit_single_row(
                 full_finite_check=full_finite_check,
                 _df=df,
             )
+            # Compute window_anchor_count only when needed.
+            if target.history_complete and target.horizon_complete:
+                window_anchor = 1
+            elif "elapsed_min" in df.columns:
+                elapsed_arr = pd.to_numeric(df["elapsed_min"], errors="coerce").to_numpy(float)
+                window_anchor = _window_anchor_count_from_elapsed(elapsed_arr)
             with cache_lock:
                 detail_cache[cache_key] = (target, missing, action_sha, window_anchor)
     except Exception as exc:
