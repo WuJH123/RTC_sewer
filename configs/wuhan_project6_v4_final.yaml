@@ -116,7 +116,7 @@ train1600:
     locked_validation: 8
     reserve: 16
 
-# Canonical paper-line controller.  Legacy V3/V4 modules remain readable for
+# Canonical paper-line controller. Legacy V3/V4 modules remain readable for
 # historical evidence but cannot authorize the formal V4.2 workflow.
 mpc_v42:
   selector: sewerrtc.control.pfvfirst_mpc_v42.decide_pfvfirst_mpc
@@ -145,9 +145,20 @@ mpc_v42:
 
 paper_workflow:
   contract_id: PROJECT6_V42_PAPER_WORKFLOW_V1
+  model_line: v42_trajectory_first_multi_reference
+  state_role: state_estimation_only_not_policy
+  formal_state_reconstructor: sewerrtc.models.temporal_sparse_gat_v42.TemporalSparseGATReconstructorV42
+  state_adapter: sewerrtc.state.v42_sparse_state.build_sparse_state_estimate
+  historical_sr0p15_role: legacy_single_snapshot_depth_validation_only
+  historical_sr0p15_can_authorize_formal: false
   surrogate_role: hydraulic_surrogate_not_policy
   formal_surrogate: sewerrtc.v4.models_v42.hydraulic_multi_reference.MultiReferenceHydraulicSurrogate
-  state_adapter: sewerrtc.state.v42_sparse_state.build_sparse_state_estimate
+  formal_surrogate_loss: sewerrtc.v4.models_v42.hydraulic_trajectory_losses.HydraulicTrajectoryLoss
+  paper_dataset_builder: sewerrtc.v4.v42_paper_dataset.build_paper_dataset
+  hydraulic_target_audit: sewerrtc.v4.v42_hydraulic_target_audit.audit_detail_pool
+  training_admission: sewerrtc.v4.v42_paper_training_admission.audit_training_admission
+  raw_hydraulic_recorder: sewerrtc.simulation.v42_hydraulic_recorder.record_v42_hydraulic_targets
+  training_action_authority: actual_readback_setting
   ordered_stages:
     - true_state_offline_validation
     - exact_swmm_closed_loop
@@ -158,8 +169,15 @@ paper_workflow:
     - formal_blind
   prohibit_v41_gate_authorization: true
   prohibit_legacy_locked_as_formal: true
+  prohibit_legacy_kpi_head_trainer_as_formal: true
   formal_requires_policy_lock: true
   formal_requires_new_rainfall_sha: true
+  stop_conditions:
+    formal_step1_requires_temporal_gat_training: true
+    formal_step1_requires_uncertainty_and_ood: true
+    formal_step2_requires_raw_independent_oracle: true
+    formal_step2_requires_complete_hydraulic_targets: true
+    formal_step2_requires_explicit_outfall_flow: true
 
 formal_blind:
   minimum_events: 24
