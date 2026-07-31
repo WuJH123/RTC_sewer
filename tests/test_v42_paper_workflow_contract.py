@@ -43,7 +43,6 @@ class _MockFrozenGAT(nn.Module):
 
     def forward(self, sparse_depth, sensor_mask, rain, node_static, edge_index):
         del rain, node_static, edge_index
-        # deterministic signal at observed nodes + stochastic dropout for MC
         base = sparse_depth * sensor_mask + (1.0 - sensor_mask) * sparse_depth.mean(dim=1, keepdim=True)
         return torch.relu(self.dropout(base + 0.1))
 
@@ -158,16 +157,12 @@ def test_multireference_surrogate_rolls_four_branches_and_derives_kpis():
     cand = out["branches"]["candidate"]["node_flooding_rate"]
     nc = out["branches"]["no_control"]["node_flooding_rate"]
     di = out["branches"]["dynamic_internal"]["node_flooding_rate"]
-    # Integrate counterfactual rate differences directly.  This is
-    # mathematically equivalent to subtracting two absolute volumes but avoids
-    # float32 cancellation when both branches have large common flooding.
     expected_pfv = (
         cand[:, :, [1, 4]] - nc[:, :, [1, 4]]
     ).sum(dim=(1, 2)) * 600.0
     expected_tfv = (
         cand.sum(dim=2) - di.sum(dim=2)
     ).sum(dim=1) * 600.0
-    # Peak is intentionally max(C) - max(DI), not max(C-DI).
     expected_peak = cand.sum(dim=2).max(dim=1).values - di.sum(dim=2).max(dim=1).values
     assert torch.allclose(out["pfv_delta"], expected_pfv)
     assert torch.allclose(out["tfv_delta"], expected_tfv)
@@ -241,7 +236,6 @@ def test_mpc_minimizes_tfv_only_inside_safe_set():
         fallback=_fallback(),
         weights=MPCWeights(action=0.1, terminal=0.0, uncertainty=0.0),
     )
-    # a objective = -19, b = -5
     assert decision.selected_id == "a"
     assert decision.metadata["tfv_is_hard_safety_constraint"] is False
 
@@ -268,22 +262,49 @@ def _stage_payload(stage: str) -> dict:
             state_source="true_state",
             four_reference_surrogate=True,
             trajectory_first_kpi_derivation=True,
+            training_admission_authorized=True,
+            raw_independent_oracle_all_pass=True,
+            surrogate_model_sha256="m",
         )
     elif stage == "exact_swmm_closed_loop":
-        base.update(authoritative_engine="SWMM", online_future_hydraulic_truth_used=False)
+        base.update(
+            authoritative_engine="SWMM",
+            online_future_hydraulic_truth_used=False,
+            canonical_pfvfirst_mpc_v42=True,
+            engineering_status_derived_from_execution=True,
+            readback_verified=True,
+        )
     elif stage == "surrogate_closed_loop":
-        base.update(surrogate_role="hydraulic_surrogate_not_policy", pfvfirst_mpc_v42=True)
+        base.update(
+            surrogate_role="hydraulic_surrogate_not_policy",
+            pfvfirst_mpc_v42=True,
+            surrogate_model_sha256="m",
+        )
     elif stage == "gat_integrated_closed_loop":
-        base.update(state_source="gat_sparse_reconstruction", gat_uncertainty_used=True, ood_gate_used=True)
+        base.update(
+            state_source="gat_sparse_reconstruction",
+            gat_uncertainty_used=True,
+            ood_gate_used=True,
+            uncertainty_calibrated=True,
+            ood_calibrated=True,
+            gat_model_sha256="g",
+        )
     elif stage == "policy_lock":
         base.update(
             policy_sha256="p",
             model_sha256="m",
             fallback_contract_sha256="f",
+            gat_model_sha256="g",
             post_lock_parameter_updates_allowed=False,
         )
     elif stage == "challenge":
-        base.update(policy_locked_before_reveal=True, used_for_retraining=False)
+        base.update(
+            policy_locked_before_reveal=True,
+            used_for_retraining=False,
+            policy_sha256="p",
+            model_sha256="m",
+            fallback_contract_sha256="f",
+        )
     elif stage == "formal_blind":
         base.update(
             event_count=24,
@@ -291,6 +312,11 @@ def _stage_payload(stage: str) -> dict:
             new_rainfall_sha_only=True,
             post_reveal_exclusion_used=False,
             used_for_retraining=False,
+            rainfall_sha256s=[f"rain-{i}" for i in range(24)],
+            revealed_rainfall_overlap_count=0,
+            policy_sha256="p",
+            model_sha256="m",
+            fallback_contract_sha256="f",
         )
     return base
 
