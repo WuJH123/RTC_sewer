@@ -1,0 +1,83 @@
+_inherits: configs/wuhan_project6_36_hierarchical_residual_v1.yaml
+
+# V7 is an isolated deployment-aligned residual branch. The original v6
+# checkpoint and all prior closed-loop outputs remain unchanged.
+controller:
+  gat_model_path: outputs/research_sensor_sweep/sr0p20/models/gat_sr0p10.pt
+  gat_sensor_ratio: 0.20
+  temporal_joint:
+    model_path: outputs/models_temporal_joint_36_tier2_residual_v7/raw_joint_36_tier2_residual_v7.pt
+    training_validation:
+      min_tfv_direction_accuracy: 0.60
+      min_peak_direction_accuracy: 0.70
+      min_pfv_unsafe_recall: 0.80
+      min_peak_unsafe_recall: 0.80
+      max_pfv_false_safe_rate: 0.10
+      min_pfv_noninferiority_balanced_accuracy: 0.0
+      min_tfv_improvement_balanced_accuracy: 0.0
+      min_peak_safe_balanced_accuracy: 0.0
+      require_balanced_accuracy_checks: false
+    hierarchical:
+      residual_validation_report: outputs/models_temporal_joint_36_tier2_residual_v7/raw_joint_36_tier2_residual_v7_train_report.json
+      require_residual_validation: true
+
+outputs:
+  diagnostics: outputs/diagnostics_temporal_joint_36_tier2_residual_v7
+  gat_features: outputs/research_sensor_sweep/sr0p20/gat_reconstructed_features
+
+evaluation:
+  smoke_gate:
+    required_return_period_groups:
+      light_or_t10: [T5, T10]
+      medium: [T20]
+      severe: [T100]
+    require_action_written: true
+    require_temporal_action: true
+    require_simultaneous_action: true
+    forbid_fractional_binary_pumps: true
+    forbid_dwell_violations: true
+    forbid_storage_interlock_violations: true
+    catastrophic_pfv_mean_increase_pct: 10.0
+    catastrophic_peak_worse_frac: 0.50
+  no_control_repair_gate:
+    gate_profile: formal
+    risk_filter: all
+    near_zero_pfv_epsilon: 100.0
+    no_control_pfv_noninferiority_abs: 100.0
+    no_control_pfv_noninferiority_frac: 0.02
+    pfv_sensitivity_fracs: [0.005, 0.01, 0.02]
+    calibration_min_events: 14
+    calibration_max_pfv_mean_increase_pct: 2.0
+    calibration_min_pfv_noninferior_frac: 0.85
+    calibration_min_tfv_mean_reduction_pct: 5.0
+    calibration_min_tfv_improved_frac: 0.60
+    calibration_max_tfv_worse_frac: 0.20
+    calibration_min_peak_mean_reduction_pct: 0.0
+    calibration_max_peak_worse_frac: 0.20
+    formal_primary_return_periods: [T5, T10, T20, T30, T50]
+    formal_stress_return_periods: [T75, T100]
+    formal_min_primary_events: 20
+    formal_max_pfv_mean_increase_pct: 2.0
+    formal_min_pfv_noninferior_frac: 0.90
+    formal_min_tfv_mean_reduction_pct: 8.0
+    formal_require_tfv_bootstrap_lower_positive: true
+    formal_min_tfv_improved_frac: 0.70
+    formal_max_tfv_worse_frac: 0.15
+    formal_min_peak_mean_reduction_pct: 0.0
+    formal_max_peak_worse_frac: 0.15
+    stress_max_pfv_mean_increase_pct: 2.0
+    stress_max_pfv_worse_frac_noninferiority: 0.25
+    stress_min_peak_mean_reduction_pct: 0.0
+    stress_max_peak_worse_frac: 0.25
+    enforce_superiority_policies: false
+    superiority_min_pfv_mean_reduction_pct: 0.0
+    superiority_min_tfv_mean_reduction_pct: 0.0
+    superiority_policies: [internal_rules, efd_storage_priority, auto_rbc]
+    diagnostic_compare_policies: []
+
+temporal_joint_pipeline:
+  root: outputs/project6_36_tier2_residual_v7
+  frozen_effect_dataset: outputs/project6_36_causal_effect_coverage_v2/effect_dataset_boundary_v6_round2/same_state_raw_joint_36_causal_effect_boundary_v6_round2.npz
+  frozen_rows: 1451
+  residual_case_target: 760
+  locked_validation: true

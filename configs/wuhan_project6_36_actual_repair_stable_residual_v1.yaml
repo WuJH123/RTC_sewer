@@ -1,0 +1,31 @@
+_inherits: configs/wuhan_project6_36_actual_repair_v1.yaml
+
+# Actual-repair stable residual branch.
+# Formal8 accepted-action audit showed RTC_IN_03 and RTC_OUT_03 increased
+# horizon TFV in many accepted actions. This deployment branch keeps the
+# verified 26-facility legacy layer and only allows Tier-2 residual assets
+# that were TFV-safe in the actual closed-loop audit.
+controller:
+  temporal_joint:
+    hierarchical:
+      require_residual_validation: false
+      residual_actuator_ids:
+        - RTC_IN_02
+        - ADD301.2
+        - ADD301.3
+        - gbz1.8
+    safety:
+      pfv_abs_margin_m3: 100.0
+      pfv_rel_margin: 0.02
+      peak_margin: 0.0
+      uncertainty_z: 0.0
+      min_tfv_lcb_reduction: 0.0
+      use_classifier_thresholds: false
+      tfv_reduction_weight: 1.0
+      peak_reduction_weight: 2500.0
+      action_l1_penalty: 0.02
+      simultaneous_action_penalty: 0.01
+      pump_switch_penalty: 0.05
+
+outputs:
+  diagnostics: outputs/diagnostics_temporal_joint_36_actual_repair_stable_residual_v1

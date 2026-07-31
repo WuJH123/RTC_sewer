@@ -1,0 +1,12 @@
+﻿priority_rank,node_id,role,x,y,max_depth,invert
+1,YS2530050,near_sensitive_bottleneck,525320.745,389285.875,1.799,18.031
+2,HS1316314,near_sensitive_bottleneck,528871.678,389936.463,3.15,19.57
+3,HS2529139,near_sensitive_bottleneck,525175.748,383994.211,2.61,18.97
+4,HS1330349,near_sensitive_bottleneck,527500.614,389391.21,3.08,17.16
+5,MH0200770,near_sensitive_bottleneck,522913.125,384266.759,2.43,21.24
+6,HS2529198,near_sensitive_bottleneck,525181.408,384371.629,2.552,18.878
+7,HS1355904,waterlogging_sensitive,525438.521,389017.589,3.49,17.28
+8,MH0249284,waterlogging_sensitive,528610.791,390202.624,2.68,20.258
+9,HS2529052,waterlogging_sensitive,525163.752,383583.14,2.803,21.567
+10,MSLBZW001,extra_hydraulic_bottleneck,527556.24,384267.855,1.9,22.1
+11,MH0200773,extra_hydraulic_bottleneck,522778.683,384274.978,2.1,21.48

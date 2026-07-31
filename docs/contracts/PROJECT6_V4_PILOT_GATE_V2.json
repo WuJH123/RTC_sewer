@@ -1,0 +1,93 @@
+{
+  "contract_id": "project6_v4_pilot_gate_v2",
+  "gate_version": "v2",
+  "supersedes_gate_version": "v1",
+  "created_at": "2026-07-23",
+  "user_authorized": true,
+  "not_retroactive": true,
+  "applies_to": "pilot_dataset_v2_and_later",
+  "v1_reference": {
+    "v1_verdict": "scientific_fail",
+    "v1_failed_checks": [
+      "flat_fraction_10_to_20pct",
+      "joint_at_30pct_responsive_checkpoints"
+    ],
+    "v1_frozen_evidence": "outputs/project6_dual_reference_v4/final_v4/audits/frozen_evidence/pilot400_v1/b470463eec155d056404996a81e2ecaed1f95820e127811bba818f8bbc30eca6",
+    "v1_code_sha": "b470463eec155d056404996a81e2ecaed1f95820e127811bba818f8bbc30eca6",
+    "v1_config_sha": "b0b7dbda2eeffbf2b51f31a9ce72fd1adb7c7f0954f312bd2e1f15e800b1eba9"
+  },
+  "revision_reason": "low-opportunity does not imply hydraulic flatness",
+  "revision_evidence": {
+    "confirmed_flat": 10,
+    "low_opportunity_samples": 80,
+    "low_opportunity_locally_responsive_rate": 1.0,
+    "confirmed_flat_event_support": 1,
+    "confirmed_flat_state_support": 1,
+    "statement": "10 confirmed flat / 80 low-opportunity; all 10 flat samples originate from a single state T30_D300_chicago_late__60"
+  },
+  "hard_authenticity_gates_unchanged": {
+    "same_state_100pct": true,
+    "readback_100pct": true,
+    "actual_duplicates_0": true,
+    "no_hotstart": true,
+    "constraints_recheck_100pct": true,
+    "label_recompute_100pct": true,
+    "h120_window_100pct": true
+  },
+  "flat_v2_criteria": {
+    "confirmed_flat_count_min": 8,
+    "confirmed_flat_event_support_min": 3,
+    "low_opportunity_state_support_min": 8,
+    "flat_fraction_observed": "report_only",
+    "flat_fraction_max": 0.20,
+    "flat_fraction_min": null,
+    "flat_state_head_role": "auxiliary",
+    "flat_shortage_blocks_continuous_heads": false,
+    "flat_auxiliary_extension_required_if_event_support_below": 3
+  },
+  "joint_v2_criteria": {
+    "joint_responsive_state_coverage_min": 0.30,
+    "joint_state_count_min_pass": 10,
+    "responsive_state_total": 32,
+    "joint_event_support_min": 4,
+    "search_targets": {
+      "target_joint_state_count_min": 12,
+      "target_joint_event_support_min": 4,
+      "rationale": "targets above the minimum gate so a single marginal state cannot barely clear the line"
+    }
+  },
+  "dataset_v2_gates": {
+    "informative_actual_unique_min": 300,
+    "responsive_local_response_rate_min": 0.70,
+    "materially_beneficial_event_support_min": 3,
+    "pfv_both_sides_event_support_min": 3,
+    "tfv_both_sides_event_support_min": 3,
+    "peak_both_sides_event_support_min": 3,
+    "peak_degraded_min": 30,
+    "pfv_safe_peak_negative_min": 10,
+    "neutral_present": true,
+    "rainfall_sha_split_isolated": true,
+    "primary400_immutable": true,
+    "extension_samples_train_only": true,
+    "actual_schedule_sha_globally_unique": true
+  },
+  "prohibitions": [
+    "v1 must never be re-marked PASS",
+    "no modification of primary400 labels",
+    "no rerun of the primary 400 samples",
+    "no lowering of PFV/TFV/Peak margins",
+    "no dead-zone modification",
+    "no candidate duplication",
+    "no forced flat labeling of low-opportunity samples",
+    "no modification of pilot calibration/validation/challenge events",
+    "no future SWMM results as model inputs",
+    "no automatic entry into Train1600"
+  ],
+  "exit_codes": {
+    "pass": 0,
+    "blocked": 2,
+    "incomplete": 3,
+    "runtime_error": 4,
+    "scientific_fail": 5
+  }
+}

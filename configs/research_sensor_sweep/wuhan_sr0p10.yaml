@@ -1,0 +1,9 @@
+_inherits: configs/wuhan_project6_36_temporal_joint.yaml
+experiment:
+  sensor_ratio: 0.1
+outputs:
+  cache: outputs\cache_research_mixed_gat
+  design: outputs\research_sensor_sweep/sr0p10/design
+  models: outputs\research_sensor_sweep/sr0p10/models
+  diagnostics: outputs\research_sensor_sweep/sr0p10/diagnostics
+  gat_features: outputs\research_sensor_sweep/sr0p10/gat_reconstructed_features

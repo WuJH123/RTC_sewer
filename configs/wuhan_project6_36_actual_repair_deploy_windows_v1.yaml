@@ -1,0 +1,28 @@
+_inherits: configs/wuhan_project6_36_actual_repair_v1.yaml
+
+# Evidence-window deployment branch.
+# It expands control beyond event-level chicago_center gating by allowing
+# receding-horizon control only at event-time windows where the completed
+# actual_repair_v1 closed-loop audit showed TFV reduction, peak non-worsening,
+# and PFV effect inside the 2% deployment tolerance.
+controller:
+  temporal_joint:
+    deployment_reliability:
+      evidence_csv: outputs/deployment_evidence/actual_repair_v1_tfv_peak_safe_windows.csv
+      require_evidence: true
+      time_tolerance_min: 0.25
+    safety:
+      pfv_abs_margin_m3: 100.0
+      pfv_rel_margin: 0.02
+      peak_margin: 0.0
+      uncertainty_z: 0.0
+      min_tfv_lcb_reduction: 0.0
+      use_classifier_thresholds: false
+      tfv_reduction_weight: 1.0
+      peak_reduction_weight: 2500.0
+      action_l1_penalty: 0.02
+      simultaneous_action_penalty: 0.01
+      pump_switch_penalty: 0.05
+
+outputs:
+  diagnostics: outputs/diagnostics_temporal_joint_36_actual_repair_deploy_windows_v1

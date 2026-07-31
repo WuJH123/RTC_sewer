@@ -1,0 +1,117 @@
+{
+  "contract_name": "PROJECT6_V4_RECOVERY_CONTRACT_V3",
+  "version": "3.0",
+  "scope": "Baseline-relative conduit recovery for Gate 3.5 v2",
+  "created_at": "2026-07-26T00:00:00Z",
+  "inp_reference": "data/wuhan_v8_storage_retrofit.inp",
+
+  "recovery_classes": {
+    "R0_not_recovered": {
+      "description": "System has not returned to baseline-relative tolerance; excess fullness or flooding remains elevated.",
+      "criteria": "Does not meet R1 or R2 criteria."
+    },
+    "R1_functional_recovery": {
+      "description": "System has functionally recovered: PFV/TFV at baseline level, excess fullness within tolerance, no persistent bottlenecks.",
+      "criteria": [
+        "rainfall_remaining = 0",
+        "PFV incremental = 0 for stable_recovery_duration",
+        "TFV rate within tolerance of baseline",
+        "excess_fullness_p95 < frozen_tolerance",
+        "high_excess_conduit_fraction < frozen_tolerance",
+        "storage_deviation < frozen_tolerance",
+        "system_volume_slope near 0",
+        "inflow_outflow_imbalance within tolerance"
+      ]
+    },
+    "R2_complete_event_recovery": {
+      "description": "Full recovery: all R1 criteria met AND all conduit fullness within baseline MAD band.",
+      "criteria": [
+        "All R1 criteria met",
+        "max_excess_fullness < 0.05",
+        "persistent_bottleneck_count = 0"
+      ]
+    }
+  },
+
+  "thresholds": {
+    "PFV_tolerance": {
+      "value": 0.0,
+      "unit": "m3",
+      "source": "Contract V2: priority flooding must not increase during recovery window",
+      "description": "Maximum allowable PFV incremental over stable_recovery_duration"
+    },
+    "TFV_tolerance": {
+      "value": 1.0,
+      "unit": "m3/h",
+      "source": "Baseline TFV rate + 2*MAD",
+      "description": "Maximum allowable deviation of TFV rate from baseline"
+    },
+    "excess_fullness_p95_tolerance": {
+      "value": 0.10,
+      "unit": "dimensionless (fullness fraction)",
+      "source": "Baseline fullness P95 + 3*MAD across all conduits",
+      "description": "Maximum allowable excess fullness P95 for R1"
+    },
+    "high_excess_conduit_fraction_tolerance": {
+      "value": 0.05,
+      "unit": "fraction of conduits",
+      "source": "5% of conduits may exceed excess fullness threshold",
+      "description": "Maximum fraction of conduits with excess_fullness > 0.10"
+    },
+    "storage_deviation_tolerance": {
+      "value": 0.05,
+      "unit": "fraction of max storage",
+      "source": "5% of total storage capacity",
+      "description": "Maximum relative deviation of storage volume from baseline"
+    },
+    "system_volume_slope_tolerance": {
+      "value": 0.1,
+      "unit": "m3/h",
+      "source": "Engineering judgment: near-zero slope for stable system",
+      "description": "Maximum absolute system volume slope for recovery"
+    },
+    "inflow_outflow_imbalance_tolerance": {
+      "value": 0.05,
+      "unit": "fraction",
+      "source": "5% imbalance between total inflow and outflow",
+      "description": "Maximum relative inflow-outflow imbalance"
+    },
+    "stable_recovery_duration": {
+      "value": 6,
+      "unit": "hours",
+      "source": "Contract V2: 6h continuous stability window",
+      "description": "Minimum continuous window where all recovery criteria must hold"
+    },
+    "minimum_tail": {
+      "value": 180,
+      "unit": "min",
+      "source": "Contract V2: minimum 3h post-rain observation",
+      "description": "Minimum post-rain tail duration"
+    },
+    "maximum_tail": {
+      "value": 1440,
+      "unit": "min (24h)",
+      "source": "Contract V2: maximum 24h post-rain observation",
+      "description": "Maximum post-rain tail before censoring"
+    }
+  },
+
+  "conduit_classification": {
+    "baseline_high_recovered": {
+      "description": "Absolute fullness high but excess fullness near 0; state is stable.",
+      "criteria": "fullness > 0.8 AND abs(excess_fullness) < 0.05 AND stable"
+    },
+    "recession_censored": {
+      "description": "Excess fullness still elevated but slope decreasing; not fully recovered at max tail.",
+      "criteria": "excess_fullness > 0.10 AND recession_slope < 0 AND post_rain_duration < max_tail"
+    },
+    "persistent_event_bottleneck": {
+      "description": "Excess fullness significant and not decreasing; associated with surcharge or capacity limits.",
+      "criteria": "excess_fullness > 0.10 AND recession_slope >= 0 OR surcharge OR capacity_limited"
+    },
+    "numerical_or_structural_audit": {
+      "description": "Adverse/zero slope, anomalous connections, flow-depth inconsistency. INP not modified.",
+      "criteria": "adverse_slope OR zero_slope OR flow_depth_anomaly"
+    }
+  }
+}

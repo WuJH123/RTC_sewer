@@ -1,0 +1,55 @@
+_inherits: configs/wuhan_project6_36_hierarchical_residual_v8_gateupdate.yaml
+
+# Actual-repair branch:
+# - Do not block rolling-horizon control on the offline effect/formal gate.
+# - Online objective: keep PFV within 100 m3 or 2% of No-control, reduce TFV,
+#   and favor peak reduction when PFV/peak constraints are satisfied.
+# - Old v7/v8 checkpoints and outputs remain untouched.
+controller:
+  mode: temporal_joint_36
+  reference_policy_for_constraints: online_predicted_default
+  temporal_joint:
+    candidate_search:
+      max_candidates: 768
+      max_simultaneous_changes: 8
+      max_change_points: 2
+      continuous_max_delta: 0.12
+      continuous_delta_levels: [0.05, 0.10, 0.12]
+      binary_pump_ids: [ADD301.2, ADD301.3]
+      binary_pump_min_dwell_steps: 2
+      max_pump_switches_per_event: 6
+      storage_interlock: true
+      max_storage_actuators: 4
+    safety:
+      pfv_abs_margin_m3: 100.0
+      pfv_rel_margin: 0.02
+      peak_margin: 0.0
+      # For actual repair experiments, use predicted mean effects. The failed
+      # classifier gate is not used to suppress all actions.
+      uncertainty_z: 0.0
+      min_tfv_lcb_reduction: 0.0
+      min_pfv_noninferiority_probability: 0.0
+      min_tfv_improvement_probability: 0.0
+      min_peak_safe_probability: 0.0
+      use_classifier_thresholds: false
+      tfv_reduction_weight: 1.0
+      peak_reduction_weight: 2500.0
+      action_l1_penalty: 0.02
+      simultaneous_action_penalty: 0.01
+      pump_switch_penalty: 0.05
+    hierarchical:
+      enabled: true
+      legacy_model_path: outputs/models_v8_storage_variablepump/horizon_temporal_gnn.pt
+      residual_validation_report: outputs/models_temporal_joint_36_tier2_residual_v8_expanded/raw_joint_36_tier2_residual_v8_expanded_train_report.json
+      require_residual_validation: false
+
+outputs:
+  diagnostics: outputs/diagnostics_temporal_joint_36_actual_repair_v1
+
+evaluation:
+  no_control_repair_gate:
+    no_control_pfv_noninferiority_abs: 100.0
+    no_control_pfv_noninferiority_frac: 0.02
+    calibration_max_pfv_mean_increase_pct: 2.0
+    formal_max_pfv_mean_increase_pct: 2.0
+    stress_max_pfv_mean_increase_pct: 2.0

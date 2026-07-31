@@ -1,0 +1,35 @@
+_inherits: configs/open_pystorms_beta.yaml
+
+controller:
+  mode: generic_gat_mpc
+  default_action_policy: no_control
+  reference_policy_for_constraints: internal_and_no_control
+  allowed_actuator_ids:
+    - P0
+  blocked_actuator_ids:
+    - R2
+    - W0
+  min_pfv_improvement_abs: 0.0
+  min_pfv_improvement_frac: 0.005
+  tfv_tolerance_frac: 0.05
+  peak_tolerance_frac: 0.05
+  horizon_smooth_weight: 100000.0
+  max_first_step_delta: 0.35
+  max_candidate_delta: 0.10
+  max_candidate_sequences: 128
+  candidate_group_limit: 3
+
+evaluation:
+  proposed_formal_gate:
+    min_high_risk_events: 5
+    min_pfv_mean_reduction_pct: 1.0
+    min_pfv_median_reduction_pct: 1.0
+    max_tfv_worse_frac: 0.50
+    max_peak_worse_frac: 0.50
+    max_action_change_ratio: 5.00
+    near_zero_pfv_epsilon: 100.0
+    required_baseline_policies:
+      - no_control
+      - official_mpc
+      - efd_storage_priority
+      - auto_rbc

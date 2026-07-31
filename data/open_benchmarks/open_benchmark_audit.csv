@@ -1,0 +1,5 @@
+benchmark,path,bytes,title_rows,options_rows,raingages_rows,subcatchments_rows,junctions_rows,outfalls_rows,storage_rows,conduits_rows,pumps_rows,orifices_rows,weirs_rows,outlets_rows,controls_rows,timeseries_rows,curves_rows,control_setting_targets,has_storage_and_pump,has_multi_actuator_valves
+pystorms/beta/beta.inp,E:\RTC_sewer\Project5\data\open_benchmarks\pystorms\beta\beta.inp,149211,2,32,1,165,206,1,3,206,1,3,1,0,0,555,14,0,True,False
+pystorms/gamma/gamma.inp,E:\RTC_sewer\Project5\data\open_benchmarks\pystorms\gamma\gamma.inp,59448,2,34,10,19,10,1,11,10,0,11,0,0,0,74,63,0,False,True
+gnn_uds/chaohu/chaohu.inp,E:\RTC_sewer\Project5\data\open_benchmarks\gnn_uds\chaohu\chaohu.inp,79558,0,33,1,31,133,5,2,134,7,0,0,0,0,24,26,0,True,False
+gnn_uds/hague/hague.inp,E:\RTC_sewer\Project5\data\open_benchmarks\gnn_uds\hague\hague.inp,461889,3,33,1,165,206,1,3,206,0,3,1,0,0,557,14,0,False,False

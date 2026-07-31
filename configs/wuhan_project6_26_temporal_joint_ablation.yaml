@@ -1,0 +1,34 @@
+_inherits: configs/wuhan_project6_36_temporal_joint.yaml
+
+# Same retrofit network, same 36-dimensional reference/model, but candidate
+# interventions are restricted to the frozen original v8 facilities.
+controller:
+  temporal_joint:
+    candidate_search:
+      allowed_candidate_ids:
+        - ADD424.4
+        - HS1306663.1
+        - JCHdwxh02.1
+        - MH0266931.2
+        - MH0266932.2
+        - MH0266933.1
+        - VP0600010.3
+        - VP0600010.4
+        - VP0600010.5
+        - add300.1
+        - add321.1
+        - cc006.1
+        - dw3700.1
+        - dw3700.2
+        - dwxh.2
+        - jichangheTank.2
+        - ADD424.1
+        - ADD424.2
+        - ADD424.3
+        - JCW0000.1
+        - MH0002461.1
+        - Zhongyi-2.2
+        - add401.1
+        - gbz1.4
+        - jchX01.1
+        - add350.1

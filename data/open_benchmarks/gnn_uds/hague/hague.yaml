@@ -1,0 +1,234 @@
+# Configuration file for scenario hague
+# name of scearnio
+env_name: hague
+# if env contains actions
+act: True
+# time step (min)
+interval: 1
+# control time step (min)
+# ctrl_step: 15
+# state definitions
+states:
+  - !!python/tuple
+    - "RG"
+    - rainfall_vol
+  - !!python/tuple
+    - "E143250" # outfall tide level
+    - head
+  - !!python/tuple
+    - "E143274" # lowest surface elevation near weir1
+    - head
+  - !!python/tuple
+    - "E144050" # X-cross node
+    - head
+  - !!python/tuple
+    - "F133438" # upstream of st1 and r1
+    - head
+  - !!python/tuple
+    - "F133459" # upstream of st1 and r1
+    - head
+  - !!python/tuple
+    - "F13250" # upstream of st3 and r3
+    - head
+  - !!python/tuple
+    - "F143656" # upstream of st3 and r3
+    - head
+  - !!python/tuple
+    - "st1"
+    - head
+  - !!python/tuple
+    - "st3"
+    - head
+  - !!python/tuple
+    - "R1"
+    - setting
+  - !!python/tuple
+    - "R3"
+    - setting
+  - !!python/tuple
+    - "weir1"
+    - setting
+
+# global state definitions
+global_state:
+  - !!python/tuple
+    - nodes
+    - head
+  - !!python/tuple
+    - nodes
+    # - totalinflow
+    - cuminflow
+  - !!python/tuple
+    - nodes
+    - totaloutflow_vol
+  - !!python/tuple
+    - nodes
+    # - lateralinflow
+    - cumlateralinflow
+  - !!python/tuple
+    - links
+    - depthL
+  - !!python/tuple
+    - links
+    - volumeL
+  - !!python/tuple
+    - links
+    - flow_vol
+  - !!python/tuple
+    - links
+    - setting
+
+# Key elements in loss function
+loss_weight:
+  # st1: 5.0
+  # st3: 5.0
+
+# Action space
+action_space:
+  R1:
+    !!python/tuple
+    - 0
+    - 0.5
+    - 1.0
+  R3:
+    !!python/tuple
+    - 0
+    - 0.5
+    - 1.0
+  weir1:
+    !!python/tuple
+    - 0
+    - 0.5
+    - 1.0
+
+# Performance Targets
+performance_targets:
+  # Replace system flooding with sensitive nodes
+  # J4,J8,J13,J33,J53,J54,J64,J65,J98,J102,J145,J146
+  # - !!python/tuple
+  #   - "nodes"
+  #   - cumflooding
+  #   - 0
+  #   - 1
+  - !!python/tuple
+    - "E133464"
+    - cumflooding
+    - 0
+    - 1
+  - !!python/tuple
+    - "E133481"
+    - cumflooding
+    - 0
+    - 1
+  - !!python/tuple
+    - "E134203"
+    - cumflooding
+    - 0
+    - 1
+  - !!python/tuple
+    - "E143274"
+    - cumflooding
+    - 0
+    - 1
+  - !!python/tuple
+    - "E143327"
+    - cumflooding
+    - 0
+    - 1
+  - !!python/tuple
+    - "E143329"
+    - cumflooding
+    - 0
+    - 1
+  - !!python/tuple
+    - "E143361"
+    - cumflooding
+    - 0
+    - 1
+  - !!python/tuple
+    - "E143362"
+    - cumflooding
+    - 0
+    - 1
+  - !!python/tuple
+    - "F133438"
+    - cumflooding
+    - 0
+    - 1
+  - !!python/tuple
+    - "F133459"
+    - cumflooding
+    - 0
+    - 1
+  - !!python/tuple
+    - "F143594"
+    - cumflooding
+    - 0
+    - 1
+  - !!python/tuple
+    - "F143595"
+    - cumflooding
+    - 0
+    - 1
+  # - !!python/tuple
+  #   - "st1"
+  #   - cumflooding
+  #   - 0
+  #   - 1000
+  - !!python/tuple
+    - "16132"
+    - flow_vol
+    - 0
+    - -0.01
+  # - !!python/tuple
+  #   - "st1"
+  #   - head
+  #   - 0.276   #1.8-1.524
+  #   - 1
+  # - !!python/tuple
+  #   - "st3"
+  #   - head
+  #   - 0.9144   #1.1-0.18288
+  #   - 1
+  # - !!python/tuple
+  #   - "st3"
+  #   - head
+  #   - 1.56712   #1.75-0.18288
+  #   - 1000
+
+# Flooding volume in each node
+flood:
+  - !!python/tuple
+    - nodes
+    - cumflooding
+
+# Rainfall scenario parameters
+rainfall:
+  func: generate_split_file
+  filedir: ./envs/network/hague/hague
+  rainfall_timeseries: ./envs/config/hg_rain.csv # rainfall timeseries data
+  rainfall_events: ./envs/config/hg_train50_events.csv # rainfall timeseries data
+  pre_time: 60 # preliminary time (min) to exclude
+  MIET: 0 # minimum interevent time (min) already considered in event division
+  duration_range:  # rainfall duration sampling range (min)
+    - 180
+    - 100000
+  precipitation_range: # rainfall precipitation sampling range (mm)
+    - 10
+    - 100
+  date_range: # rainfall precipitation sampling range (mm)
+    - 01/01/2010
+    - 12/31/2019
+  replace_rain: False
+  tide: ./envs/config/hg_tide.csv
+
+# if time-variant outlet boundary
+tide: True
+
+# Model predictive control parameters
+prediction:
+  no_runoff: True # if excludes runoff module and use external data
+  hsf_dir: hsf # file path to save the hotstart file
+  eval_dir: eval # file path to save the evaluation file
+  suffix: mpc_eval_ # suffix of the evaluation file
+  

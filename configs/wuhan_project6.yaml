@@ -1,0 +1,136 @@
+_inherits: configs/wuhan_no_control_repair.yaml
+
+# Project6 is self-contained. Project5/Project4 artifacts are never implicit
+# inputs to the formal line; reusable raw trajectories must be imported through
+# a manifest-verified Project6 command.
+reuse_sources: null
+python: ""
+
+controller:
+  # The formal Wuhan experiment treats every controllable facility represented
+  # in wuhan_with_controls.inp as installed and telemetered.  This includes
+  # the 26 original rule-driven links plus 83 control-ready retrofit links.
+  # Results must therefore be described as a 109-facility deployment scenario,
+  # not as operation of the unmodified historical network.
+  actuator_scope: existing_plus_retrofit
+  # Phase 2 formal controller default. The expanded 109-action data remain
+  # available for pretraining and planning-asset scenarios only.
+  existing_assets_only: true
+  allow_virtual_assets: false
+  pump_control_mode: binary_unless_verified
+  regulator_control_mode: continuous
+  reference_policy_for_constraints: precomputed_no_control_twin_horizon
+  max_candidate_sequences: 768
+  high_risk_max_candidate_delta: 0.10
+  max_first_step_delta: 0.20
+  # Larger ablation amplitudes learn nonlinear response surfaces; the online
+  # safety whitelist is built only from directions demonstrated safe within
+  # this executable per-step range.
+  online_reliability_max_delta: 0.10
+  # Online PFV non-inferiority margin; formal paired gate still reports the
+  # same 0.5% + 100 m3 requirement against no_control.
+  pfv_tolerance_abs: 100.0
+  pfv_tolerance_frac: 0.005
+  pfv_weight: 5.0
+  min_pfv_improvement_abs: 0.0
+  # Non-hold acceptance is based on exact effect calibration. Permit only
+  # engineering-negligible horizon deviations, then minimize TFV inside the
+  # PFV/peak-safe set instead of demanding an unrealistic 2% repair at every
+  # five-minute decision.
+  tfv_hard_constraint: true
+  tfv_required_reduction_frac: 0.0
+  tfv_tolerance_frac: 0.002
+  peak_tolerance_frac: 0.005
+  horizon_smooth_weight: 0.25
+  repair_reliable_action_filter:
+    enabled: true
+    summary_csv: outputs/ablation_all109/actuator_direction_reliability.csv
+    pattern_phase_summary_csv: outputs/ablation_all109/actuator_direction_reliability_by_pattern_phase.csv
+    min_pfv_safe_prob: 0.70
+    min_tfv_repair_prob: 0.55
+    min_peak_safe_prob: 0.80
+    min_events: 3
+    min_rows: 3
+    min_pattern_events: 2
+    min_pattern_rows: 2
+
+  logging:
+    save_case_details: true
+    save_selected_cases_only: true
+    detail_format: parquet
+    save_full_candidate_tensor: false
+    save_selected_sequence: true
+    save_reconstructed_state: true
+    save_no_control_reference: true
+    save_swmm_realized_response: true
+
+raw_joint_action_surrogate:
+  enabled: true
+  model_mode: raw_joint_action_surrogate
+  reference_mode: online_predicted_no_control_reference
+  pretraining_asset_scope: existing_plus_retrofit
+  formal_controller_asset_scope: existing_rtc
+  horizon_steps: 6
+  zero_action_relative_error_threshold: 0.005
+  min_pfv_sign_agreement: 0.85
+  min_tfv_sign_agreement: 0.80
+  min_peak_sign_agreement: 0.85
+
+evaluation:
+  no_control_repair_gate:
+    min_high_risk_events: 20
+    superiority_policies:
+      - internal_rules
+      - efd_storage_priority
+      - auto_rbc
+    diagnostic_compare_policies: []
+
+horizon_surrogate:
+  # Keep 109-action data and checkpoints separate from the earlier 26-action
+  # existing-RTC experiment.  Their action tensors are not interchangeable.
+  output_dataset: data/surrogate_all109/horizon_mpc_dataset.parquet
+  fallback_output_dataset: data/surrogate_all109/horizon_mpc_dataset.csv
+  conformal_calibration_quantile: 0.90
+  # Online candidate screening uses a separately declared risk level. The
+  # 0.90 margin remains reported for formal uncertainty calibration.
+  controller_uncertainty_quantile: 0.70
+  enforce_validation_gate: true
+  validation_gate:
+    min_paired_rows: 100
+    min_pfv_direction_accuracy: 0.70
+    min_tfv_direction_accuracy: 0.70
+    min_peak_direction_accuracy: 0.80
+    min_joint_safe_precision: 0.80
+    # Direction labels use declared engineering deadbands to avoid treating
+    # numerically zero SWMM effects as meaningful control directions.
+    pfv_direction_tolerance_abs: 100.0
+    pfv_direction_tolerance_frac: 0.005
+    tfv_direction_tolerance_abs: 100.0
+    tfv_direction_tolerance_frac: 0.005
+    peak_direction_tolerance_abs: 0.5
+    peak_direction_tolerance_frac: 0.01
+
+training:
+  sensor_dropout: 0.15
+  lambda_unsensed: 1.75
+  gat_max_val_samples: 8192
+  gat_score_full_weight: 0.80
+  gat_score_priority_weight: 0.20
+
+outputs:
+  data_bank_train: outputs/data_bank_train_all109
+  cache: outputs/cache_all109
+  models: outputs/models_all109
+  diagnostics: outputs/diagnostics_all109
+  surrogate: outputs/surrogate_all109
+  gat_features: outputs/gat_reconstructed_features_all109
+
+trajectory:
+  full_core_policies:
+    - no_control
+    - all_open
+    - all_closed_safe
+    - auto_rbc
+    - efd_static
+    - efd_storage_priority
+  full_exploration_policies_per_event: 8

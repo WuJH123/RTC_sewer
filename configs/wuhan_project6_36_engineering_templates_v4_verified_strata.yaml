@@ -1,0 +1,28 @@
+_inherits: configs/wuhan_project6_36_engineering_templates_v2.yaml
+
+# Verified-strata engineering action groups.
+# This is the conservative deployment version: the extracted engineering
+# templates are enabled only for event strata where closed-loop validation
+# showed PFV non-inferiority with TFV and peak benefit. Other strata fall back
+# to true No-control.
+controller:
+  temporal_joint:
+    deployment_reliability:
+      evidence_csv: outputs/deployment_evidence/actual_repair_v1_tfv_boost_profile_windows.csv
+      require_evidence: true
+      time_tolerance_min: 0.25
+      stratum_rules:
+        - patterns: [chicago_center]
+          return_periods: [20]
+          durations_min: [75, 105]
+        - patterns: [chicago_center]
+          return_periods: [30]
+          durations_min: [105]
+        - patterns: [chicago_center]
+          return_periods: [75]
+          durations_min: [105, 150]
+    safety:
+      engineering_template_bonus: 1000.0
+
+outputs:
+  diagnostics: outputs/diagnostics_temporal_joint_36_engineering_templates_v4_verified_strata

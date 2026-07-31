@@ -1,0 +1,8 @@
+_inherits: configs/wuhan_project6_v8_storage.yaml
+
+# Single-event diagnostic only. Reuse the existing 36-action model and exact
+# local replay table, but allow at most one empirical override per phase so a
+# safe pulse is not repeatedly re-applied during recession.
+controller:
+  phase_reliability:
+    max_overrides_per_phase: 1

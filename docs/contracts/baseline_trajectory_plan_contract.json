@@ -1,0 +1,68 @@
+{
+  "contract_version": "project6_baseline_trajectory_plan_v1",
+  "description": "Schema for Prompt 3A retrofit baseline trajectory planning. The plan is a deterministic join from the frozen event catalog and split manifest.",
+  "required_columns": [
+    "plan_schema_version",
+    "trajectory_id",
+    "event_id",
+    "canonical_event_id",
+    "storm_family_id",
+    "split",
+    "policy_id",
+    "policy_mode",
+    "network_policy",
+    "rainfall_path",
+    "rainfall_file_sha256",
+    "rainfall_series_sha256",
+    "network_path",
+    "network_sha256",
+    "event_catalog_path",
+    "event_catalog_sha256",
+    "event_split_manifest_sha256",
+    "prompt2_import_lock_sha256",
+    "native_rule_audit_sha256",
+    "passive_fallback_contract_sha256",
+    "internal_fallback_contract_sha256",
+    "fallback_selection_contract_sha256",
+    "truth_controller_separation_required",
+    "controller_visible_state_contract_version",
+    "controller_memory_required",
+    "hotstart_required",
+    "start_time",
+    "end_time",
+    "tail_min",
+    "tail_policy",
+    "output_root",
+    "status",
+    "exclusion_reason"
+  ],
+  "allowed_policy_id": [
+    "no_control",
+    "internal_rules",
+    "executable_passive"
+  ],
+  "policy_mode_must_equal_policy_id": true,
+  "allowed_development_splits": [
+    "development_fit",
+    "action_effect_fit"
+  ],
+  "excluded_splits": [
+    "gat_independent_holdout",
+    "calibration",
+    "formal",
+    "formal_blind"
+  ],
+  "completion_requirements": {
+    "plan_file_non_empty": true,
+    "trajectory_id_unique": true,
+    "event_policy_unique": true,
+    "three_policies_per_event": true,
+    "rainfall_paths_exist": true,
+    "network_hash_uniform": true,
+    "split_complete": true,
+    "gat_holdout_excluded": true,
+    "calibration_formal_excluded": true,
+    "contract_hashes_present": true,
+    "completion_marker_includes_plan_hash": true
+  }
+}

@@ -1,0 +1,28 @@
+_inherits: configs/wuhan_project6_v8_storage.yaml
+
+# Reuses the existing v8 GAT, horizon surrogate and no-control reference.
+# This is an isolated acceptance-ratio probe, not a retraining configuration.
+controller:
+  # Do not let stale exact replay rows bypass the learned uncertainty gate.
+  # They were generated under the former continuous-pump semantics.
+  phase_reliability:
+    exact_local_csv: ""
+    empirical_single_action_gate: false
+    fallback_to_surrogate_without_local_evidence: true
+    max_overrides_per_phase: 0
+    candidate_group_limit: 8
+    peak_tolerance_abs: 1.0
+  max_candidate_sequences: 1024
+  candidate_group_limit: 8
+  max_candidate_delta: 0.10
+  peak_tolerance_abs: 1.0
+  per_actuator_max_delta:
+    add350.1: 0.15
+    ADD301.2: 1.0
+    ADD301.3: 1.0
+
+outputs:
+  closed_loop: outputs/closed_loop_paired_no_controls_acceptance_probe
+
+evaluation:
+  paper_policy_set: [proposed_gat_mpc, no_control, internal_rules, efd_storage_priority, auto_rbc]

@@ -1,0 +1,114 @@
+_inherits: configs/wuhan.yaml
+
+# Project5 no-control repair line:
+# Proposed-GAT-MPC is no longer an Internal SWMM rules enhancement layer.
+# It uses stripped-native no_control as the rolling PFV-preserving reference,
+# intervenes only when the horizon surrogate predicts a system-risk repair, and
+# falls back to replaying no_control actions when no safe repair candidate exists.
+
+controller:
+  mode: generic_gat_mpc
+  objective_mode: pfv_preserving_system_repair
+  default_action_policy: no_control
+  reference_policy_for_constraints: no_control
+  horizon_steps: 6
+  max_candidate_delta: 0.05
+  max_first_step_delta: 0.20
+  horizon_smooth_weight: 0.50
+  horizon_violation_penalty: 1000000.0
+  max_candidate_sequences: 384
+  candidate_group_limit: 8
+  adaptive_delta_enabled: true
+  low_risk_max_candidate_delta: 0.08
+  high_risk_max_candidate_delta: 0.03
+  pfv_low_risk_horizon_threshold: 100.0
+  pfv_high_risk_horizon_threshold: 1000.0
+  min_pfv_improvement_abs: 0.0
+  min_pfv_improvement_frac: 0.0
+  pfv_tolerance_abs: 100.0
+  pfv_tolerance_frac: 0.005
+  tfv_tolerance_abs: 0.0
+  tfv_tolerance_frac: 0.0
+  tfv_required_reduction_abs: 0.0
+  tfv_required_reduction_frac: 0.02
+  tfv_required_reduction_dry_multiplier: 1.8
+  tfv_hard_constraint: false
+  dry_rain_threshold: 0.10
+  peak_tolerance_abs: 0.0
+  peak_tolerance_frac: 0.0
+  peak_weight: 300.0
+  influence_khop: 3
+  influence_fallback_khop: 30
+  max_influence_candidates_per_priority: 160
+  max_storage_controls_per_priority: 10
+  max_regulators_per_priority: 48
+  max_pumps_per_priority: 57
+  # Direct discharge from MSL010 to priority node MSLBZW001 was diagnosed as
+  # a high-risk PFV transfer path. Keep it out of candidate repairs unless a
+  # later counterfactual audit proves it is safe for the new objective.
+  blocked_actuator_ids:
+    - MSL010.9
+  repair_reliable_action_filter:
+    enabled: true
+    summary_csv: outputs/evaluation_project5_no_control_repair_reuse_gat_trajectory_v1/no_control_repair_supervision/no_control_repair_target_actuator_summary.csv
+    pattern_phase_summary_csv: outputs/evaluation_project5_no_control_repair_reuse_gat_trajectory_v1/no_control_repair_supervision/no_control_repair_target_actuator_by_pattern_phase.csv
+    min_pfv_safe_prob: 0.70
+    min_tfv_repair_prob: 0.70
+    min_peak_safe_prob: 0.75
+    min_events: 6
+    min_rows: 6
+    min_pattern_events: 2
+    min_pattern_rows: 3
+
+evaluation:
+  paper_policy_set:
+    - proposed_gat_mpc
+    - no_control
+    - internal_rules
+    - efd_storage_priority
+    - auto_rbc
+  diagnostic_policy_set:
+    - all_open
+    - random_safe
+    - efd_static
+    - proposed_native_shield
+  no_control_repair_gate:
+    min_high_risk_events: 20
+    near_zero_pfv_epsilon: 100.0
+    no_control_pfv_noninferiority_abs: 100.0
+    no_control_pfv_noninferiority_frac: 0.005
+    no_control_max_pfv_worse_frac: 0.15
+    no_control_max_pfv_mean_increase_pct: 0.5
+    no_control_min_tfv_mean_reduction_pct: 3.0
+    no_control_max_peak_worse_frac: 0.20
+    superiority_min_pfv_mean_reduction_pct: 0.0
+    superiority_min_tfv_mean_reduction_pct: 0.0
+    superiority_policies:
+      - efd_storage_priority
+      - auto_rbc
+    diagnostic_compare_policies:
+      - internal_rules
+
+rainfall:
+  # Low-return-period events often have near-zero priority flooding and dilute
+  # the repair objective. Keep training coverage broad, but use storm-heavy
+  # formal evaluation for the no-control repair claim.
+  formal_rain_ids: [T20, T30, T50, T75, T100]
+  formal_durations: [75, 105, 150, 210, 240, 300]
+  formal_patterns: [chicago_center, chicago_early, chicago_late, block, double_peak]
+  representative_event_ids:
+    - T20_D150_chicago_center
+    - T30_D210_chicago_late
+    - T50_D240_block
+    - T75_D210_chicago_center
+    - T75_D300_chicago_late
+    - T100_D240_double_peak
+    - T100_D300_block
+    - T50_D300_double_peak
+
+training:
+  cache_reference_policies:
+    - no_control
+    - efd_storage_priority
+    - auto_rbc
+    - internal_rules

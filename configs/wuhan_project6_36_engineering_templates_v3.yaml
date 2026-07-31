@@ -1,0 +1,16 @@
+_inherits: configs/wuhan_project6_36_engineering_templates_v2.yaml
+
+# Engineering templates v3:
+# keep the extracted templates as candidate actions, but remove the hard
+# preference bonus. v2 showed excessive near-continuous takeover; this makes
+# takeover depend on the paired horizon score again.
+controller:
+  temporal_joint:
+    safety:
+      engineering_template_bonus: 0.0
+      min_tfv_lcb_reduction: 0.0
+      tfv_reduction_weight: 1.0
+      peak_reduction_weight: 2500.0
+
+outputs:
+  diagnostics: outputs/diagnostics_temporal_joint_36_engineering_templates_v3

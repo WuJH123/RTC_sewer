@@ -1,0 +1,87 @@
+project:
+  name: project6_pfvfirst_dualfallback_10min_v3_3
+  root: .
+  inp: data/wuhan_v8_storage_retrofit.inp
+  output_root: outputs/project6_pfvfirst_dualfallback_10min_v3_3
+  forbid_cross_project_results: true
+
+contracts:
+  main: docs/contracts/PROJECT6_PFVFIRST_DUALFALLBACK_10MIN_V3.md
+  kpi: docs/contracts/kpi_contract.json
+  forecast: docs/contracts/forecast_contract.json
+  facility_semantics: docs/contracts/facility_semantics_contract.json
+
+state_estimation:
+  use_gat: true
+  selected_primary_gat: sr0p15
+  primary_gat_registry_name: sr0p15
+
+control:
+  mode: pfvfirst_dualfallback_10min_v3_3
+  managed_actuator_ids_path: data/project6_v8_storage_retrofit_control_enabled_ids.txt
+  control_interval_min: 10
+  prediction_horizon_min: 120
+  prediction_horizon_steps: 12
+  execute_first_step_only: true
+  max_simultaneous_residual_overrides: 8
+  anchor_policy_candidates:
+    - internal_rules_fallback
+    - executable_passive_fallback
+
+formal_evaluation:
+  authoritative_swmm_runner_config: configs/wuhan_project6_v8_storage.yaml
+  # Baseline SWMM branches can use 16 workers. Proposed branches load one
+  # PyTorch model per process and are capped to avoid Windows pagefile failure.
+  proposed_workers: 2
+  proposed_controller: proposed_pfvfirst_dualfallback_v3
+  closed_loop_mode: closed_loop_authoritative_swmm
+  prohibit_lookup_table_substitute: true
+  prohibit_hotstart: true
+
+v33:
+  source_v31_root: outputs/project6_pfvfirst_dualfallback_10min_v3_1
+  source_v32_root: outputs/project6_pfvfirst_dualfallback_10min_v3_2
+  output_root: outputs/project6_pfvfirst_dualfallback_10min_v3_3
+  champion_start: v31_logic
+  round5:
+    target_effective_samples: 400
+    planned_samples: 500
+    reserve_samples: 100
+    smoke_samples: 8
+  training:
+    required_min_samples: 3800
+    epochs: 80
+    ensemble_size: 5
+    seed: 20260722
+  execution_gate:
+    pfv_ucb_margin_m3: 0.0
+    tfv_ucb_margin_m3: 0.0
+    peak_ucb_margin: 0.0
+    candidate_executed_count_min: 1
+  pfv_budget:
+    initial_budget_m3: 80.0
+    reserve_margin_m3: 20.0
+  adaptive_k:
+    allowed_values: [0, 2, 4, 6, 8]
+    default_max_k: 2
+    max_k: 8
+  action_cost:
+    changed_facility_penalty: 1.0
+    variation_penalty: 1.0
+    reversal_penalty: 5.0
+    binary_switch_penalty: 2.0
+    candidate_fallback_switch_penalty: 4.0
+    hold_interruption_penalty: 3.0
+    minimum_material_benefit: 25.0
+    minimum_benefit_cost_ratio: 1.5
+    setting_deadband: 0.02
+    continuous_minimum_hold_steps: 2
+    switch_hysteresis_steps: 2
+    event_action_budget: 120
+  formal_splits:
+    calibration_a_v33: 12
+    locked_validation_b_v33: 12
+    formal_blind_v33: 36
+    exclude_v31_formal: true
+    exclude_v32_formal: true
+    exclude_round5_sources: true

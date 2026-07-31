@@ -1,0 +1,133 @@
+{
+  "contract_name": "PROJECT6_V4_CONTROL_SCOPE_CONTRACT",
+  "contract_version": "1.0",
+  "created_for": "Gate 2.5-real-v2",
+  "supersedes": "none (new contract)",
+  "network": {
+    "inp_path": "E:/RTC_sewer/Project6/data/wuhan_v8_storage_retrofit.inp",
+    "total_controllable_links_in_inp": 109,
+    "note": "109 = count of links referenced by project6_v8_storage_retrofit_control_enabled_ids.txt plus links that appear in native [CONTROLS] but not in Engineering36."
+  },
+  "native_rules": {
+    "total_rule_count": 175,
+    "source": "wuhan_v8_storage_retrofit.inp [CONTROLS] section",
+    "controlled_facility_count": 82,
+    "engineering36_overlap_count": 28,
+    "non_engineering36_count": 54
+  },
+  "engineering36_ids": [
+    "ADD301.2", "ADD301.3", "ADD424.1", "ADD424.2", "ADD424.3", "ADD424.4",
+    "HS1306663.1", "JCHdwxh02.1", "JCW0000.1", "MH0002461.1",
+    "MH0266931.2", "MH0266932.2", "MH0266933.1",
+    "VP0600010.3", "VP0600010.4", "VP0600010.5", "Zhongyi-2.2",
+    "add300.1", "add321.1", "add350.1", "add401.1",
+    "cc006.1", "dw3700.1", "dw3700.2", "dwxh.2",
+    "gbz1.4", "jchX01.1", "jichangheTank.2",
+    "RTC_IN_01", "RTC_OUT_01", "RTC_IN_02", "RTC_OUT_02", "RTC_IN_03", "RTC_OUT_03",
+    "HS2512760.1", "gbz1.8"
+  ],
+  "engineering36_overlap_with_native_rules": [
+    "ADD301.2", "ADD301.3", "ADD424.1", "ADD424.2", "ADD424.3", "ADD424.4",
+    "HS1306663.1", "JCHdwxh02.1", "JCW0000.1", "MH0002461.1",
+    "MH0266931.2", "MH0266932.2", "MH0266933.1",
+    "VP0600010.3", "VP0600010.4", "VP0600010.5", "Zhongyi-2.2",
+    "add300.1", "add321.1", "add350.1", "add401.1",
+    "cc006.1", "dw3700.1", "dw3700.2", "dwxh.2",
+    "gbz1.4", "jchX01.1", "jichangheTank.2"
+  ],
+  "non_engineering36_native_controlled": [
+    "ADD301.5", "ADD301.6", "ADD301.7",
+    "BZ10.1", "BZ10.2",
+    "HPLBZ01!.1", "HPLBZ01!.2", "HPLBZ01!.3", "HPLBZ01!.4", "HPLBZ01!.5",
+    "HPLBZ01!.6", "HPLBZ01!.7", "HPLBZ01!.8",
+    "MH0600332.1", "MH0600332.2", "MH0600332.3", "MH0600332.4", "MH0600332.5", "MH0600332.6",
+    "MSL010.2", "MSL010.3", "MSL010.4", "MSL010.5", "MSL010.6", "MSL010.7",
+    "MSL010.8", "MSL010.9",
+    "TJ01.1", "TJ01.2", "TJ01.3", "TJ01.4", "TJ01.5", "TJ01.6", "TJ01.7", "TJ01.8", "TJ01.9",
+    "VP0017185.1", "VP0017185.2", "VP0017185.3", "VP0017185.4",
+    "VP0272784.1", "VP0272784.2", "VP0272784.3", "VP0272784.4", "VP0272784.5", "VP0272784.6",
+    "add303.1", "add303.2", "add33530.1",
+    "tjdw02.1",
+    "wjd.1", "wjd.2", "wjd.3", "wjd.4"
+  ],
+  "branch_definitions": {
+    "dynamic_internal_rules": {
+      "description": "Prefix replay of internal baseline up to checkpoint, then native [CONTROLS] govern all 82 native-rule facilities.",
+      "inp_variant": "with_controls",
+      "controlled_facilities": "all 82 native-rule-controlled facilities (28 Eng36 + 54 non-Eng36)",
+      "prefix_behavior": "external override writes target_setting from baseline a: columns",
+      "post_checkpoint_behavior": "native [CONTROLS] compute actions from live depth/flow state; NO external override",
+      "override_scope_post_checkpoint": "none"
+    },
+    "no_control": {
+      "description": "All 109 controllable facilities held at setting=1.0 (fully open) for entire simulation.",
+      "inp_variant": "no_controls (strip_controls=True)",
+      "controlled_facilities": "all 109 controllable facilities = 1.0",
+      "prefix_behavior": "external override writes 1.0 for all 109 facilities",
+      "post_checkpoint_behavior": "external override continues writing 1.0 for all 109 facilities",
+      "native_rules_active": false,
+      "note": "Uses no-controls INP to ensure no native rules interfere. All 109 facilities explicitly set to 1.0."
+    },
+    "hold_internal_snapshot": {
+      "description": "Prefix replay of internal baseline up to checkpoint, then freeze ALL 82 native-rule facilities at their checkpoint current_setting for the remainder.",
+      "inp_variant": "no_controls (strip_controls=True)",
+      "controlled_facilities": "all 82 native-rule-controlled facilities",
+      "prefix_behavior": "external override writes same baseline a: values as dynamic_internal",
+      "post_checkpoint_behavior": "external override writes CONSTANT setting vector (read from baseline current_setting at checkpoint)",
+      "freeze_scope": "82 native-rule facilities only; non-controlled facilities remain at initial 1.0",
+      "post_checkpoint_action_changes_must_be": 0,
+      "must_not_replay_internal_future": true
+    },
+    "hold_previous": {
+      "description": "Prefix replay of internal baseline up to checkpoint-5min, then freeze at that setting for the remainder.",
+      "inp_variant": "no_controls (strip_controls=True)",
+      "controlled_facilities": "all 82 native-rule-controlled facilities",
+      "prefix_behavior": "external override writes frozen baseline (values at checkpoint-5min held constant from that point)",
+      "post_checkpoint_behavior": "external override continues writing same frozen values",
+      "freeze_scope": "82 native-rule facilities at checkpoint-5min current_setting",
+      "post_checkpoint_action_changes_must_be": 0
+    },
+    "causal_intervention": {
+      "description": "Single actuator set to low/high while all others follow baseline. Tests causal link between action and flow/node state.",
+      "inp_variant": "no_controls (strip_controls=True)",
+      "controlled_facilities": "1 selected actuator at low/high; remaining 81 native-rule facilities follow baseline",
+      "intervention_duration_min": "30-60",
+      "low_setting": 0.0,
+      "high_setting": 1.0
+    }
+  },
+  "shared_prefix_contract": {
+    "description": "All branches must share identical actual action sequence from event start to checkpoint.",
+    "requirements": [
+      "Same event start time (no hotstart)",
+      "Same rainfall input",
+      "Same physical network (physical_network_sha256 must match, ignoring CONTROLS/RAINGAGES/TIMESERIES/dates)",
+      "Same prefix actual_schedule_sha256 at checkpoint",
+      "Same checkpoint state hashes (node depth, head, flooding, storage volume, link flow, actuator settings)"
+    ],
+    "prefix_source": "native_internal_run1_detail.csv (baseline trajectory with controls, internal_rules policy)"
+  },
+  "physical_network_sha256_policy": {
+    "description": "SHA256 computed after stripping [CONTROLS], [RAINGAGES], [TIMESERIES], and OPTIONS start/end dates.",
+    "ignored_sections": ["[CONTROLS]", "[RAINGAGES]", "[TIMESERIES]"],
+    "ignored_options": ["START_DATE", "START_TIME", "END_DATE", "END_TIME"],
+    "purpose": "Verify that with-controls and no-controls INP have identical physical network structure"
+  },
+  "hotstart_policy": {
+    "hotstart_used": false,
+    "use_hotstart_call_count_must_be": 0,
+    "save_hotstart_call_count_must_be": 0,
+    "hsf_files_in_output_dir_must_be": 0,
+    "prefix_replay_must_start_from_event_beginning": true
+  },
+  "formal_blacklist": {
+    "description": "Events from formal_v31_design rainfall library must not be used in Gate 2.5-real-v2.",
+    "blacklisted_patterns": ["formal_v31_design"],
+    "note": "The V1 primary event V31_RP10_D5H_P35_v31_independent_gamma_108 is from the rainfall library used by formal experiments and must be flagged."
+  },
+  "scope_conflict_resolution": {
+    "status": "RESOLVED",
+    "resolution": "54 non-Eng36 facilities are governed by native [CONTROLS] in the Dynamic Internal branch. In no_control/hold_snapshot/hold_previous branches, these facilities follow their initial INP settings (typically 1.0) since [CONTROLS] are stripped. This is explicit and documented, not ambiguous.",
+    "contract_conflict": false
+  }
+}

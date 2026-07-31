@@ -1,0 +1,121 @@
+project:
+  root: .
+  network: data/wuhan_v8_storage_retrofit.inp
+  contract: docs/contracts/PROJECT6_V4_FINAL_PIPELINE_CONTRACT.json
+  canonical_ids: data/project6_v8_storage_retrofit_control_enabled_ids.txt
+  facility_semantics: data/project6_v3_facility_semantics_36.csv
+  priority_nodes: data/project5_design/priority_pfv_core_nodes.txt
+  sentinel_nodes: data/project6_v3_sentinel_nodes.txt
+  event_catalog: outputs/project6_pfvfirst_dualfallback_10min_v3/event_catalog/event_catalog.csv
+  revealed_event_registry: outputs/project6_dual_reference_v4/final_v4/inventory/revealed_event_registry.csv
+  output_root: outputs/project6_dual_reference_v4/final_v4
+
+runtime:
+  workers: 16
+  max_workers: 16
+  max_retries: 1
+  minimum_free_disk_bytes: 1073741824
+  minimum_free_memory_bytes: 1073741824
+  heartbeat_interval_sec: 60
+  atomic_cache_writes: true
+  one_reference_writer_per_checkpoint: true
+  network_variant: rainfall_only_no_dwf
+  record_step_min: 5
+  control_step_min: 10
+  history_min: 60
+  history_frames: 13
+  horizon_min: 120
+  horizon_steps: 12
+  max_active_changes: 8
+  use_hotstart: false
+  authoritative_swmm: true
+
+thresholds:
+  scientific_margin:
+    pfv_m3: 0.0
+    tfv_m3: 0.0
+    peak_m3s: 0.0
+  dead_zone:
+    pfv_m3: 1.0
+    tfv_m3: 1.0
+    peak_m3s: 0.001
+  numerical_repeat_tolerance:
+    pfv_m3: 0.0
+    tfv_m3: 0.0
+    peak_m3s: 0.0
+  materially_beneficial:
+    minimum_tfv_improvement_m3: 25.0
+    minimum_benefit_cost_ratio: 1.5
+
+opportunity:
+  scan_event_limit: 0
+  post_rain_buffer_min: 180
+  responsive_threshold: 0.25
+  checkpoint_interval_min: 10
+  minimum_checkpoint_spacing_min: 30
+  development_events_min: 8
+  responsive_per_event: 4
+  responsive_total_min: 32
+  low_opportunity_per_event: 1
+  rainfall_families_min: 3
+  risk_levels_min: 3
+  pilot_events: 8
+  train_calibration_validation_events: 64
+  reserve_events: 16
+  min_standard_eligible_events: 88
+  normalization: event_robust_or_no_rain_baseline
+  dwf_features_permitted: false
+
+peak_boundary:
+  events_min: 3
+  checkpoints_min: 6
+  degraded_samples_min: 30
+  degraded_samples_max: 60
+  pfv_safe_hard_negative_min: 10
+  families_min: 2
+
+pilot400:
+  events: 8
+  checkpoints_per_event: 5
+  candidates_per_checkpoint: 10
+  planned: 400
+  split:
+    pilot_train: 5
+    pilot_calibration: 1
+    pilot_validation: 1
+    pilot_challenge: 1
+
+pilot:
+  primary_candidates_per_state: 10
+  reserve_candidates_per_state: 5
+  min_accepted_informative_total: 300
+  min_accepted_per_responsive_state: 6
+  max_candidate_budget_per_state: 15
+
+partial:
+  caps:
+    noop_ratio_max: 0.2
+    projection_collapse_ratio_max: 0.2
+
+train1600:
+  accepted_target: 1600
+  primary_events: 64
+  reserve_events: 16
+  checkpoints_per_event: 5
+  candidates_per_checkpoint: 5
+  rounds: [400, 400, 400, 400]
+  target_accepted_per_state: 5
+  initial_candidate_budget_per_state: 6
+  maximum_candidate_budget_per_state: 10
+  target_accepted_total: 1600
+  allow_duplicate_replacement: false
+  split:
+    train: 48
+    calibration: 8
+    locked_validation: 8
+    reserve: 16
+
+formal_blind:
+  minimum_events: 24
+  require_new_rainfall_sha: true
+  allow_post_reveal_exclusion: false

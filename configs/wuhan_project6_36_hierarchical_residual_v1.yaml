@@ -1,0 +1,34 @@
+_inherits: configs/wuhan_project6_36_causal_effect_coverage_v2.yaml
+
+# Tier 0: online No-control reference.
+# Tier 1: the three frozen v8 engineering groups over the original 26 assets.
+# Tier 2: bounded residual actions over the 10 retrofit assets.
+controller:
+  mode: temporal_joint_36
+  reference_policy_for_constraints: online_predicted_default
+  temporal_joint:
+    model_path: outputs/models_temporal_joint_36_causal_effect_boundary_v6_round2/raw_joint_36_causal_effect_boundary_v6_round2.pt
+    legacy_groups:
+      - [ADD424.4, ADD424.1, ADD424.2, ADD424.3]
+      - [cc006.1, dwxh.2, dw3700.1, dw3700.2]
+      - [MH0266931.2, MH0266932.2, MH0266933.1]
+    paired_groups: []
+    hierarchical:
+      enabled: true
+      legacy_model_path: outputs/models_v8_storage_variablepump/horizon_temporal_gnn.pt
+      residual_validation_report: outputs/models_temporal_joint_36_causal_effect_boundary_v6_round2/raw_joint_36_causal_effect_boundary_v6_round2_train_report.json
+      require_residual_validation: true
+      residual_actuator_ids:
+        - RTC_IN_01
+        - RTC_OUT_01
+        - RTC_IN_02
+        - RTC_OUT_02
+        - RTC_IN_03
+        - RTC_OUT_03
+        - HS2512760.1
+        - gbz1.8
+        - ADD301.2
+        - ADD301.3
+
+outputs:
+  diagnostics: outputs/diagnostics_temporal_joint_36_hierarchical_residual_v1

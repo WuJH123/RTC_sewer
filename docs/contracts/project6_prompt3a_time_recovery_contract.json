@@ -1,0 +1,57 @@
+{
+  "contract_version": "project6_prompt3a_time_recovery_contract_v1",
+  "swmm_visible_state_interval_min": 5,
+  "rtc_decision_interval_min": 10,
+  "control_action_spans_visible_state_intervals": 2,
+  "prediction_horizon_min": 120,
+  "prediction_action_steps": 12,
+  "free_residual_action_steps": 3,
+  "execute_first_action_only": true,
+  "timestamp_source": "real_swmm_timestamps",
+  "must_report_swmm_options": [
+    "ROUTING_STEP",
+    "REPORT_STEP",
+    "WET_STEP",
+    "RULE_STEP",
+    "VARIABLE_STEP"
+  ],
+  "dynamic_wave_internal_step_assumption": "forbidden",
+  "tail_recovery": {
+    "minimum_tail_after_rain_min": 180,
+    "continuous_recovery_min": 60,
+    "maximum_tail_hours": 12,
+    "criteria": [
+      "system_flooding_rate_equals_zero",
+      "priority_flooding_equals_zero",
+      "storage_below_recovery_threshold_or_sustained_decline_when_storage_state_available",
+      "critical_nodes_near_recovery_level_when_thresholds_available",
+      "system_storage_change_rate_below_threshold_when_storage_state_available",
+      "no_second_peak"
+    ],
+    "max_tail_without_recovery": {
+      "recovery_censored": true,
+      "recovery_criteria_met": false
+    },
+    "required_per_trajectory_fields": [
+      "rain_start_min",
+      "rain_end_min",
+      "simulation_start_min",
+      "simulation_end_min",
+      "rain_duration_min",
+      "minimum_tail_min",
+      "actual_tail_min",
+      "last_flood_time_min",
+      "last_priority_flood_time_min",
+      "storage_recovery_time_min",
+      "tail_termination_reason",
+      "recovery_status"
+    ],
+    "kpi_windows_required": [
+      "H30",
+      "H60",
+      "H90",
+      "H120",
+      "full_recovery"
+    ]
+  }
+}

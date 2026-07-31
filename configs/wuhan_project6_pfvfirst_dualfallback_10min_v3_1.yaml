@@ -1,0 +1,74 @@
+project:
+  name: project6_pfvfirst_dualfallback_10min_v3_1
+  root: .
+  inp: data/wuhan_v8_storage_retrofit.inp
+  output_root: outputs/project6_pfvfirst_dualfallback_10min_v3_1
+  forbid_cross_project_results: true
+
+contracts:
+  main: docs/contracts/PROJECT6_PFVFIRST_DUALFALLBACK_10MIN_V3.md
+  kpi: docs/contracts/kpi_contract.json
+  forecast: docs/contracts/forecast_contract.json
+  execution_status: docs/contracts/execution_status.schema.json
+  sentinel_nodes: docs/contracts/sentinel_nodes_provenance.json
+  facility_semantics: docs/contracts/facility_semantics_contract.json
+
+state_estimation:
+  use_gat: true
+  do_not_retrain_gat: true
+  selected_primary_gat: sr0p15
+  primary_gat_registry_name: sr0p15
+
+control:
+  mode: pfvfirst_dualfallback_10min_v3_1
+  managed_actuator_ids_path: data/project6_v8_storage_retrofit_control_enabled_ids.txt
+  control_interval_min: 10
+  prediction_horizon_min: 120
+  prediction_horizon_steps: 12
+  execute_first_step_only: true
+  max_simultaneous_residual_overrides: 8
+  require_backup_reachable_after_action: true
+  anchor_policy_candidates:
+    - internal_rules_fallback
+    - executable_passive_fallback
+
+formal_evaluation:
+  authoritative_swmm_runner_config: configs/wuhan_project6_v8_storage.yaml
+  proposed_controller: proposed_pfvfirst_dualfallback_v3
+  closed_loop_mode: closed_loop_authoritative_swmm
+  prohibit_lookup_table_substitute: true
+  prohibit_hotstart: true
+
+v31:
+  old_formal_root: outputs/project6_pfvfirst_dualfallback_10min_v3/formal_evaluation
+  old_formal_policy: development_hard_negative_only
+  output_root: outputs/project6_pfvfirst_dualfallback_10min_v3_1
+  round3:
+    target_effective_samples: 600
+    same_state_method: deterministic_prefix_replay
+    old_formal_actual_candidate_allowed_as_development_hard_negative: true
+    counterfactual_variants_require_swmm_replay: true
+  execution_gate:
+    pfv_ucb_margin_m3: 0.0
+    tfv_ucb_margin_m3: 0.0
+    peak_ucb_margin: 0.0
+    pfv_vs_fallback_margin_m3: 0.0
+    tfv_vs_fallback_margin_m3: 0.0
+    uncertainty_max: 1.0
+    ood_max: 1.0
+    candidate_executed_count_min: 1
+  action_smoothing:
+    setting_deadband: 0.02
+    minimum_material_tfv_benefit_m3: 25.0
+    continuous_min_hold_steps: 2
+    fallback_switch_hysteresis_steps: 2
+    action_total_variation_penalty: 0.05
+    repeated_reversal_penalty: 0.10
+    hold_previous_when_benefit_insufficient: true
+  formal_splits:
+    calibration_a_v31_events: 12
+    locked_validation_b_v31_events: 12
+    formal_blind_v31_events: 36
+    exclude_old_formal_events: true
+    exclude_round0_1_2_events: true
+    exclude_model_training_events: true

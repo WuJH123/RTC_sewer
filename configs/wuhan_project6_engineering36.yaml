@@ -1,0 +1,129 @@
+project_root: .
+python: .venv/Scripts/python.exe
+
+network:
+  inp: data/wuhan_v8_storage_retrofit.inp
+  control_enabled_actuator_ids_file: data/project6_v8_storage_retrofit_control_enabled_ids.txt
+  retrofit_asset_manifest: data/project6_v8_storage_retrofit_assets.csv
+  priority_definition: project6_engineering36_external_pfv_core_plus_sentinel
+
+experiment:
+  control_step_sec: 300
+  routing_step_sec: 15
+  free_move_horizon_min: 30
+  prediction_horizon_min: 120
+  recession_min: 180
+  random_seed: 20260716
+
+engineering36:
+  run_root: outputs/project6_engineering36
+  frozen_dir: outputs/project6_engineering36/frozen
+  audit_source_dir: outputs/audit_v8_storage_36
+  rainfall_event_table: outputs/rainfall_library_v8_storage_36/rainfall_event_table.csv
+  core26_policy_path: outputs/deployment_evidence/v8_26_verified_group_templates.json
+  priority_core_nodes:
+    - MSLBZW001
+    - HS1316314
+    - YS2530050
+    - HS2529198
+    - MH0200773
+    - HS1330349
+    - HS2529139
+    - HS2529052
+  sentinel_nodes:
+    - ADD424
+    - ADD301
+  residual10_actuator_ids:
+    - RTC_IN_01
+    - RTC_OUT_01
+    - RTC_IN_02
+    - RTC_OUT_02
+    - RTC_IN_03
+    - RTC_OUT_03
+    - HS2512760.1
+    - gbz1.8
+    - ADD301.2
+    - ADD301.3
+  binary_pump_ids:
+    - ADD301.2
+    - ADD301.3
+  variable_speed_pump_ids:
+    - add350.1
+  sensor_ratio_model_paths:
+    sr0p05: outputs/research_sensor_sweep/sr0p05/models/gat_sr0p10.pt
+    sr0p10: outputs/research_sensor_sweep/sr0p10/models/gat_sr0p10.pt
+    sr0p15: outputs/research_sensor_sweep/sr0p15/models/gat_sr0p10.pt
+    sr0p20: outputs/research_sensor_sweep/sr0p20/models/gat_sr0p10.pt
+    sr0p30: outputs/research_sensor_sweep/sr0p30/models/gat_sr0p10.pt
+  selected_sensor_ratio: sr0p20
+  trajectory_reuse_policy:
+    require_same_state_counterfactual: true
+    require_exact_36_action_ids: true
+    require_same_retrofit_inp: true
+    reject_if_action_hash_missing: true
+
+controller:
+  mode: proposed_hierarchical36_event_budget
+  reference_policy_for_constraints: online_predicted_no_control_same_state
+  hierarchy:
+    tier0: no_control
+    tier1: core26_verified_engineering_templates
+    tier2: rejectable_residual10_increment
+  candidate_set:
+    include_no_control: true
+    include_core26_safe: true
+    include_core26_high_benefit: true
+    include_residual10_singletons: true
+    include_hydraulic_residual10_combos: true
+    include_hold_previous: true
+    include_safe_terminal_action: true
+    dynamic_top_k_residual10: 4
+    max_residual10_combo_size: 2
+    max_free_action_steps: 6
+    prediction_horizon_steps: 24
+  event_pfv_budget:
+    enabled: true
+    abs_margin_m3: 200.0
+    rel_margin: 0.02
+    use_ucb: true
+    reinitialize_each_step: false
+  safety:
+    peak_h90_h120_nonworsening: true
+    sentinel_depth_surcharge_required: true
+    reject_h30_improve_h120_worsen_reversal: true
+    empirical_reliability_required: true
+    uncertainty_z: 1.645
+    no_control_fallback_if_core26_unsafe: true
+    core26_fallback_if_residual10_unreliable: true
+  action_constraints:
+    continuous_min: 0.0
+    continuous_max: 1.0
+    continuous_max_delta_per_step: 0.12
+    binary_pump_min_on_steps: 2
+    binary_pump_min_off_steps: 2
+    max_pump_switches_per_event: 6
+    storage_inlet_outlet_interlock: true
+    max_storage_actuators: 4
+
+acceptance:
+  calibration:
+    max_mean_pfv_increase_pct: 2.0
+    min_pfv_noninferior_event_fraction: 0.70
+    min_mean_tfv_reduction_pct: 6.0
+    min_tfv_improved_event_fraction: 0.60
+    max_tfv_worse_event_fraction: 0.15
+    min_mean_peak_reduction_pct: 15.0
+    max_peak_worse_event_fraction: 0.15
+    max_constraint_violations: 0
+    realtime_p95_sec: 300.0
+  ideal:
+    max_mean_pfv_increase_pct: 1.0
+    min_mean_tfv_reduction_pct: 8.0
+    min_mean_peak_reduction_pct: 20.0
+
+outputs:
+  audit: outputs/audit_v8_storage_36
+  design: outputs/design_v8_storage_36
+  rainfall: outputs/rainfall_library_v8_storage_36
+  closed_loop: outputs/closed_loop_paired_no_controls
+  engineering36: outputs/project6_engineering36

@@ -1,0 +1,43 @@
+{
+  "contract_id": "PROJECT6_V4_LOCKED_VALIDATION_ACCRUAL_V3",
+  "version": "v3",
+  "created_utc": "2026-07-23",
+  "status": "pre_registered_frozen",
+  "purpose": "Pre-registered power accrual rules for the Locked Validation split. Accrual only increases statistical power of the model-safety evaluation; it never changes the model, thresholds, or existing events, and is never used for retraining.",
+  "rules": {
+    "1_initial_events": 8,
+    "2_candidate_plans_frozen_before_labelling": true,
+    "3_one_shot_evaluation": "evaluated once, only after training and Calibration are complete",
+    "4_when_exact_feasible_states_below_5": {
+      "threshold_exact_feasible_states": 5,
+      "never_delete_original_events": true,
+      "never_modify_model": true,
+      "never_modify_thresholds": true,
+      "accrue_new_events_batch_size": [4, 8],
+      "new_events_stratified_by_same_online_feature_rules": true,
+      "new_batch_frozen_wholesale_before_any_run": true
+    },
+    "5_all_batches_in_final_report": true,
+    "6_frozen_maxima": {
+      "maximum_total_locked_events": 24,
+      "maximum_accrual_batches": 2
+    },
+    "7_accrual_purpose": "statistical power only; never retraining, never threshold tuning, never Active Learning input"
+  },
+  "event_source": {
+    "pool": "standard_4plus, same exclusions as PROJECT6_V4_TRAIN1600_DATASET_V3",
+    "never_overlaps": ["train", "calibration", "pilot", "challenge", "formal", "existing locked_validation"],
+    "unique_rainfall_sha256": true
+  },
+  "candidate_plan_rules": {
+    "candidates_per_state": 5,
+    "states_per_event": 5,
+    "stratification": "frozen online-feature scorer (stratification_scorer_v3.json), never exact labels of the new states",
+    "plan_frozen_before_any_corresponding_swmm": true,
+    "never_modified_after_calibration_results": true
+  },
+  "gate_references": {
+    "model_safety": "docs/contracts/PROJECT6_V4_MODEL_SAFETY_GATE_V3.json",
+    "dataset": "docs/contracts/PROJECT6_V4_TRAIN1600_DATASET_V3.json"
+  }
+}

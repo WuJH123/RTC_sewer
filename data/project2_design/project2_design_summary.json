@@ -1,0 +1,21 @@
+{
+  "priority_nodes": [
+    "YS2530050",
+    "HS1316314",
+    "HS2529139",
+    "HS1330349",
+    "MH0200770",
+    "HS2529198",
+    "HS1355904",
+    "MH0249284",
+    "HS2529052",
+    "MSLBZW001",
+    "MH0200773"
+  ],
+  "priority_count": 11,
+  "selected_actuator_count": 48,
+  "selected_pumps": 34,
+  "selected_storage_orifices": 10,
+  "selected_native_rule_controls": 38,
+  "total_storage_capacity_m3": 1233695.1749
+}

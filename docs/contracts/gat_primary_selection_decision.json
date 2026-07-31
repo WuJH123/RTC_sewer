@@ -1,0 +1,31 @@
+{
+  "contract_version": "project6_v3_gat_primary_selection_decision_v1",
+  "project": "Project6",
+  "registry_name": "sr0p15",
+  "declared_sensor_ratio": 0.15,
+  "expected_sensor_count": 134,
+  "checkpoint_path": "E:/RTC_sewer/Project4/outputs/sensor_sensitivity/sr0p15/models/gat_sr0p10.pt",
+  "expected_checkpoint_sha256": "11f40e6a36016202139e604f04c7d888b5ec3805511c46172ad968a7c20d0e20",
+  "selection_authority": "user_confirmed",
+  "selection_reason": [
+    "Use a middle sensor-ratio design to balance sensor cost and reconstruction quality.",
+    "Do not use full-network NSE as the only selection criterion.",
+    "Keep the selected design sparser than the 20% and 30% candidates.",
+    "Round 0 remains blocked until sr0p15-specific robustness and state-causality audits pass."
+  ],
+  "decision_recorded_at": "2026-07-17",
+  "automatic_selection": false,
+  "alternative_candidates": [
+    "sr0p05",
+    "sr0p10",
+    "sr0p20",
+    "sr0p30"
+  ],
+  "robustness_audit_required": true,
+  "state_feature_validation_required": true,
+  "round0_unlock_allowed": false,
+  "human_selection_decision": "confirmed",
+  "primary_gat_lock_status": "pending_manual_execution",
+  "gat_robustness_status": "pending",
+  "state_feature_runtime_status": "pending"
+}

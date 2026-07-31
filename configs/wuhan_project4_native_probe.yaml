@@ -1,0 +1,40 @@
+_inherits: configs/wuhan.yaml
+
+# Diagnostic-only configuration.
+# Purpose: reproduce the final Project4 NativeShield idea in Project5 without
+# changing the formal Project5 configuration. The main difference from
+# configs/wuhan.yaml is that this probe re-opens priority-local throttle and
+# retain/release candidate families that were effective in Project4, while
+# keeping broad all-storage and pump-only pre-emptying actions blocked.
+
+intervention_policy:
+  # Match the Project4 final diagnostic posture: unknown empirical groups may
+  # be explored only when model, phase, boundary, TFV, and peak gates pass.
+  empirical_guard_block_unknown: false
+  project5_safety_shield:
+    nominal_policy: internal_rules
+    require_project5_on_policy_guard: true
+    project4_residual_use: diagnostic_project4_style_candidate_probe
+    allowed_templates:
+      - storage_inlet_restrict
+      - storage_outlet_retain
+      - pump_throttle
+      - storage_retain_pump_throttle
+      - inlet_restrict_pump_throttle
+      - release_plus_pump_boost
+      - storage_outlet_release
+    allowed_scopes_by_template:
+      storage_inlet_restrict: [priority_corridor, priority_upstream, native_rule, hot_local]
+      storage_outlet_retain: [priority_corridor, priority_downstream, native_rule, hot_local]
+      pump_throttle: [priority_corridor, priority_upstream, priority_downstream, hot_local, native_rule]
+      storage_retain_pump_throttle: [priority_corridor, priority_upstream, priority_downstream, hot_local, native_rule]
+      inlet_restrict_pump_throttle: [priority_corridor, priority_upstream, priority_downstream, hot_local, native_rule]
+      release_plus_pump_boost: [priority_downstream, priority_upstream, hot_local, native_rule]
+      storage_outlet_release: [priority_downstream, hot_local, native_rule]
+    blocked_templates:
+      - pump_boost
+      - storage_all_retain
+      - storage_all_release
+      - storage_inlet_open
+      - pump_pre_emptying
+    candidate_hold_steps: [1, 2, 3]

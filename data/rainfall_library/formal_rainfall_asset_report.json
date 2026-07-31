@@ -1,0 +1,12 @@
+{
+  "status": "pass",
+  "formal_core_event_count": 36,
+  "available_count": 36,
+  "out_dir": "E:\\RTC_sewer\\Project6\\data\\rainfall_library",
+  "manifest": "E:\\RTC_sewer\\Project6\\data\\rainfall_library\\formal_rainfall_asset_manifest.csv",
+  "manifest_sha256": "847a1467931c3f21827df14ffa51920737507d74df0d144569ea2d5db59bcec9",
+  "config_hash": "922dda06d89cca71db7e5f3cc7ef3b7646cf998e36b12cc553202e535919af85",
+  "created_at": "2026-07-21T19:03:29.542343+00:00",
+  "swmm_executed": false,
+  "formal_results_unlocked": false
+}

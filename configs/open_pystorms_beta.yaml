@@ -1,0 +1,236 @@
+_inherits: configs/wuhan.yaml
+
+network:
+  inp: data/open_benchmarks/pystorms/beta/beta.inp
+  priority_nodes_file: data/open_benchmarks/pystorms/beta/project5_config/priority_nodes.txt
+  priority_nodes_metadata: data/open_benchmarks/pystorms/beta/project5_config/priority_nodes.csv
+  priority_sentinel_nodes_file: data/open_benchmarks/pystorms/beta/project5_config/priority_sentinel_nodes.txt
+  priority_sentinel_nodes_metadata: ""
+  control_actuator_ids_file: data/open_benchmarks/pystorms/beta/project5_config/control_actuator_ids.txt
+  priority_definition: pystorms_beta_public_flooding_performance_targets
+
+benchmark:
+  source: pystorms_scenario_beta
+  public_reference_notebook: https://github.com/kLabUM/pystorms/blob/master/tutorials/Scenario_Beta.ipynb
+  fixed_actions:
+    # Public pystorms Beta uncontrolled case: R2 open, P0 off, W0 open.
+    # This must be written every control step; otherwise SWMM's pump
+    # startup/shutoff levels can turn P0 on and no longer match the notebook.
+    no_control:
+      R2: 1.0
+      P0: 0.0
+      W0: 1.0
+    internal_rules:
+      R2: 1.0
+      P0: 0.0
+      W0: 1.0
+  schedule_policies:
+    official_mpc:
+      csv: data/open_benchmarks/pystorms/beta/mpc_rules_beta.csv
+      time_column: simtime (hr)
+      time_unit: hr
+
+experiment:
+  sensor_ratio: 0.20
+  control_step_sec: 300
+  routing_step_sec: 15
+  recession_min: 180
+  max_actuators: 3
+  priority_top_k: 12
+  pfv_guard_min_improve_m3: 1000.0
+  tfv_guard_pct: 0.02
+  peak_guard_pct: 0.05
+  smooth_weight: 50000.0
+  debug_workers: 2
+  full_workers: 8
+  random_seed: 2026
+
+sensor_selection:
+  include_priority_nodes: true
+  include_sentinel_nodes: false
+  priority_sensor_fraction: 1.0
+
+risk_stratification:
+  # Scenario Beta uses FLOW_UNITS=CFS. Current Project5 KPI integration uses
+  # native SWMM flow-volume units, so PFV/TFV are cubic feet for this benchmark.
+  low_pfv_threshold: 10000.0
+  high_pfv_threshold: 1000000.0
+  near_zero_pfv_epsilon: 100.0
+  low_priority_depth_threshold_m: 0.02
+  high_priority_depth_threshold_m: 0.20
+  high_risk_exposure_depth_m: 0.20
+  high_risk_exposure_time_min: 15.0
+
+controller:
+  mode: generic_gat_mpc
+  horizon_steps: 6
+  max_candidate_delta: 0.10
+  horizon_smooth_weight: 50000.0
+  horizon_violation_penalty: 1000000.0
+  # If no candidate sequence is predicted to safely outperform the reference,
+  # Proposed-GAT-MPC falls back to the public pystorms Beta MPC schedule.
+  default_action_policy: official_mpc
+  reference_policy_for_constraints: internal_and_no_control
+  require_pfv_below_reference: true
+  min_pfv_improvement_abs: 10000.0
+  min_pfv_improvement_frac: 0.02
+  tfv_tolerance_frac: 0.05
+  tfv_tolerance_abs: 0.0
+  peak_tolerance_frac: 0.05
+  peak_tolerance_abs: 0.0
+  max_first_step_delta: 0.35
+  max_candidate_sequences: 512
+  candidate_group_limit: 8
+  influence_khop: 4
+  influence_fallback_khop: 30
+  max_influence_candidates_per_priority: 32
+  max_storage_controls_per_priority: 3
+  max_regulators_per_priority: 2
+  max_pumps_per_priority: 1
+  allow_legacy_native_shield: false
+
+evaluation:
+  paper_policy_set:
+    - proposed_gat_mpc
+    - official_mpc
+    - internal_rules
+    - no_control
+    - auto_rbc
+    - efd_storage_priority
+  diagnostic_policy_set:
+    - all_open
+    - all_closed_safe
+    - random_safe
+    - efd_static
+  proposed_formal_gate:
+    min_high_risk_events: 5
+    min_pfv_mean_reduction_pct: 5.0
+    min_pfv_median_reduction_pct: 5.0
+    max_tfv_worse_frac: 0.30
+    max_peak_worse_frac: 0.30
+    max_action_change_ratio: 3.00
+    near_zero_pfv_epsilon: 100.0
+    required_baseline_policies:
+      - no_control
+      - official_mpc
+      - efd_storage_priority
+      - auto_rbc
+
+horizon_surrogate:
+  model_kind: temporal_gnn
+  formal_model_kind: temporal_gnn
+  horizon_steps: 6
+  history_steps: 3
+  max_detail_files: 0
+  min_rows_per_event: 6
+  source_scope: generic_trajectories
+  output_dataset: outputs/pystorms_beta/surrogate/horizon_mpc_dataset.parquet
+  fallback_output_dataset: outputs/pystorms_beta/surrogate/horizon_mpc_dataset.csv
+  high_risk_pfv_threshold: 1000000.0
+  high_risk_threshold_quantile: 0.90
+  high_risk_min_true_count: 10
+
+training:
+  batch_size: 128
+  debug_epochs: 5
+  full_epochs: 120
+  lr: 0.001
+  hidden_dim: 128
+  gat_heads: 4
+  gat_max_train_samples_per_epoch: 20000
+  gat_eval_every: 5
+  gat_patience: 10
+  gat_score_full_weight: 0.50
+  gat_score_priority_weight: 0.50
+  surrogate_horizon_steps: 6
+  cache_reference_policies:
+    - no_control
+    - official_mpc
+    - efd_storage_priority
+    - auto_rbc
+  lambda_priority: 4.0
+  lambda_high_depth: 2.0
+  lambda_volume: 0.10
+  lambda_flood: 0.20
+  lambda_direction: 0.30
+  val_fraction: 0.20
+
+trajectory:
+  debug_policies:
+    - no_control
+    - official_mpc
+    - auto_rbc
+    - efd_storage_priority
+    - all_open
+    - random_uniform
+    - storage_retain
+    - pump_emptying
+    - regulator_restrict_wave
+    - regulator_release_wave
+  full_policies:
+    - no_control
+    - official_mpc
+    - all_open
+    - all_closed_safe
+    - auto_rbc
+    - efd_static
+    - efd_storage_priority
+    - random_uniform
+    - sobol_like
+    - mixed_safe_random
+    - one_at_a_time_pulse
+    - actuator_group_pulse
+    - actuator_extreme_counterfactual
+    - storage_retain
+    - storage_release
+    - pump_emptying
+    - pump_throttle
+    - pre_peak_storage_retain
+    - peak_storage_retain
+    - recession_pump_emptying
+    - priority_zone_protective
+    - priority_peak_storage_block
+    - priority_peak_storage_release
+    - pump_peak_shutdown
+    - pump_peak_boost
+    - storage_group_wave
+    - regulator_restrict_wave
+    - regulator_release_wave
+    - storage_inlet_outlet_sweep
+    - pump_station_wave
+  debug_max_trajectories: 80
+  full_max_trajectories: 0
+
+rainfall:
+  debug_rain_ids: [T10, T50]
+  debug_durations: [75, 150]
+  debug_patterns: [chicago_center]
+  train_rain_ids: [T10, T20, T30, T50, T75, T100]
+  train_durations: [75, 105, 150, 210, 240, 300]
+  train_patterns: [chicago_center, chicago_early, chicago_late, block, double_peak]
+  formal_rain_ids: [T10, T20, T30, T50, T75, T100]
+  formal_durations: [75, 105, 150, 210, 240, 300]
+  formal_patterns: [chicago_center, chicago_early, chicago_late, block, double_peak]
+  representative_event_ids:
+    - T20_D150_chicago_center
+    - T30_D210_chicago_late
+    - T50_D240_block
+    - T75_D210_chicago_center
+    - T75_D300_chicago_late
+    - T100_D240_double_peak
+    - T100_D300_block
+    - T50_D300_double_peak
+
+outputs:
+  audit: outputs/pystorms_beta/audit
+  rainfall: outputs/pystorms_beta/rainfall_library
+  design: outputs/pystorms_beta/design
+  data_bank_train: outputs/pystorms_beta/data_bank_train
+  cache: outputs/pystorms_beta/cache
+  models: outputs/pystorms_beta/models
+  diagnostics: outputs/pystorms_beta/diagnostics
+  closed_loop: outputs/pystorms_beta/closed_loop
+  figures: outputs/pystorms_beta/figures
+  network: outputs/pystorms_beta/network
+  surrogate: outputs/pystorms_beta/surrogate
+  evaluation: outputs/pystorms_beta/evaluation

@@ -1,0 +1,201 @@
+{
+  "contract_id": "project6_v4_pilot_feasibility_gate_p3",
+  "gate_version": "p3",
+  "purpose": "pilot state feasibility mapping and training-task redesign; not a supplementary sampling round",
+  "created_at": "2026-07-23",
+  "user_authorized": true,
+  "not_retroactive": true,
+  "applies_to": "pilot_feasibility_p3_and_pilot_dataset_v3",
+  "v2_reference": {
+    "v2_verdict": "scientific_fail",
+    "v2_failed_dataset_checks": [
+      "confirmed_flat_event_support_at_least_3",
+      "joint_at_30pct_responsive_checkpoints",
+      "joint_state_count_at_least_10"
+    ],
+    "v2_frozen_evidence": "outputs/project6_dual_reference_v4/final_v4/audits/frozen_evidence/pilot_v2/9b21f44197c6e2176e3f2858bbe0a36bd3ba267c57b2ac6c647638867a16712c",
+    "v2_code_sha": "9b21f44197c6e2176e3f2858bbe0a36bd3ba267c57b2ac6c647638867a16712c",
+    "v2_config_sha": "b0b7dbda2eeffbf2b51f31a9ce72fd1adb7c7f0954f312bd2e1f15e800b1eba9",
+    "v2_headline": {
+      "total_samples": 479,
+      "joint_state_count": 9,
+      "joint_state_fraction": 0.28125,
+      "joint_event_support": 4,
+      "flat_count": 14,
+      "flat_event_support": 1,
+      "false_safe_hgb": 0.6666666666666666,
+      "targeted_joint_extension_new_joint": 0
+    }
+  },
+  "frozen_physics": {
+    "network_inp": "data/wuhan_v8_storage_retrofit.inp",
+    "network_sha256": "c44b315c31b901b188b62f001521e89ce025c2259a0c5a6ec74cf356dde4f2ca",
+    "dwf_scenario": "none (current no-DWF configuration is frozen)",
+    "engineering_scope": "Engineering36 (all 36 control-enabled facilities, 12x36 schedule)",
+    "facility_semantics": "data/project6_v3_facility_semantics_36.csv",
+    "state_sampling_min": 5,
+    "control_interval_min": 10,
+    "horizon_min": 120,
+    "horizon_steps": 12,
+    "max_k": 8,
+    "hotstart": false,
+    "authoritative_swmm": true
+  },
+  "frozen_references": {
+    "pfv_reference": "no_control",
+    "tfv_reference": "dynamic_internal_rules",
+    "peak_reference": "dynamic_internal_rules",
+    "third_branch": "hold_previous",
+    "reference_reuse_policy": "all three reference branches must be reused from the existing pilot reference cache; no new reference runs are planned in principle",
+    "reference_cache_root": "outputs/project6_dual_reference_v4/final_v4/pilot/references"
+  },
+  "frozen_thresholds": {
+    "scientific_margin": { "pfv_m3": 0.0, "tfv_m3": 0.0, "peak_m3s": 0.0 },
+    "dead_zone": { "pfv_m3": 1.0, "tfv_m3": 1.0, "peak_m3s": 0.001 },
+    "modification_prohibited": true,
+    "boundary_band": {
+      "tfv_m3": 25.0,
+      "peak_m3s": 0.01,
+      "pfv_m3": 25.0,
+      "meaning": "a candidate is near-boundary when it is PFV-safe and its failing continuous delta lies within this band of the frozen margin"
+    }
+  },
+  "hard_authenticity_gates_unchanged": {
+    "same_state_100pct": true,
+    "readback_100pct": true,
+    "constraints_recheck_100pct": true,
+    "no_hotstart": true,
+    "h120_window_100pct": true,
+    "label_recompute_100pct": true,
+    "actual_duplicates_0": true,
+    "reference_cache_sha_consistent": true
+  },
+  "exact_search_budget": {
+    "round_a": {
+      "joint_missing_states": 23,
+      "max_candidates_per_missing_state": 16,
+      "positive_control_states": 9,
+      "replays_per_positive_control_state": 4,
+      "positive_control_composition": [
+        "current_best_joint_candidate",
+        "neighborhood_positive_control",
+        "hard_negative",
+        "neutral"
+      ]
+    },
+    "round_b": {
+      "trigger_conditions": [
+        "pfv_safe and tfv within boundary band of noninferiority",
+        "pfv_safe and peak within boundary band of noninferiority",
+        "two of three noninferior with one slight failure",
+        "continuous delta within boundary band of frozen margin",
+        "beam or coordinate search still improving"
+      ],
+      "max_additional_candidates_per_state": 16,
+      "excluded_states": "states that already have joint candidates from at least 2 distinct families",
+      "total_budget_per_missing_state_max": 32
+    },
+    "max_total_candidate_runs": 772,
+    "budget_formula": "23*32 + 9*4 = 772"
+  },
+  "candidate_families": [
+    "replay_compatible_oracle_seed",
+    "toward_no_control",
+    "toward_dynamic_internal",
+    "toward_hold",
+    "coordinate_top1_top2",
+    "leave_one_out",
+    "storage_headroom",
+    "downstream_capacity",
+    "temporal_2step_4step",
+    "staggered_release",
+    "beam_sparse_k2_k4",
+    "boundary_interpolation"
+  ],
+  "candidate_constraints": {
+    "schedule_shape": "12x36",
+    "max_k": 8,
+    "binary_vsp_semantics": true,
+    "rate_ramp_dwell_interlock": true,
+    "actual_unique": true,
+    "non_noop": true,
+    "distinct_from_all_references": true
+  },
+  "state_classification": {
+    "allowed_classes": [
+      "joint_feasible_found",
+      "joint_feasible_robust",
+      "joint_boundary_found",
+      "no_joint_found_under_budget",
+      "no_pfv_safe_found",
+      "execution_unresolved"
+    ],
+    "class_definitions": {
+      "joint_feasible_found": "at least one actual-unique candidate with pfv_safe=true, tfv_noninferior=true, peak_noninferior=true",
+      "joint_feasible_robust": "joint candidates from at least two distinct candidate families",
+      "joint_boundary_found": "no joint, but at least one candidate within the frozen boundary band of all margins",
+      "no_joint_found_under_budget": "full frozen budget spent, no joint found; explicitly NOT a claim of physical infeasibility",
+      "no_pfv_safe_found": "every candidate PFV-unsafe",
+      "execution_unresolved": "runs or evidence incomplete"
+    },
+    "forbidden_class_names": ["physically_infeasible", "impossible", "uncontrollable"]
+  },
+  "evaluation_state_policy": {
+    "exact_search_role": "development diagnostic only",
+    "eval_split_search_rules": [
+      "results only enter the feasibility map",
+      "results never enter training",
+      "results never tune model thresholds",
+      "searched evaluation states are removed from later generalization evaluation or explicitly flagged oracle_revealed"
+    ],
+    "preferred_states": "pilot_train",
+    "non_train_states": "read-only label diagnostics only; search results must not inform candidate generator design"
+  },
+  "legacy_oracle_policy": {
+    "stage": "AuditLegacyOracleCompatibility",
+    "compatibility_dimensions": [
+      "network_sha256",
+      "no_dwf_scenario",
+      "event_rainfall_sha256",
+      "checkpoint_identity",
+      "engineering36_scope",
+      "k_at_most_8",
+      "reference_semantics",
+      "dynamic_internal_truly_dynamic",
+      "h120_window",
+      "actual_readback",
+      "margin_dead_zone",
+      "no_hotstart",
+      "provenance"
+    ],
+    "fully_compatible_use": "positive control replays",
+    "incompatible_use": "search seeds only, never labels"
+  },
+  "p3_pass_criteria": {
+    "exact_joint_feasible_states_min": 8,
+    "joint_event_support_min": 3,
+    "candidate_generator_state_recall_min": 0.80,
+    "positive_control_replay_success_rate": 1.0,
+    "execution_unresolved_max": 0,
+    "recall_interpretation": {
+      "exact_equals_online_9": "recall=1.0; the former 30% all-responsive gate is declared inappropriate; remaining states must not be forced to produce joints",
+      "exact_exceeds_online": "fix the candidate generator; do not enter Train1600"
+    }
+  },
+  "prohibitions": [
+    "no overwriting of pilot v1/v2 frozen failure evidence",
+    "no modification of PFV/TFV/Peak margins or dead-zones",
+    "no labeling of budget-exhausted no-joint states as physically infeasible",
+    "no direct run of PlanTrain1600",
+    "no deletion or rerun of the existing 479 samples",
+    "no future SWMM results as online model features",
+    "no reinstatement of flat fraction as a core hard gate"
+  ],
+  "exit_codes": {
+    "pass": 0,
+    "blocked": 2,
+    "incomplete": 3,
+    "runtime_error": 4,
+    "scientific_fail": 5
+  }
+}

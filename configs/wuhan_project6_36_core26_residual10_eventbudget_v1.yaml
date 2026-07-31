@@ -1,0 +1,64 @@
+_inherits: configs/wuhan_project6_36_recovered_v8_groups_stratified_v2.yaml
+
+# 36-facility hierarchical RTC branch:
+# Tier 0: true No-control fallback (skip PySWMM action writes).
+# Tier 1: verified core26/v8 engineering templates.
+# Tier 2: bounded residual actions on the additional 10 retrofit assets.
+#
+# Control interval = 5 min.
+# Move horizon = 30 min = 6 free action steps.
+# Prediction horizon = 120 min = 24 steps. Core26 templates are scored over
+# this long horizon by holding the free action and then returning to the
+# online No-control/default terminal action.
+controller:
+  horizon_steps: 6
+  temporal_joint:
+    prediction_horizon_min: 120
+    prediction_horizon_steps: 24
+    terminal_return_min: 30
+    terminal_return_steps: 6
+    candidate_search:
+      max_candidates: 1024
+      max_simultaneous_changes: 8
+      max_change_points: 2
+      continuous_max_delta: 0.12
+      continuous_delta_levels: [0.08, 0.10, 0.12]
+      binary_pump_ids: [ADD301.2, ADD301.3]
+      binary_pump_min_dwell_steps: 2
+      max_pump_switches_per_event: 6
+      storage_interlock: true
+      max_storage_actuators: 4
+    safety:
+      # Window-level PFV improvement is disabled. The event-level budget below
+      # is the hard PFV constraint used by deployment selection.
+      pfv_abs_margin_m3: 100.0
+      pfv_rel_margin: 0.005
+      event_pfv_budget_enabled: true
+      event_pfv_abs_margin_m3: 100.0
+      event_pfv_rel_margin: 0.005
+      peak_margin: 0.0
+      uncertainty_z: 0.0
+      min_tfv_lcb_reduction: 0.0
+      min_pfv_noninferiority_probability: 0.0
+      min_tfv_improvement_probability: 0.0
+      min_peak_safe_probability: 0.0
+      use_classifier_thresholds: false
+      # Lexicographic safety first; these only rank candidates that passed
+      # event PFV budget and peak constraints.
+      tfv_reduction_weight: 1.6
+      peak_reduction_weight: 3500.0
+      engineering_template_bonus: 75.0
+      action_l1_penalty: 0.04
+      simultaneous_action_penalty: 0.03
+      pump_switch_penalty: 0.25
+
+outputs:
+  diagnostics: outputs/diagnostics_project6_36_core26_residual10_eventbudget_v1
+
+evaluation:
+  paper_policy_set:
+    - proposed_temporal_joint_36
+    - no_control
+    - internal_rules
+    - efd_storage_priority
+    - auto_rbc

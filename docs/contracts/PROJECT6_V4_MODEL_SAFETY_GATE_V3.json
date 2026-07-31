@@ -1,0 +1,56 @@
+{
+  "contract_id": "PROJECT6_V4_MODEL_SAFETY_GATE_V3",
+  "version": "v3",
+  "created_utc": "2026-07-23",
+  "status": "deferred",
+  "reason": "requires_train1600_and_powered_locked_validation",
+  "purpose": "Model-safety evaluation gate. All model-safety metrics are deferred until Train1600 V3 is trained and the Locked Validation split is statistically powered (>=5 exact feasible states, per the pre-registered accrual contract). Until then this gate holds no pass and blocks all downstream deployment stages.",
+  "scope": {
+    "controls": [
+      "Policy Lock",
+      "Surrogate closed loop",
+      "Challenge",
+      "Formal Blind"
+    ],
+    "does_not_control": [
+      "Train1600 V3 data generation",
+      "PlanTrain1600V3",
+      "Train rounds / Calibration / Locked Validation SWMM data production"
+    ]
+  },
+  "current_state": {
+    "status": "deferred",
+    "reason": "requires_train1600_and_powered_locked_validation",
+    "p3_verdict_status": "underpowered_validation",
+    "p3_locked_validation_joint_positive_states": 0,
+    "mcc_auprc_topk_computable": false,
+    "underpowered_must_not_be_reported_as_pass": true
+  },
+  "deferred_metrics": {
+    "balanced_accuracy": "deferred_until_train1600",
+    "mcc": "deferred_until_train1600",
+    "auprc": "deferred_until_train1600",
+    "pfv_false_safe_rate": "deferred_until_train1600",
+    "peak_false_safe_rate": "deferred_until_train1600",
+    "top_k_feasible_recall": "deferred_until_train1600",
+    "decision_regret": "deferred_until_train1600",
+    "uncertainty_calibration": "deferred_until_train1600",
+    "held_out_feasible_states_min_5": "deferred_until_powered_locked_validation"
+  },
+  "activation_preconditions": [
+    "Train1600 V3 dataset audit pass (AuditTrain1600DatasetV3)",
+    "model trained on Train split only",
+    "Calibration completed on Calibration split only",
+    "Locked Validation one-shot evaluation with >=5 exact feasible states, using the accrual contract PROJECT6_V4_LOCKED_VALIDATION_ACCRUAL_V3 when short"
+  ],
+  "prohibitions": [
+    "must not gate or block Train1600 V3 data generation",
+    "must not be evaluated against the underpowered P3 locked evaluation",
+    "must not interpret insufficient evaluation positives as model pass",
+    "must not reuse Calibration or Locked Validation results for training or Active Learning",
+    "joint safety must be composed from the continuous/safety heads; a standalone joint classification head is never the sole safety evidence"
+  ],
+  "outputs": {
+    "status_file": "train1600_v3/authorization/model_safety_gate_v3_status.json"
+  }
+}

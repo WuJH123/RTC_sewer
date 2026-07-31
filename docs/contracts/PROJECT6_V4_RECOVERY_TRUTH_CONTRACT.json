@@ -1,0 +1,213 @@
+{
+  "contract_version": "project6_v4_recovery_truth_contract_v1.2",
+  "project": "Project6",
+  "scope": "Wuhan v8 storage-retrofit drainage network, Engineering36 subset, 10-min rolling real-time control research.",
+  "network_path": "E:/RTC_sewer/Project6/data/wuhan_v8_storage_retrofit.inp",
+  "network_sha256": "c44b315c31b901b188b62f001521e89ce025c2259a0c5a6ec74cf356dde4f2ca",
+  "base_inflow_contract": {
+    "enabled": false,
+    "inp_section_present": false,
+    "pattern_section_present": false,
+    "reason": "The frozen Wuhan RTC network excludes sanitary base inflow; event forcing is rainfall only.",
+    "original_network_backup": "E:/RTC_sewer/Project6/data/wuhan_v8_storage_retrofit_original_with_base_inflow_7ea1e133.inp",
+    "original_network_sha256": "7ea1e1336c4e758f73b4e67bb8dca4fe972900f05c5d825c4ae9fbdaa52670fe"
+  },
+  "engineering36_canonical_order": [
+    "ADD424.4", "HS1306663.1", "JCHdwxh02.1", "MH0266931.2", "MH0266932.2",
+    "MH0266933.1", "VP0600010.3", "VP0600010.4", "VP0600010.5", "add300.1",
+    "add321.1", "cc006.1", "dw3700.1", "dw3700.2", "dwxh.2",
+    "jichangheTank.2", "ADD424.1", "ADD424.2", "ADD424.3", "JCW0000.1",
+    "MH0002461.1", "Zhongyi-2.2", "add401.1", "gbz1.4", "jchX01.1",
+    "add350.1", "RTC_IN_01", "RTC_OUT_01", "RTC_IN_02", "RTC_OUT_02",
+    "RTC_IN_03", "RTC_OUT_03", "HS2512760.1", "gbz1.8", "ADD301.2", "ADD301.3"
+  ],
+  "engineering36_ids_file_path": "E:/RTC_sewer/Project6/data/project6_v8_storage_retrofit_control_enabled_ids.txt",
+  "engineering36_ids_file_sha256": "b42e3a691dc0bb3a17a0437e67ccb2b3c2645ff2f8854033041d2f9dc4227957",
+  "engineering36_count": 36,
+  "facility_semantics": {
+    "binary_pumps": [
+      {"id": "ADD301.2", "action_set": [0.0, 1.0], "meaning": "off/on"},
+      {"id": "ADD301.3", "action_set": [0.0, 1.0], "meaning": "off/on"}
+    ],
+    "variable_speed_pumps": [
+      {"id": "add350.1", "domain": "continuous in [0.0, 1.0]", "meaning": "variable-speed setting, NOT to be binarised"}
+    ],
+    "all_others": "remaining 33 facilities treated as binary-or-continuous according to their INP/link type; no facility beyond the 3 named above may be coerced through binary toggle logic."
+  },
+  "control_step_sec": 300,
+  "control_interval_sec": 600,
+  "state_sampling_min": 5,
+  "prediction_horizon_min": 120,
+  "prediction_horizon_steps": 12,
+  "execute_only_first_step": true,
+  "max_k": 8,
+  "deterministic_prefix_replay": false,
+  "common_native_prefix_required": true,
+  "hotstart_forbidden_in_formal": true,
+  "authoritative_swmm_required": true,
+  "kpi_definitions": {
+    "PFV": {
+      "full_name": "Priority Flood Volume",
+      "unit": "m3",
+      "definition": "Sum over priority nodes (sentinel set) of flooding * dt, accumulated over the evaluation window. Priority nodes are defined by data/project6_v3_sentinel_nodes.txt.",
+      "computation": "sewerrtc/simulation/pyswmm_runner.py:compute_kpis() -> PFV",
+      "windows": ["H120", "full_event"]
+    },
+    "TFV": {
+      "full_name": "Total Flood Volume",
+      "unit": "m3",
+      "definition": "Sum over ALL network nodes of flooding * dt, accumulated over the evaluation window.",
+      "computation": "sewerrtc/simulation/pyswmm_runner.py:compute_kpis() -> TFV",
+      "windows": ["H120", "full_event"]
+    },
+    "Peak": {
+      "full_name": "Peak TFV rate",
+      "unit": "m3/s",
+      "definition": "Maximum of the summed node flooding rate (m3/s) over the evaluation window. Computed separately for each trajectory (Candidate and Reference); NOT the peak of the difference series.",
+      "computation": "sewerrtc/simulation/pyswmm_runner.py:compute_kpis() -> peak_TFV_rate",
+      "windows": ["H120", "full_event"],
+      "forbidden_alternatives": [
+        "peak-of-delta (max of (candidate_TFV_rate - reference_TFV_rate))",
+        "delta-at-peak-time (TFV difference evaluated at the time of one trajectory's peak)",
+        "accumulated TFV used in place of TFV rate"
+      ]
+    }
+  },
+  "delta_convention": "Candidate - Reference. Positive delta means Candidate is WORSE than Reference for PFV/TFV/Peak (higher flood). Direction classification uses sign(delta); dead zones apply (see dead_zones).",
+  "reference_roles": {
+    "PFV": {
+      "primary": "No-control",
+      "secondary_degenerate": "Passive",
+      "note": "Passive is flagged reference_degenerate=true in the current aug1 generation because its post-checkpoint action sequence equals No-control's. PFV-vs-Passive is therefore a duplicate of PFV-vs-No-control and must not be counted as independent evidence."
+    },
+    "TFV": {
+      "primary": "Dynamic Internal",
+      "legacy_frozen": "hold_internal_snapshot (renamed from internal_current_action)",
+      "note": "Current aug1 data uses a frozen snapshot, NOT dynamic native rules. TFV-vs-Dynamic-Internal labels are invalid until the dynamic Internal branch is regenerated (Gate 8)."
+    },
+    "Peak": {
+      "primary": "Dynamic Internal",
+      "legacy_frozen": "hold_internal_snapshot",
+      "note": "Peak label is additionally degraded by near-zero delta magnitude (98.5% within +/- 25 m3/h). Even with correct Dynamic Internal, Peak head may need dead-zone 3-class formulation rather than binary sign."
+    }
+  },
+  "no_control_semantics": {
+    "definition": "All branches advance from the event start with the same native SWMM rules and no external Engineering36 writes. At the checkpoint, No-control holds all 36 managed facilities at 1.0 with time-gated priority-100 rules on every 10-min decision step.",
+    "override_target_sequence": "{aid: 1.0 for aid in engineering36_canonical_order} for n_steps",
+    "policy_id_in_runner": "no_control",
+    "verification_status": "Gate 5R requires same-state prefix hashes plus post-checkpoint requested/target/actual/readback equality.",
+    "contract_note": "The reference is all-1.0, not all-off. No native controls are removed before checkpoint. Post-checkpoint rules are appended and remain inactive before checkpoint. Five-minute sampled action replay is forbidden as a substitute for the native prefix."
+  },
+  "dynamic_internal_semantics": {
+    "definition": "Dynamic Internal runs from the event start through checkpoint+120 min on the authoritative INP with all native SWMM [CONTROLS] enabled. No external Engineering36 override is applied in the H120 window.",
+    "case_INP": "mutate_inp_for_event(..., strip_controls=False) — native [CONTROLS] preserved",
+    "prefix_replay": "Forbidden for Gate 5R V3. Candidate, No-control, Hold-previous and Dynamic Internal each execute the same native INP logic from event start through the checkpoint.",
+    "post_checkpoint": "SWMM rules compute actions from live depth/flow state",
+    "policy_phase_column": "policy_phase in {'prefix_replay', 'native_rules'}",
+    "verification_status": "Gate 5R V3 requires exact equality of the full 60-min hydraulic prefix hash and checkpoint pre-action state hash across all four branches."
+  },
+  "passive_semantics": {
+    "definition": "Executable-passive policy: deterministic prefix replay of the executable_passive baseline trajectory up to checkpoint_min, then the executable-passive policy continues to run natively (or its frozen action sequence is applied as override, depending on branch variant).",
+    "reference_degenerate": true,
+    "degeneracy_evidence": "In aug1 generation, passive_anchor branch's override sequence equals no_control's (all 1.0) at every checkpoint_min >= 40 min, because the executable_passive baseline trajectory has converged to all-1.0 by that time.",
+    "downstream_consequence": "PFV-vs-Passive labels are literal duplicates of PFV-vs-No-control. The passive_anchor branch is retained as a fallback policy for online control but is NOT an independent training reference for PFV.",
+    "independent_passive_required_when": "A future contract revision requires a state-dependent passive policy that produces distinct actions from no_control at the operating checkpoint times. Such a policy must be defined physically, not manufactured to create label diversity."
+  },
+  "hold_previous_semantics": {
+    "definition": "Freeze the actual Engineering36 settings observed immediately before checkpoint_min and hold them for 12 control steps using time-gated priority-100 rules. The native prefix remains unchanged.",
+    "override_target_sequence": "_settings_at(internal_detail, checkpoint_min, actuator_ids) repeated for n_steps",
+    "policy_id_in_runner": "hold_previous",
+    "note": "In the current aug1 code, hold_previous and internal_current_action read from the same source (internal_detail at checkpoint_min) and therefore produce identical trajectories. This is a collision to be resolved when hold_previous is used as an independent reference."
+  },
+  "exact_tolerances": {
+    "PFV_abs_margin_m3": 0.0,
+    "PFV_rel_margin": 0.0,
+    "TFV_abs_margin_m3": 0.0,
+    "TFV_rel_margin": 0.0,
+    "Peak_abs_margin": 0.0,
+    "Peak_rel_margin": 0.0,
+    "note": "Non-inferiority margins are all zero in this contract. Any positive delta is a violation. Downstream evaluators may introduce small numerical tolerances for SWMM reproducibility, but these must be recorded separately and must not be used to hide real regressions."
+  },
+  "dead_zones": {
+    "PFV_abs_below_m3": 1.0,
+    "TFV_abs_below_m3": 1.0,
+    "Peak_abs_below_m3_per_s": 0.001,
+    "meaning": "Deltas with absolute value below the dead zone are classified as 'neutral / non-inferior' rather than 'improved / degraded'. Used for 3-class head training. Does NOT affect the PFV/TFV/Peak non-inferiority gate, which uses exact tolerances above."
+  },
+  "future_information_contract": {
+    "rainfall_forecast_allowed": true,
+    "rainfall_forecast_source": "design hyetograph tail from the same rainfall file used for the simulation (known at decision time from the experimental design)",
+    "future_hydraulic_truth_forbidden": true,
+    "forbidden_features": [
+      "future node depths from SWMM",
+      "future flooding volumes from SWMM",
+      "future TFV rate from SWMM",
+      "future actions that would be taken by any policy",
+      "future KPIs of any branch"
+    ],
+    "causal_features_allowed": [
+      "cumulative PFV/TFV up to checkpoint",
+      "rainfall forecast tail",
+      "elapsed fraction of event",
+      "storage headroom at checkpoint",
+      "current node depths at checkpoint"
+    ]
+  },
+  "authoritative_swmm_contract": {
+    "pyswmm_version": "2.1.0",
+    "inp_hash_required": "7ea1e1336c4e758f73b4e67bb8dca4fe972900f05c5d825c4ae9fbdaa52670fe",
+    "no_surrogate_substitute": true,
+    "formal_evidence_must_come_from": "pyswmm Simulation stepping on the authoritative INP",
+    "surrogate_allowed_for": ["feature engineering", "candidate ranking (development only)", "pre-selection"],
+    "surrogate_forbidden_for": ["formal evidence", "paper claims", "final Gate pass/fail"]
+  },
+  "checkpoint_replay_contract": {
+    "prefix_hash_scope": ["h:{node}", "flood:{node}", "storage_volume:{node}", "flow:{managed_link}"],
+    "action_excluded_from_prefix_hash": true,
+    "paired_initial_state_hash_required": true,
+    "initial_state_hash_source": "sewerrtc/prompt3/action_effect_v4_aug1.py:_initial_state_hash(detail, checkpoint_min)",
+    "all_branches_must_share_hash": true,
+    "determinism_contract": "Given the same INP, rainfall, and pre-checkpoint action sequence, post-checkpoint KPIs are deterministic. Any non-determinism is a defect."
+  },
+  "split_contract": {
+    "method": "Frozen seeded event partition: 48 train, 8 model-validation, 8 challenge, and 16 reserve events",
+    "determinism": "Reproducible from event_id and frozen seed; no row-level split",
+    "implementation": "sewerrtc/prompt3/gate5r_pipeline.py:build_formal_1600_plan",
+    "event_level_not_row_level": true,
+    "note": "All rows of the same event fall into the same split. No event leakage between train and validation."
+  },
+  "conflicts_with_v3": [
+    {
+      "key": "internal_rules_role",
+      "v3_value": "PFV effectiveness benchmark",
+      "v4_value": "TFV and Peak reference (via Dynamic Internal); PFV reference is No-control",
+      "reason": "V4 dual-reference framework assigns No-control as the primary PFV reference and Internal as the TFV/Peak reference. V3 used Internal as the PFV benchmark, which is incompatible with the V4 research question (PFV preservation)."
+    },
+    {
+      "key": "no_control_role",
+      "v3_value": "diagnostic only",
+      "v4_value": "primary PFV reference (non-inferiority baseline)",
+      "reason": "V4 promotes No-control from diagnostic to primary PFV reference because the research question is 'does the candidate preserve PFV relative to no control?'"
+    },
+    {
+      "key": "fallback_role",
+      "v3_value": "online safety and action-necessity benchmark",
+      "v4_value": "online safety benchmark; Passive is retained as a degenerate fallback",
+      "reason": "V4 explicitly marks Passive as reference_degenerate=true; the safety fallback is Internal rules (dynamic, to be regenerated)."
+    },
+    {
+      "key": "internal_branch_semantics",
+      "v3_value": "internal_rules trajectory used as benchmark",
+      "v4_value": "internal_current_action renamed to hold_internal_snapshot (frozen); a new dynamic_internal_rules branch must be regenerated",
+      "reason": "The aug1 generation used a frozen snapshot of the internal rules' past actions, not the dynamic native rules. This is a defect that must be repaired before TFV/Peak labels are trusted."
+    },
+    {
+      "key": "passive_branch_semantics",
+      "v3_value": "executable_passive baseline treated as an independent reference",
+      "v4_value": "passive_anchor flagged reference_degenerate=true in aug1 generation",
+      "reason": "Empirical evidence shows the passive baseline has converged to no_control (all-1.0) by the checkpoint times used in aug1 generation."
+    }
+  ],
+  "created_at": "2026-07-24",
+  "author": "Project6 agent, from Gate 0 audit evidence"
+}

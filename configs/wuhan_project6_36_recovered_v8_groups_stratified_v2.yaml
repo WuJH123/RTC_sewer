@@ -1,0 +1,41 @@
+_inherits: configs/wuhan_project6_36_recovered_v8_groups_v1.yaml
+
+# Stratified deployment of recovered v8 templates.
+# The reliability table is generated from realized SWMM closed-loop evidence
+# and blocks templates in rain-pattern / duration / phase strata where TFV or
+# peak worsened while keeping PFV non-inferior.
+controller:
+  temporal_joint:
+    template_reliability:
+      rules_csv: outputs/deployment_evidence/recovered_v8_template_reliability_v2/template_reliability_rules.csv
+      default_allow: true
+      stress_return_period_min: 75
+      stress_default_allow: false
+      block_strong_patterns:
+        - block
+        - double_peak
+    safety:
+      # Use v8 templates as useful prior actions, not as an unconditional
+      # override. The final ranking remains TFV-first after PFV/peak screening.
+      engineering_template_bonus: 50.0
+      tfv_reduction_weight: 1.25
+      peak_reduction_weight: 3500.0
+      action_l1_penalty: 0.04
+      simultaneous_action_penalty: 0.03
+      pump_switch_penalty: 0.25
+
+outputs:
+  diagnostics: outputs/diagnostics_temporal_joint_36_recovered_v8_groups_stratified_v2
+
+evaluation:
+  paper_policy_set:
+    - proposed_temporal_joint_36
+    - no_control
+    - internal_rules
+    - efd_storage_priority
+    - auto_rbc
+  diagnostic_policy_set:
+    - all_open
+    - all_closed_safe
+    - efd_static
+    - random_safe

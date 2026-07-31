@@ -1,0 +1,288 @@
+{
+  "rows": [
+    {
+      "benchmark": "pystorms/beta/beta.inp",
+      "path": "E:\\RTC_sewer\\Project5\\data\\open_benchmarks\\pystorms\\beta\\beta.inp",
+      "bytes": 149211,
+      "title_rows": 2,
+      "options_rows": 32,
+      "raingages_rows": 1,
+      "subcatchments_rows": 165,
+      "junctions_rows": 206,
+      "outfalls_rows": 1,
+      "storage_rows": 3,
+      "conduits_rows": 206,
+      "pumps_rows": 1,
+      "orifices_rows": 3,
+      "weirs_rows": 1,
+      "outlets_rows": 0,
+      "controls_rows": 0,
+      "timeseries_rows": 555,
+      "curves_rows": 14,
+      "control_setting_targets": 0,
+      "has_storage_and_pump": true,
+      "has_multi_actuator_valves": false
+    },
+    {
+      "benchmark": "pystorms/gamma/gamma.inp",
+      "path": "E:\\RTC_sewer\\Project5\\data\\open_benchmarks\\pystorms\\gamma\\gamma.inp",
+      "bytes": 59448,
+      "title_rows": 2,
+      "options_rows": 34,
+      "raingages_rows": 10,
+      "subcatchments_rows": 19,
+      "junctions_rows": 10,
+      "outfalls_rows": 1,
+      "storage_rows": 11,
+      "conduits_rows": 10,
+      "pumps_rows": 0,
+      "orifices_rows": 11,
+      "weirs_rows": 0,
+      "outlets_rows": 0,
+      "controls_rows": 0,
+      "timeseries_rows": 74,
+      "curves_rows": 63,
+      "control_setting_targets": 0,
+      "has_storage_and_pump": false,
+      "has_multi_actuator_valves": true
+    },
+    {
+      "benchmark": "gnn_uds/chaohu/chaohu.inp",
+      "path": "E:\\RTC_sewer\\Project5\\data\\open_benchmarks\\gnn_uds\\chaohu\\chaohu.inp",
+      "bytes": 79558,
+      "title_rows": 0,
+      "options_rows": 33,
+      "raingages_rows": 1,
+      "subcatchments_rows": 31,
+      "junctions_rows": 133,
+      "outfalls_rows": 5,
+      "storage_rows": 2,
+      "conduits_rows": 134,
+      "pumps_rows": 7,
+      "orifices_rows": 0,
+      "weirs_rows": 0,
+      "outlets_rows": 0,
+      "controls_rows": 0,
+      "timeseries_rows": 24,
+      "curves_rows": 26,
+      "control_setting_targets": 0,
+      "has_storage_and_pump": true,
+      "has_multi_actuator_valves": false
+    },
+    {
+      "benchmark": "gnn_uds/hague/hague.inp",
+      "path": "E:\\RTC_sewer\\Project5\\data\\open_benchmarks\\gnn_uds\\hague\\hague.inp",
+      "bytes": 461889,
+      "title_rows": 3,
+      "options_rows": 33,
+      "raingages_rows": 1,
+      "subcatchments_rows": 165,
+      "junctions_rows": 206,
+      "outfalls_rows": 1,
+      "storage_rows": 3,
+      "conduits_rows": 206,
+      "pumps_rows": 0,
+      "orifices_rows": 3,
+      "weirs_rows": 1,
+      "outlets_rows": 0,
+      "controls_rows": 0,
+      "timeseries_rows": 557,
+      "curves_rows": 14,
+      "control_setting_targets": 0,
+      "has_storage_and_pump": false,
+      "has_multi_actuator_valves": false
+    }
+  ],
+  "detail": {
+    "pystorms/beta/beta.inp": {
+      "counts": {
+        "TITLE": 2,
+        "OPTIONS": 32,
+        "RAINGAGES": 1,
+        "SUBCATCHMENTS": 165,
+        "JUNCTIONS": 206,
+        "OUTFALLS": 1,
+        "STORAGE": 3,
+        "CONDUITS": 206,
+        "PUMPS": 1,
+        "ORIFICES": 3,
+        "WEIRS": 1,
+        "OUTLETS": 0,
+        "CONTROLS": 0,
+        "TIMESERIES": 555,
+        "CURVES": 14
+      },
+      "names": {
+        "RAINGAGES": [
+          "RG1"
+        ],
+        "STORAGE": [
+          "ST0",
+          "ST1",
+          "ST2"
+        ],
+        "OUTLETS": [],
+        "WEIRS": [
+          "W0"
+        ],
+        "PUMPS": [
+          "P0"
+        ],
+        "ORIFICES": [
+          "R0",
+          "R1",
+          "R2"
+        ]
+      },
+      "control_setting_targets": [],
+      "control_preview": []
+    },
+    "pystorms/gamma/gamma.inp": {
+      "counts": {
+        "TITLE": 2,
+        "OPTIONS": 34,
+        "RAINGAGES": 10,
+        "SUBCATCHMENTS": 19,
+        "JUNCTIONS": 10,
+        "OUTFALLS": 1,
+        "STORAGE": 11,
+        "CONDUITS": 10,
+        "PUMPS": 0,
+        "ORIFICES": 11,
+        "WEIRS": 0,
+        "OUTLETS": 0,
+        "CONTROLS": 0,
+        "TIMESERIES": 74,
+        "CURVES": 63
+      },
+      "names": {
+        "RAINGAGES": [
+          "R9032",
+          "R9033",
+          "R9037",
+          "R9162",
+          "R9163",
+          "R9164",
+          "R9294",
+          "R9295",
+          "R9296",
+          "R9426"
+        ],
+        "STORAGE": [
+          "11",
+          "9",
+          "5",
+          "4",
+          "10",
+          "3",
+          "1",
+          "2",
+          "6",
+          "7",
+          "8"
+        ],
+        "OUTLETS": [],
+        "WEIRS": [],
+        "PUMPS": [],
+        "ORIFICES": [
+          "O9",
+          "O8",
+          "O6",
+          "O10",
+          "O11",
+          "O7",
+          "O5",
+          "O4",
+          "O3",
+          "O2",
+          "O1"
+        ]
+      },
+      "control_setting_targets": [],
+      "control_preview": []
+    },
+    "gnn_uds/chaohu/chaohu.inp": {
+      "counts": {
+        "TITLE": 0,
+        "OPTIONS": 33,
+        "RAINGAGES": 1,
+        "SUBCATCHMENTS": 31,
+        "JUNCTIONS": 133,
+        "OUTFALLS": 5,
+        "STORAGE": 2,
+        "CONDUITS": 134,
+        "PUMPS": 7,
+        "ORIFICES": 0,
+        "WEIRS": 0,
+        "OUTLETS": 0,
+        "CONTROLS": 0,
+        "TIMESERIES": 24,
+        "CURVES": 26
+      },
+      "names": {
+        "RAINGAGES": [
+          "RG"
+        ],
+        "STORAGE": [
+          "CC-storage",
+          "JK-storage"
+        ],
+        "OUTLETS": [],
+        "WEIRS": [],
+        "PUMPS": [
+          "CC-R1",
+          "CC-R2",
+          "CC-S1",
+          "CC-S2",
+          "JK-R1",
+          "JK-R2",
+          "JK-S"
+        ],
+        "ORIFICES": []
+      },
+      "control_setting_targets": [],
+      "control_preview": []
+    },
+    "gnn_uds/hague/hague.inp": {
+      "counts": {
+        "TITLE": 3,
+        "OPTIONS": 33,
+        "RAINGAGES": 1,
+        "SUBCATCHMENTS": 165,
+        "JUNCTIONS": 206,
+        "OUTFALLS": 1,
+        "STORAGE": 3,
+        "CONDUITS": 206,
+        "PUMPS": 0,
+        "ORIFICES": 3,
+        "WEIRS": 1,
+        "OUTLETS": 0,
+        "CONTROLS": 0,
+        "TIMESERIES": 557,
+        "CURVES": 14
+      },
+      "names": {
+        "RAINGAGES": [
+          "RG"
+        ],
+        "STORAGE": [
+          "st1",
+          "st2",
+          "st3"
+        ],
+        "OUTLETS": [],
+        "WEIRS": [
+          "weir1"
+        ],
+        "PUMPS": [],
+        "ORIFICES": [
+          "R1",
+          "R2",
+          "R3"
+        ]
+      },
+      "control_setting_targets": [],
+      "control_preview": []
+    }
+  }
+}

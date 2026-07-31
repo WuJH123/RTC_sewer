@@ -1,0 +1,57 @@
+{
+  "version": "project6_pfvfirst_dualfallback_10min_v3",
+  "units": {
+    "volume": "m3",
+    "rate": "m3/s",
+    "time": "s"
+  },
+  "time_step": {
+    "default_dt_sec": null,
+    "integration": "timestamp_delta_sum_rate_times_dt",
+    "note": "10 min is the control interval, not the SWMM hydraulic integration step. KPI integration must use actual timestamps or explicit per-sample dt values.",
+    "missing_value_policy": "fail_fast"
+  },
+  "dry_threshold": {
+    "node_flooding_rate_m3s": 0.0,
+    "depth_m": 0.0
+  },
+  "pfv": {
+    "name": "priority_flooding_volume",
+    "node_scope": "frozen_pre_registered_priority_nodes",
+    "priority_node_list_path": "data/project5_design/priority_pfv_core_nodes.txt",
+    "priority_node_list_hash_required": true,
+    "mathematical_definition": "sum over time and priority nodes of max(flooding_rate,0)*dt",
+    "zero_baseline_policy": "report_absolute_and_flag_near_zero",
+    "online_active_definition": "online_pfv_active_predicted_from_internal_forecast",
+    "formal_active_definition": "formal_pfv_active_realized_from_internal_baseline"
+  },
+  "tfv": {
+    "name": "total_flooding_volume",
+    "node_scope": "all_inp_nodes_fixed_set",
+    "node_set_policy": "use full INP node list and fill non-flooding nodes with zero in every branch",
+    "mathematical_definition": "sum over time and all flooding nodes of max(flooding_rate,0)*dt",
+    "zero_baseline_policy": "report_absolute_and_flag_near_zero"
+  },
+  "peak_tfv_rate": {
+    "name": "peak_total_flooding_rate",
+    "node_scope": "all_nodes_with_reported_flooding",
+    "mathematical_definition": "max over time of sum over all flooding nodes max(flooding_rate,0)",
+    "zero_baseline_policy": "report_absolute_and_flag_near_zero"
+  },
+  "event_tail": {
+    "minimum_tail_hours_after_rain": 3.0,
+    "maximum_tail_hours_after_rain": 8.0,
+    "tail_timeout_status": "tail_timeout",
+    "recovery_required": true,
+    "priority_depth_recovery_threshold_m": 0.02,
+    "sentinel_depth_recovery_threshold_m": 0.02,
+    "storage_available_capacity_fraction_min": 0.05,
+    "downstream_flow_recovery_fraction_of_peak": 0.10,
+    "recovery_checks": [
+      "priority_depth_below_threshold",
+      "sentinel_depth_below_threshold",
+      "storage_has_available_capacity",
+      "downstream_flow_recovered"
+    ]
+  }
+}

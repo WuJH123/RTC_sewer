@@ -1,0 +1,336 @@
+project:
+  name: project6_pfvfirst_dualfallback_10min_v3
+  root: .
+  inp: data/wuhan_v8_storage_retrofit.inp
+  output_root: outputs/project6_pfvfirst_dualfallback_10min_v3
+  forbid_cross_project_results: true
+
+contracts:
+  main: docs/contracts/PROJECT6_PFVFIRST_DUALFALLBACK_10MIN_V3.md
+  kpi: docs/contracts/kpi_contract.json
+  forecast: docs/contracts/forecast_contract.json
+  execution_status: docs/contracts/execution_status.schema.json
+  sentinel_nodes: docs/contracts/sentinel_nodes_provenance.json
+  facility_semantics: docs/contracts/facility_semantics_contract.json
+
+state_estimation:
+  use_gat: true
+  do_not_retrain_gat: true
+  selected_primary_gat: sr0p15
+  primary_gat_registry_name: sr0p15
+  selection_decision_status: user_confirmed
+  selection_lock_status: pending_manual_execution
+  gat_robustness_status: pending
+  state_feature_runtime_status: pending
+  round0_unlock_allowed: false
+  primary_selection_decision_path: docs/contracts/gat_primary_selection_decision.json
+  gat_candidates:
+    sr0p05: E:/RTC_sewer/Project4/outputs/sensor_sensitivity/sr0p05/models/gat_sr0p10.pt
+    sr0p10: E:/RTC_sewer/Project4/outputs/sensor_sensitivity/sr0p10/models/gat_sr0p10.pt
+    sr0p15: E:/RTC_sewer/Project4/outputs/sensor_sensitivity/sr0p15/models/gat_sr0p10.pt
+    sr0p20: E:/RTC_sewer/Project4/outputs/sensor_sensitivity/sr0p20/models/gat_sr0p10.pt
+    sr0p30: E:/RTC_sewer/Project4/outputs/sensor_sensitivity/sr0p30/models/gat_sr0p10.pt
+  sensor_sensitivity_report: E:/RTC_sewer/Project4/outputs/sensor_sensitivity/sensor_sensitivity_debug_summary_recomputed.csv
+  required_compatibility_checks:
+    - model_hash
+    - node_order_hash
+    - sensor_mask_hash
+    - normalization_hash
+    - architecture_signature
+    - graph_signature
+
+control:
+  mode: pfvfirst_dualfallback_10min_v3
+  managed_actuator_ids_path: data/project6_v8_storage_retrofit_control_enabled_ids.txt
+  sentinel_nodes_path: data/project6_v3_sentinel_nodes.txt
+  facility_semantics_path: data/project6_v3_facility_semantics_36.csv
+  actuator_metadata_path: data/project6_v8_storage_retrofit_assets.csv
+  control_interval_min: 10
+  prediction_horizon_min: 120
+  prediction_horizon_steps: 12
+  free_residual_action_min: 30
+  free_residual_steps: 3
+  execute_first_step_only: true
+  max_simultaneous_residual_overrides: 8
+  design_k_values: [4, 8, 12]
+  pressure_test_k_values: [36]
+  require_backup_reachable_after_action: true
+  anchor_policy_candidates:
+    - internal_rules_fallback
+    - executable_passive_fallback
+  forbidden_passive_actions:
+    - all_36_zero
+    - all_36_open
+    - instant_reset_all
+  fallback_selection_priority:
+    - tfv_ucb
+    - peak_ucb
+    - sentinel_storage_risk
+    - pfv_ucb
+    - transition_action_cost
+
+objectives:
+  pfv_effectiveness_benchmark: internal_rules
+  action_necessity_benchmark: selected_fallback
+  no_control_role: diagnostic_only
+  calibration_status: uncalibrated
+  minimum_internal_improvement_m3: null
+  minimum_fallback_improvement_m3: null
+  pfv_active_internal_threshold_m3: null
+  pfv_opportunity_threshold_m3: null
+  tfv_noninferiority_margin: null
+  peak_noninferiority_margin: null
+  candidate_requirements:
+    - lcb_internal_minus_candidate_pfv_positive
+    - lcb_fallback_minus_candidate_pfv_positive
+    - tfv_not_worse_than_selected_fallback
+    - peak_not_worse_than_selected_fallback
+    - support_domain_passed
+    - backup_reachable_after_first_action
+
+coverage_targets:
+  noop_fraction_max: 0.05
+  near_duplicate_fraction_max: 0.10
+  per_facility_effective_cases_min: 60
+  per_feasible_direction_cases_min: 20
+  per_direction_independent_events_min: 5
+  pfv_improved_cases_min: 500
+  pfv_boundary_cases_min: 500
+  pfv_worsened_cases_min: 300
+  tfv_unsafe_cases_min: 300
+  peak_unsafe_cases_min: 300
+  pfv_improved_system_safe_cases_min: 300
+  pfv_improved_system_unsafe_cases_min: 300
+  h30_h120_reversal_cases_min: 200
+  fit_test_key_class_independent_events_min: 50
+  batch_effective_candidate_min: 250
+  batch_effective_candidate_max: 500
+
+model_gate:
+  tfv_unsafe_recall_min: 0.65
+  tfv_false_safe_max: 0.10
+  peak_unsafe_recall_min: 0.70
+  peak_false_safe_max: 0.15
+  pfv_pairwise_ranking_accuracy_min: 0.60
+  top5_realized_pfv_improvement_fraction_min: 0.60
+  interval_90_coverage_min: 0.75
+  interval_90_coverage_max_report_only: 0.95
+  interval_width_report_required: true
+  interval_sharpness_report_required: true
+  per_key_class_independent_events_min: 50
+
+ood:
+  enabled: true
+  state_distance_metric: normalized_l2
+  action_sequence_distance_metric: weighted_l1
+  joint_density_metric: knn_density
+  ensemble_disagreement_metric: quantile_width
+  reject_unknown_support: true
+
+forecast:
+  main_source: operational_forecast
+  perfect_forecast_upper_bound: true
+  truth_available_to_controller: false
+  timezone: Asia/Shanghai
+  rainfall_units: mm_per_hour
+  spatial_mode: single_gage_design_storm
+  update_interval_min: 10
+  maximum_forecast_age_min: 10
+  minimum_required_horizon_min: 120
+  insufficient_horizon_handling: fail_or_use_declared_safe_fallback_only
+  missing_forecast_fallback: selected_safe_fallback_without_learned_candidate
+  operational_forecast_generator: project6_design_storm_operational_surrogate
+  operational_forecast_version: v3
+  stress_scenarios:
+    - intensity_minus_20pct
+    - intensity_plus_20pct
+    - peak_shift_early
+    - peak_shift_late
+    - missed_second_peak
+    - false_peak
+  consistency_checks:
+    - train_calibration_formal_same_schema
+    - no_truth_to_controller
+    - issue_time_before_decision_time
+    - required_horizon_available
+
+logging:
+  save_case_details: true
+  detail_format: parquet
+  save_selected_cases_only: false
+  save_actual_executed_action_sequence: true
+  save_fallback_selection_trace: true
+  save_ood_trace: true
+  save_kpi_contract_version: true
+  save_time_sync_fields: true
+
+stages:
+  prompt2_import:
+    out_dir: outputs/project6_pfvfirst_dualfallback_10min_v3/contracts
+    required_before_prompt3a: true
+    round0_unlock_allowed: false
+  status:
+    out_dir: outputs/project6_pfvfirst_dualfallback_10min_v3/status
+  fatal_audit:
+    out_dir: outputs/project6_pfvfirst_dualfallback_10min_v3/fatal_audit
+    engineering_development_gate_can_pass_with_unresolved_formal_safety: true
+  audit:
+    out_dir: outputs/project6_pfvfirst_dualfallback_10min_v3/audit
+  prompt3a_contracts:
+    out_dir: outputs/project6_pfvfirst_dualfallback_10min_v3/contracts
+  native_rules:
+    out_dir: outputs/project6_pfvfirst_dualfallback_10min_v3/native_rules
+    parser_required: true
+    preliminary_text_reference_not_final_control: true
+  fallbacks:
+    out_dir: outputs/project6_pfvfirst_dualfallback_10min_v3/fallbacks
+    passive_minimum_intervention_required: true
+    internal_release_override_required: true
+    fallback_selected_before_candidate: true
+  rainfall_assets:
+    out_dir: outputs/project6_pfvfirst_dualfallback_10min_v3/rainfall_assets
+    allowed_directories:
+      - E:/RTC_sewer/Project4/outputs/rainfall_library
+      - E:/RTC_sewer/Project5/outputs/pystorms_beta/rainfall_library
+      - data/rainfall_library
+      - outputs/project6_pfvfirst_dualfallback_10min_v3/rainfall_assets
+    fuzzy_matching_allowed: false
+    empty_path_is_unresolved_not_dot: true
+  gat_registry:
+    out_dir: outputs/project6_pfvfirst_dualfallback_10min_v3/gat_registry
+  gat_audit:
+    out_dir: outputs/project6_pfvfirst_dualfallback_10min_v3/gat_audit
+  state_features:
+    out_dir: outputs/project6_pfvfirst_dualfallback_10min_v3/state_features
+  event_catalog:
+    out_dir: outputs/project6_pfvfirst_dualfallback_10min_v3/event_catalog
+    enabled: true
+    exclude_gat_independent_holdout_from_round0: true
+  checkpoint_catalog:
+    out_dir: outputs/project6_pfvfirst_dualfallback_10min_v3/checkpoint_catalog
+    enabled_after_real_baseline_trajectories: true
+  baseline_trajectories:
+    out_dir: outputs/project6_pfvfirst_dualfallback_10min_v3/baseline_trajectories
+    policies: [no_control, internal_rules, executable_passive]
+    truth_controller_separation_required: true
+    generation_requires_manual_swmm_execution: true
+  state_clone:
+    out_dir: outputs/project6_pfvfirst_dualfallback_10min_v3/state_clone
+  opportunity_scan:
+    out_dir: outputs/project6_pfvfirst_dualfallback_10min_v3/opportunity_scan
+    enabled: false
+  init_coverage_schema:
+    out_dir: outputs/project6_pfvfirst_dualfallback_10min_v3/coverage
+    status_semantics: scaffold_only
+    writes_completion_marker: false
+    unlocks_downstream: false
+  coverage:
+    out_dir: outputs/project6_pfvfirst_dualfallback_10min_v3/coverage
+    maximum_constraints_are_not_minimum_targets: true
+  round0:
+    out_dir: outputs/project6_pfvfirst_dualfallback_10min_v3/round0
+    planning_only_in_prompt3a: true
+    target_effective_candidates: [1500, 2000]
+    dryrun_candidate_max: 20
+    full_generation_requires_manual_approval: true
+  same_state:
+    out_dir: outputs/project6_pfvfirst_dualfallback_10min_v3/same_state
+    enabled: false
+  models:
+    out_dir: outputs/project6_pfvfirst_dualfallback_10min_v3/models
+    enabled: false
+  gates:
+    out_dir: outputs/project6_pfvfirst_dualfallback_10min_v3/gates
+    enabled: false
+  shadow:
+    out_dir: outputs/project6_pfvfirst_dualfallback_10min_v3/shadow
+  mpc:
+    out_dir: outputs/project6_pfvfirst_dualfallback_10min_v3/mpc
+  smoke:
+    out_dir: outputs/project6_pfvfirst_dualfallback_10min_v3/smoke
+  calibration_a:
+    out_dir: outputs/project6_pfvfirst_dualfallback_10min_v3/calibration_a
+  validation_b:
+    out_dir: outputs/project6_pfvfirst_dualfallback_10min_v3/validation_b
+  formal_blind:
+    out_dir: outputs/project6_pfvfirst_dualfallback_10min_v3/formal_blind
+state_estimation:
+  selected_primary_gat: sr0p15
+  primary_gat_registry_name: sr0p15
+  selection_decision_status: user_confirmed
+  human_selection_decision: confirmed
+  selection_lock_status: pending_manual_execution
+  gat_robustness_status: pending
+  state_feature_runtime_status: pending
+  round0_unlock_allowed: false
+  primary_selection_decision_path: docs/contracts/gat_primary_selection_decision.json
+  project4_gat_candidates:
+    sr0p05: E:\RTC_sewer\Project4\outputs\sensor_sensitivity\sr0p05\models\gat_sr0p10.pt
+    sr0p10: E:\RTC_sewer\Project4\outputs\sensor_sensitivity\sr0p10\models\gat_sr0p10.pt
+    sr0p15: E:\RTC_sewer\Project4\outputs\sensor_sensitivity\sr0p15\models\gat_sr0p10.pt
+    sr0p20: E:\RTC_sewer\Project4\outputs\sensor_sensitivity\sr0p20\models\gat_sr0p10.pt
+    sr0p30: E:\RTC_sewer\Project4\outputs\sensor_sensitivity\sr0p30\models\gat_sr0p10.pt
+  project4_sensor_sensitivity_summary: E:\RTC_sewer\Project4\outputs\sensor_sensitivity\sensor_sensitivity_debug_summary_recomputed.csv
+  compatibility_required_for_formal: compatible_strict
+  allow_shared_base_graph_only_after_human_review: true
+  robustness:
+    registry_name: sr0p15
+    default_max_samples: 512
+    default_batch_size: 8
+    default_flush_every: 32
+    default_max_memory_gb: 4
+    max_samples_is_total_sample_count: true
+    batch_size_is_forward_microbatch: true
+    required_priority_leaveout_count: 8
+    required_sentinel_leaveout_count: 2
+    validation_provenance_required: true
+    leakage_free_required_for_pass: true
+    highwater_diagnostics_required: true
+    phase_diagnostics_required: true
+    sensor_failure_diagnostics_required: true
+    repeatability_required: true
+    latency_report_required: true
+    threshold_status: configured_requirements_no_numeric_pass_thresholds
+  temporal_history:
+    history_window_min: 60
+    control_interval_min: 10
+    frame_offsets_min: [0, -10, -20, -30, -40, -50, -60]
+    aggregation_policy: causal_last_observation_carried_forward
+    future_observation_forbidden: true
+    future_interpolation_forbidden: true
+  sentinel_candidates:
+    status: human_resolution_required
+    node_ids: [MH0200770, HS1355904]
+    safety_pass_enabled: false
+  local_flow_features:
+    missing_flow_is_not_zero: true
+    availability_mask_required: true
+    future_truth_flow_forbidden: true
+  runtime_state_features:
+    state_input_manifest_required: true
+    selected_primary_gat_lock_required: true
+    max_history_gap_min: 10
+    required_history_window_min: 60
+    output_shapes:
+      state_history: "[samples,7,N,F_node]"
+      facility_history: "[samples,7,36,F_facility]"
+prompt2_completion_gate:
+  path: outputs/project6_pfvfirst_dualfallback_10min_v3/gates/project6_prompt2_completion_gate.json
+  initial_status: blocked_pending_manual_selection_lock
+  round0_unlock_allowed: false
+formal_evaluation:
+  authoritative_swmm_runner_config: configs/wuhan_project6_v8_storage.yaml
+  closed_loop_mode: closed_loop_authoritative_swmm
+  replay_mode_name: closed_loop_replay
+  proposed_policy_id: proposed_pfvfirst_dualfallback_v3
+  proposed_controller: proposed_pfvfirst_dualfallback_v3
+  proposed_base: native
+  baseline_policies: [internal_rules, no_control, passive_anchor]
+  hydraulic_evidence_source_required: authoritative_swmm
+  lookup_table_substitute_allowed: false
+  hotstart_allowed_for_candidate_labels: false
+  max_worker_processes_supported: 16
+  forbidden_proposed_implementations:
+    - temporal_joint_36
+    - generic_gat_mpc
+    - old_core26

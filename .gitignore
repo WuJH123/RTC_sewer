@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+.env
+
+# 输出与审计
+outputs/
+audits/
+backups/
+
+# 大型数据目录
+data/v42_final_unified/
+data/surrogate*/
+data/reused_project5_raw/
+data/open_benchmarks/astlingen/
+
+# 模型权重
+*.pt
+*.pth
+*.pkl
+
+# 日志
+*.log
+.codex_*.log
+
+# 临时脚本
+_gate3_research*.py
+_quick_learnability_check.py
+_run_v42_training.py
+
+# 工具与IDE
+_upload_review/
+cleanup_manifests/
+.qoder/
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

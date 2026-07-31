@@ -1,0 +1,96 @@
+project:
+  root: .
+  network: data/wuhan_v8_storage_retrofit.inp
+  canonical_ids: data/project6_v8_storage_retrofit_control_enabled_ids.txt
+  facility_semantics: data/project6_v3_facility_semantics_36.csv
+  priority_nodes: data/project6_v3_sentinel_nodes.txt
+  recovery_contract: docs/contracts/PROJECT6_V4_RECOVERY_TRUTH_CONTRACT.json
+  dataset_contract: docs/contracts/PROJECT6_V4_DATASET_CONTRACT.json
+  v4_config: configs/wuhan_project6_dual_reference_v4.yaml
+  event_catalog: outputs/project6_pfvfirst_dualfallback_10min_v3/event_catalog/event_catalog.csv
+  rainfall_event_table: outputs/rainfall_library_v8_storage_variablepump/rainfall_event_table.csv
+
+gate5r:
+  version: informative_v3_exact_native_prefix
+  output_root: outputs/project6_dual_reference_v4/gate5r_informative_v3_exact_native_prefix
+  invalid_v2_output_root: outputs/project6_dual_reference_v4/gate5r_informative_v2_no_dwf
+  legacy_gate5_root: outputs/project6_dual_reference_v4/recovery_capability_v2/gate4_h120_batch0/gate5_exact_diagnosis
+  state_sampling_sec: 300
+  control_interval_sec: 600
+  horizon_min: 120
+  horizon_steps: 12
+  max_k: 8
+  checkpoint_roles: [responsive_1, responsive_2, responsive_3, responsive_4, flat_action_probe]
+  references: [candidate, no_control, dynamic_internal_rules, hold_previous]
+
+thresholds:
+  noninferiority:
+    pfv_margin_m3: 0.0
+    tfv_margin_m3: 0.0
+    peak_margin_m3s: 0.0
+  dead_zone:
+    pfv_m3: 1.0
+    tfv_m3: 1.0
+    peak_m3s: 0.001
+  materially_beneficial:
+    minimum_tfv_improvement_m3: 25.0
+    minimum_benefit_cost_ratio: 1.5
+  authority:
+    action_tolerance: 0.0001
+    hydraulic_tolerance: 1.0e-8
+    kpi_tolerance: 1.0e-8
+  canary:
+    minimum_informative_fraction: 0.70
+    repeat_count: 3
+  pilot:
+    minimum_informative_fraction: 0.70
+    flat_fraction_min: 0.10
+    flat_fraction_max: 0.20
+    minimum_joint_checkpoint_fraction: 0.30
+
+runtime:
+  reference_runner_version: v3.1_extended_h120
+  seed: 20260726
+  workers: 16
+  canary_workers: 1
+  batch_size: 10
+  path_budget_chars: 235
+  heartbeat_interval_sec: 60
+  prohibit_hotstart: true
+  authoritative_swmm: true
+  spinup_min: 120
+  override_rule_priority: 100
+
+opportunity:
+  scoring_version: v3_facility_local
+  inventory_target: 358
+  scan_development_events: 12
+  responsive_checkpoint_count: 3
+  low_opportunity_control_count: 1
+  responsive_threshold: 0.55
+  weak_threshold: 0.25
+
+canary:
+  events: 3
+  responsive_checkpoints_per_event: 1
+  low_opportunity_controls: 1
+  candidates_per_batch: 10
+  anchors: [dynamic_internal, no_control, hold_previous, frozen_fallback]
+
+pilot:
+  events: 8
+  responsive_checkpoints_per_event: 4
+  low_opportunity_controls_per_event: 1
+  candidates_per_checkpoint_min: 10
+  candidates_per_checkpoint_max: 20
+  accepted_min: 300
+  accepted_max: 700
+
+formal1600:
+  train_events: 48
+  model_validation_events: 8
+  challenge_events: 8
+  reserve_events: 16
+  checkpoints_per_event: 5
+  candidates_per_checkpoint: 5
+  accepted_target: 1600

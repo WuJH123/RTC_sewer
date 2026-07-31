@@ -1,0 +1,58 @@
+[
+  {
+    "relative_path": "pystorms/beta/beta.inp",
+    "path": "E:\\RTC_sewer\\Project5\\data\\open_benchmarks\\pystorms\\beta\\beta.inp",
+    "url": "https://raw.githubusercontent.com/kLabUM/pystorms/master/pystorms/networks/beta.inp",
+    "status": "downloaded",
+    "bytes": 149211
+  },
+  {
+    "relative_path": "pystorms/beta/beta.yaml",
+    "path": "E:\\RTC_sewer\\Project5\\data\\open_benchmarks\\pystorms\\beta\\beta.yaml",
+    "url": "https://raw.githubusercontent.com/kLabUM/pystorms/master/pystorms/config/beta.yaml",
+    "status": "downloaded",
+    "bytes": 1413
+  },
+  {
+    "relative_path": "pystorms/gamma/gamma.inp",
+    "path": "E:\\RTC_sewer\\Project5\\data\\open_benchmarks\\pystorms\\gamma\\gamma.inp",
+    "url": "https://raw.githubusercontent.com/kLabUM/pystorms/master/pystorms/networks/gamma.inp",
+    "status": "downloaded",
+    "bytes": 59448
+  },
+  {
+    "relative_path": "pystorms/gamma/gamma.yaml",
+    "path": "E:\\RTC_sewer\\Project5\\data\\open_benchmarks\\pystorms\\gamma\\gamma.yaml",
+    "url": "https://raw.githubusercontent.com/kLabUM/pystorms/master/pystorms/config/gamma.yaml",
+    "status": "downloaded",
+    "bytes": 2993
+  },
+  {
+    "relative_path": "gnn_uds/chaohu/chaohu.inp",
+    "path": "E:\\RTC_sewer\\Project5\\data\\open_benchmarks\\gnn_uds\\chaohu\\chaohu.inp",
+    "url": "https://raw.githubusercontent.com/Zhiyu014/GNN-UDS/main/surrogate/envs/network/chaohu/chaohu.inp",
+    "status": "downloaded",
+    "bytes": 79558
+  },
+  {
+    "relative_path": "gnn_uds/chaohu/chaohu.yaml",
+    "path": "E:\\RTC_sewer\\Project5\\data\\open_benchmarks\\gnn_uds\\chaohu\\chaohu.yaml",
+    "url": "https://raw.githubusercontent.com/Zhiyu014/GNN-UDS/main/surrogate/envs/config/chaohu.yaml",
+    "status": "downloaded",
+    "bytes": 6133
+  },
+  {
+    "relative_path": "gnn_uds/hague/hague.inp",
+    "path": "E:\\RTC_sewer\\Project5\\data\\open_benchmarks\\gnn_uds\\hague\\hague.inp",
+    "url": "https://raw.githubusercontent.com/Zhiyu014/GNN-UDS/main/surrogate/envs/network/hague/hague.inp",
+    "status": "downloaded",
+    "bytes": 461889
+  },
+  {
+    "relative_path": "gnn_uds/hague/hague.yaml",
+    "path": "E:\\RTC_sewer\\Project5\\data\\open_benchmarks\\gnn_uds\\hague\\hague.yaml",
+    "url": "https://raw.githubusercontent.com/Zhiyu014/GNN-UDS/main/surrogate/envs/config/hague.yaml",
+    "status": "downloaded",
+    "bytes": 4295
+  }
+]

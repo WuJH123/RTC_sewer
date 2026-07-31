@@ -1,0 +1,203 @@
+{
+  "contract_id": "PROJECT6_V4_TRAIN1600_DATASET_V3",
+  "version": "v3",
+  "created_utc": "2026-07-23",
+  "status": "frozen",
+  "purpose": "Frozen data contract for the formal Train1600 V3 production chain: 1200 Train + 200 Calibration + 200 Locked Validation accepted samples over 64 events (48/8/8) plus 16 reserve events.",
+  "fixed_physical_setup": {
+    "network_inp": "data/wuhan_v8_storage_retrofit.inp",
+    "network_variant": "rainfall_only_no_dwf",
+    "network_sha256_recorded_at_plan_time": true,
+    "facilities": "Engineering36 (data/project6_v8_storage_retrofit_control_enabled_ids.txt)",
+    "state_prefix": "90-link prefix",
+    "recording_step_min": 5,
+    "control_step_min": 10,
+    "history_min": 60,
+    "horizon_min": 120,
+    "horizon_steps": 12,
+    "max_active_changes_k": 8,
+    "actuator_semantics": [
+      "binary pumps strict {0,1}",
+      "variable-speed pump add350.1 continuous",
+      "rate limits",
+      "pump dwell",
+      "storage inlet/outlet interlocks"
+    ],
+    "hotstart": "prohibited (no-hotstart, use_hotstart=false)",
+    "action_evidence": "actual executed actions with readback verification",
+    "full_horizon_ineligible_value": "NaN (never imputed)"
+  },
+  "references": {
+    "pfv_reference": "no_control",
+    "tfv_reference": "dynamic_internal_rules",
+    "peak_reference": "dynamic_internal_rules",
+    "additional_branch": "hold_previous",
+    "references_never_counted_as_samples": true
+  },
+  "target_accounting": {
+    "formal_events": 64,
+    "states_per_event": 5,
+    "accepted_actual_unique_candidates_per_state": 5,
+    "accepted_total": 1600,
+    "train_events": 48,
+    "calibration_events": 8,
+    "locked_validation_events": 8,
+    "reserve_events": 16,
+    "train_samples": 1200,
+    "calibration_samples": 200,
+    "locked_validation_samples": 200,
+    "reserve_samples_counted_in_main_table": 0
+  },
+  "event_selection": {
+    "pool": "standard_4plus only",
+    "structure": "4 responsive + 1 low-opportunity states per event",
+    "exclusions": [
+      "peak_boundary events",
+      "pilot400 events",
+      "joint extension events",
+      "flat auxiliary events",
+      "P3 exact search events",
+      "gate5r / oracle policy-tuned events",
+      "duplicate rainfall_sha256",
+      "events already assigned to challenge or formal"
+    ],
+    "diversity": {
+      "rainfall_families_min": 3,
+      "risk_levels_min": 3,
+      "multiple_duration_buckets": true,
+      "phase_coverage": true
+    },
+    "one_split_per_event_and_rainfall_sha": true
+  },
+  "split_rules": {
+    "split_level": "event",
+    "active_learning_reads": ["train"],
+    "active_learning_never_reads": ["calibration", "locked_validation"],
+    "calibration_and_locked_candidate_plans_frozen_before_any_corresponding_swmm": true,
+    "locked_plan_never_modified_after_calibration_results": true
+  },
+  "state_stratification": {
+    "online_features_only": true,
+    "strata": [
+      "predicted_high_feasibility",
+      "predicted_boundary",
+      "predicted_fallback_likely"
+    ],
+    "scorer_training_data": "P3 development/train split only",
+    "new_state_exact_labels_never_used_for_initial_stratification": true,
+    "low_opportunity_state_per_event": 1
+  },
+  "candidate_roles_per_stratum": {
+    "predicted_high_feasibility": [
+      "joint_seeking_family_a",
+      "joint_seeking_family_b",
+      "safety_boundary_pfv_tfv_peak",
+      "hard_negative",
+      "uncertainty_coverage_gap"
+    ],
+    "predicted_boundary": [
+      "toward_di_boundary",
+      "toward_no_control_boundary",
+      "temporal_interpolation",
+      "hard_negative",
+      "uncertainty"
+    ],
+    "predicted_fallback_likely": [
+      "near_reference_neutral",
+      "pfv_safe_tfv_degraded",
+      "peak_degraded",
+      "high_response_hard_negative",
+      "uncertainty_ood"
+    ],
+    "low_opportunity": [
+      "hold_di_near_reference",
+      "k1_strong_legal_probe",
+      "k2_strong_legal_probe",
+      "temporal_pulse",
+      "uncertainty_response_magnitude_probe"
+    ],
+    "fallback_likely_states_never_forced_to_produce_joint_positives": true,
+    "flat_confirmed_only_by_real_swmm": true
+  },
+  "budget_rules": {
+    "target_accepted_per_state": 5,
+    "initial_candidate_budget_per_state": 6,
+    "maximum_candidate_budget_per_state": 10,
+    "no_op_not_accepted": true,
+    "actual_duplicate_not_accepted": true,
+    "reference_not_a_sample": true,
+    "state_shortfall_when_budget_exhausted": true,
+    "shortfall_remedy": "whole-event replacement from same-split reserve events",
+    "candidate_copying_to_fill_counts": "prohibited"
+  },
+  "rounds": {
+    "train_rounds": [
+      {"round": 0, "accepted_target": 400},
+      {"round": 1, "accepted_target": 400},
+      {"round": 2, "accepted_target": 400}
+    ],
+    "train_round_structure": "240 train states x 1 base candidate + 160 states x 1 extra candidate per round; each state gets exactly 2 extra rounds over the 3 rounds, totalling exactly 5 per state and 1200 train samples",
+    "round_3": {
+      "calibration": {"events": 8, "states": 40, "candidates_per_state": 5, "accepted_target": 200},
+      "locked_validation": {"events": 8, "states": 40, "candidates_per_state": 5, "accepted_target": 200}
+    },
+    "outputs": [
+      "train_round_state_targets_v3.csv",
+      "train_extra_rotation_v3.csv",
+      "per_state_progress_v3.csv"
+    ]
+  },
+  "learning_task_reference": "docs/contracts/PROJECT6_V4_LEARNING_TASK_V3.json",
+  "gate_references": {
+    "data_generation": "docs/contracts/PROJECT6_V4_DATA_GENERATION_AUTHORIZATION_V3.json",
+    "model_safety": "docs/contracts/PROJECT6_V4_MODEL_SAFETY_GATE_V3.json",
+    "locked_validation_accrual": "docs/contracts/PROJECT6_V4_LOCKED_VALIDATION_ACCRUAL_V3.json"
+  },
+  "final_quality_gate": {
+    "accepted_total": 1600,
+    "events": 64,
+    "state_groups": 320,
+    "split_event_counts": {"train": 48, "calibration": 8, "locked_validation": 8},
+    "reserve_not_in_main_table": true,
+    "per_state_exactly_5_actual_unique": true,
+    "accounting_identity": "planned = accepted + rejected + pending + missing",
+    "same_state_readback_constraint_label_recompute": "100%",
+    "no_event_or_rainfall_sha_leakage_across_splits": true,
+    "train_state_feasibility_labels_all_three_supported": true,
+    "fallback_only_cross_events_min": 3,
+    "intervention_feasible_cross_events_min": 3,
+    "boundary_cross_events_min_or_reported_scarce": 3,
+    "continuous_pfv_tfv_peak_labels_non_degenerate": true,
+    "hard_negatives_present": true,
+    "uncertainty_coverage_gap_present": true,
+    "calibration_locked_not_required_to_contain_5_feasible_states_at_generation": true,
+    "sampled_only_state_feasibility_label_contract": {
+      "required_columns": [
+        "state_feasibility_label_source",
+        "state_feasibility_label_validity",
+        "candidate_search_budget",
+        "exact_search_performed",
+        "joint_found_in_sampled_set"
+      ],
+      "train1600_states_are_sampled_only": true,
+      "exact_search_performed": false,
+      "state_feasibility_label_source": "sampled_only",
+      "state_feasibility_label_validity": "sampled_only",
+      "candidate_search_budget_counts_reduced_candidates_per_state": true,
+      "joint_found_in_sampled_set_reported_literally": true,
+      "forbidden_verdicts_on_sampled_only_states": [
+        "fallback_only_under_budget",
+        "intervention_feasible_found",
+        "boundary_or_uncertain",
+        "physically_infeasible",
+        "physical_infeasible",
+        "impossible",
+        "uncontrollable"
+      ],
+      "no_joint_among_candidates_is_not_fallback_only": true,
+      "no_physical_infeasible_flag_without_exact_evidence": true,
+      "candidate_level_pfv_tfv_peak_labels_always_valid": true,
+      "flat_only_confirmed_by_actual_action_and_real_swmm_response": true
+    }
+  }
+}

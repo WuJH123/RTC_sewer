@@ -1,0 +1,146 @@
+{
+  "contract_name": "PROJECT6_V4_DATASET_CONTRACT",
+  "version": "1.2.0",
+  "created_at": "2026-07-23T00:00:00Z",
+  "scope": "Gate 5R Opportunity V3 exact-native-prefix rainfall-only-forced H120 data, Pilot, and formal 1600-case V4 dual-reference RTC training data",
+  "network_forcing_contract": {
+    "rainfall_event_forcing": true,
+    "sanitary_base_inflow": false,
+    "network_path": "data/wuhan_v8_storage_retrofit.inp"
+  },
+  "timing_contract": {
+    "state_sampling_sec": 300,
+    "control_decision_sec": 600,
+    "horizon_min": 120,
+    "horizon_control_steps": 12,
+    "max_changed_facilities_relative_to_frozen_fallback": 8
+  },
+
+  "sample_unit": {
+    "description": "One sample = event + checkpoint + unique actual candidate schedule",
+    "key_fields": ["event_id", "checkpoint_id", "candidate_action_hash"]
+  },
+
+  "branches": {
+    "candidate": {
+      "description": "MPC-proposed control action schedule",
+      "active": true,
+      "label_scope": ["h120", "full_if_eligible"]
+    },
+    "no_control": {
+      "description": "Same native prefix as every branch, then all Engineering36 facilities held at 1.0 by time-gated priority-100 SWMM rules after the checkpoint",
+      "active": true,
+      "label_scope": ["h120", "full_if_eligible"]
+    },
+    "dynamic_internal_rules": {
+      "description": "Internal SWMM control rules as fallback benchmark",
+      "active": true,
+      "label_scope": ["h120", "full_if_eligible"]
+    },
+    "hold_previous": {
+      "description": "Hold previous action (passive decay diagnostic)",
+      "active": true,
+      "label_scope": ["h120"],
+      "note": "Diagnostic only, no independent PFV head"
+    }
+  },
+
+  "required_fields_per_sample": {
+    "state_history": {
+      "duration_min": 60,
+      "description": "60 min of state history before checkpoint",
+      "fields": ["node_depth", "link_flow", "storage_volume", "flooding_rate"]
+    },
+    "rainfall_forecast": {
+      "duration_min": 120,
+      "description": "120 min rainfall forecast from checkpoint"
+    },
+    "candidate_schedule": {
+      "description": "Actual and readback candidate action schedule",
+      "fields": ["link_id", "action_value", "elapsed_min", "readback_value"]
+    },
+    "engineering36_actions": {
+      "description": "Engineering36 managed facility actions",
+      "n_facilities": 36,
+      "fields": ["facility_id", "action", "bounds", "dwell_status"]
+    },
+    "native_background": {
+      "description": "54 native-background facility operating contract",
+      "n_facilities": 54,
+      "note": "Non-managed facilities operating under native SWMM rules"
+    },
+    "hashes": {
+      "fields": [
+        "prefix_history_sha256",
+        "checkpoint_pre_action_state_sha256",
+        "post_actual_schedule_sha256",
+        "post_readback_schedule_sha256",
+        "network_hash",
+        "rainfall_hash"
+      ]
+    },
+    "eligibility": {
+      "h120_eligible": "boolean",
+      "full_eligible": "boolean",
+      "recovery_class": "R0 | R1 | R2 | censored",
+      "recession_confirmed": "boolean"
+    },
+    "label_validity": {
+      "label_validity_h120": "boolean",
+      "label_validity_full": "boolean",
+      "full_fields_nan_if_ineligible": true
+    }
+  },
+
+  "labels_h120": {
+    "pfv": {
+      "name": "delta_pfv_h120_vs_no_control",
+      "description": "PFV change in H120 window vs no_control reference",
+      "unit": "m3"
+    },
+    "tfv": {
+      "name": "delta_tfv_h120_vs_dynamic_internal",
+      "description": "TFV change in H120 window vs dynamic_internal reference",
+      "unit": "m3"
+    },
+    "peak": {
+      "name": "delta_peak_h120_vs_dynamic_internal",
+      "description": "Peak TFV rate in H120 window: candidate vs dynamic_internal",
+      "unit": "m3/s",
+      "method": "max TFV rate in H120 window for each branch"
+    }
+  },
+
+  "labels_full": {
+    "condition": "full_event_eligible = true",
+    "otherwise": "NaN with label_validity_full = false",
+    "fields": [
+      "delta_pfv_full_vs_no_control",
+      "delta_tfv_full_vs_dynamic_internal",
+      "delta_peak_full_vs_dynamic_internal"
+    ]
+  },
+
+  "classification_labels": {
+    "pfv_noninferior": "candidate PFV <= no_control PFV plus recorded numerical reproducibility tolerance; scientific margin remains zero",
+    "tfv_noninferior": "candidate TFV <= DI TFV plus recorded numerical reproducibility tolerance; scientific margin remains zero",
+    "peak_noninferior": "candidate peak TFV rate <= DI peak plus recorded numerical reproducibility tolerance; scientific margin remains zero",
+    "joint_noninferior": "pfv_noninferior AND tfv_noninferior AND peak_noninferior",
+    "materially_beneficial": "joint_noninferior AND delta_tfv_h120_vs_dynamic_internal <= -25 m3 AND benefit_cost_ratio >= 1.5",
+    "tfv_improved": "delta TFV is below the negative dead-zone threshold",
+    "neutral_or_dead_zone": "all deltas near zero",
+    "hard_negative": "any safety criterion violated"
+  },
+
+  "accounting": {
+    "planned": "total samples planned",
+    "accepted": "samples passing all quality checks",
+    "rejected": "samples failing quality checks",
+    "pending": "samples awaiting completion",
+    "missing": "samples with missing data",
+    "actual_duplicates": "duplicate action schedules detected",
+    "identity": "planned = accepted + rejected + pending + missing",
+    "formal_target": 1600,
+    "formal_partition": "48 train + 8 model-validation + 8 challenge + 16 reserve events; reserve cases are not counted until promoted by a recorded replacement"
+  }
+}

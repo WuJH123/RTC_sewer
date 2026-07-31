@@ -1,0 +1,115 @@
+{
+  "contract_id": "PROJECT6_V4_MODEL_TRAINING_AUTHORIZATION_V4",
+  "version": "v4",
+  "created_utc": "2026-07-23",
+  "status": "frozen",
+  "purpose": "Separate gate that authorizes True-state V4 action-effect surrogate training against the frozen Train1600 V3 evidence. It is evaluated only against the immutable Train1600 V3 freeze plus the training readiness audit, never overwrites labels, splits, margins, dead-zones or Locked data, and never upgrades the deferred Model Safety Gate.",
+  "scope": {
+    "controls": [
+      "TrainV4Baselines",
+      "TrainV4TrueState",
+      "CalibrateV4TrueState",
+      "EvaluateV4TrueStateLocked (single run)"
+    ],
+    "does_not_control": [
+      "Model Safety Gate (stays deferred)",
+      "Policy Lock",
+      "Surrogate closed loop",
+      "Challenge",
+      "Formal Blind"
+    ]
+  },
+  "immutable_upstream": {
+    "dataset_gate_status": "pass",
+    "dataset_audit_file": "train1600_v3/dataset/train1600_v3_dataset_audit.json",
+    "freeze_pointer": "audits/frozen_evidence/train1600_v3/freeze_pointer.json",
+    "freeze_record": "audits/frozen_evidence/train1600_v3/<code_sha>/train1600_v3_freeze.json",
+    "original_manifest_must_not_be_modified": true,
+    "frozen_thresholds_untouched": {
+      "scientific_margin": {"pfv_m3": 0.0, "tfv_m3": 0.0, "peak_m3s": 0.0},
+      "dead_zone": {"pfv_m3": 1.0, "tfv_m3": 1.0, "peak_m3s": 0.001}
+    }
+  },
+  "evidence_sources": {
+    "freeze": "audits/frozen_evidence/train1600_v3/<code_sha>/train1600_v3_freeze.json",
+    "training_readiness_verdict": "train1600_v3/training_readiness_v4/training_readiness_verdict.json",
+    "dataset_audit": "audits/frozen_evidence/train1600_v3/<code_sha>/dataset/train1600_v3_dataset_audit.json"
+  },
+  "minimum_pass_conditions": {
+    "1_dataset_gate_pass": {
+      "source": "dataset_audit.status == 'pass'",
+      "requirement": true
+    },
+    "2_feature_leakage_zero": {
+      "source": "training_readiness_verdict.feature_leakage_audit.leakage_count",
+      "frozen_maximum": 0
+    },
+    "3_split_no_leakage": {
+      "source": "training_readiness_verdict.verdict.split_leakage_free",
+      "requirement": true
+    },
+    "4_train_core_labels_two_sided": {
+      "source": "training_readiness_verdict.train_core_two_sided.all_core_two_sided (pfv_safe, tfv_improved, peak_noninferior)",
+      "requirement": true
+    },
+    "5_calibration_calibratable": {
+      "source": "no hard learnability failures",
+      "requirement": true
+    },
+    "6_locked_continuous_regression_possible": {
+      "source": "training_readiness_verdict.locked_power_report.locked_states > 0",
+      "requirement": true
+    },
+    "7_input_schema_complete": {
+      "source": "training_readiness_verdict.residual_schema_audit.all_process_residuals_complete AND feature_leakage_count == 0",
+      "requirement": true
+    },
+    "8_unresolved_files_zero": {
+      "source": "frozen file manifest resolves and re-hashes exactly",
+      "frozen_maximum": 0
+    },
+    "9_freeze_immutable": {
+      "source": "freeze.immutable",
+      "requirement": true
+    }
+  },
+  "readiness_policy": {
+    "conditional_pass_still_authorizes_training": true,
+    "conditional_pass_reasons_recorded_as_obligations": [
+      "online_k1_k2_not_in_training_domain",
+      "continuous_head_boundary_calibration_risk",
+      "underpowered_locked"
+    ],
+    "fail_stops_training": true
+  },
+  "pending_obligations_when_conditional": {
+    "k1_k2_supplement_required": "create a K=1/K=2 supplementary plan on Train events only; do not touch Calibration or Locked; disable online K=1/K=2 candidate generation until backfilled",
+    "calibration_risk_heads": "do not delete data; prioritise boundary sample accrual in later Active Validation",
+    "underpowered_locked": "trigger pre-registered Locked Validation accrual; never fake a model-safety pass"
+  },
+  "outputs": {
+    "authorization_file": "train1600_v3/authorization/model_training_authorization_v4.json",
+    "model_safety_gate_status_file": "train1600_v3/authorization/model_safety_gate_v4_status.json",
+    "fields": [
+      "model_training_authorized",
+      "training_readiness",
+      "conditions",
+      "pending_obligations",
+      "model_safety_gate_status"
+    ]
+  },
+  "expected_outcome_under_current_frozen_evidence": {
+    "model_training_authorized": true,
+    "training_readiness": "conditional_pass",
+    "model_safety_gate_status": "deferred"
+  },
+  "prohibitions": [
+    "must not modify or overwrite the original 1600-sample manifest, labels or splits",
+    "must not modify PFV/TFV/Peak margins or dead-zones",
+    "must not authorize Policy Lock, closed loop, Challenge or Formal Blind",
+    "must not upgrade the deferred Model Safety Gate",
+    "must not use Calibration or Locked Validation results for architecture selection or tuning",
+    "must not claim K=1/K=2 coverage the training domain does not contain",
+    "must not use future SWMM state, flow, KPI, exact feasibility or reference future KPI as model inputs"
+  ]
+}

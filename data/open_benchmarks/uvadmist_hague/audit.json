@@ -1,0 +1,38 @@
+[
+  {
+    "file": "hague_v22_passive.inp",
+    "bytes": 5788442,
+    "junctions": 206,
+    "storage": 3,
+    "pumps": 1,
+    "orifices": 3,
+    "weirs": 1,
+    "outlets": 0,
+    "controls_rows": 0,
+    "control_setting_targets": 0
+  },
+  {
+    "file": "hague_v22_simpleRBC.inp",
+    "bytes": 5788442,
+    "junctions": 206,
+    "storage": 3,
+    "pumps": 1,
+    "orifices": 3,
+    "weirs": 1,
+    "outlets": 0,
+    "controls_rows": 0,
+    "control_setting_targets": 0
+  },
+  {
+    "file": "hague_v22_simpleRBC_hs.inp",
+    "bytes": 5788496,
+    "junctions": 206,
+    "storage": 3,
+    "pumps": 1,
+    "orifices": 3,
+    "weirs": 1,
+    "outlets": 0,
+    "controls_rows": 0,
+    "control_setting_targets": 0
+  }
+]

@@ -1,0 +1,390 @@
+# Configuration file for scenario chaohu
+# name of scearnio
+env_name: chaohu
+# if env contains actions
+act: True
+# time step (min)
+interval: 1
+# control time step (min)
+# ctrl_step: 5
+# state definitions: Rainfall first!!
+states:
+  - !!python/tuple
+    - "system"
+    - cumprecip
+  - !!python/tuple
+    - "CC-storage"
+    - depthN
+  - !!python/tuple
+    - "JK-storage"
+    - depthN
+  - !!python/tuple
+    - "YS02001757"
+    - depthN
+  - !!python/tuple
+    - "YS02001907"
+    - depthN
+  - !!python/tuple
+    - "WS02006253"
+    - depthN
+  - !!python/tuple
+    - "WS02006238"
+    - depthN
+  - !!python/tuple
+    - "CC-1"
+    - cuminflow        
+  - !!python/tuple
+    - "CC-2"
+    - cuminflow        
+  - !!python/tuple
+    - "JK-1"
+    - cuminflow 
+  - !!python/tuple
+    - "JK-2"
+    - cuminflow
+  - !!python/tuple
+    - "WS02006252"
+    - cuminflow 
+  - !!python/tuple
+    - "WS02006256"
+    - cuminflow
+ 
+# global state definitions
+global_state:
+  - !!python/tuple
+    - nodes
+    - depthN
+  - !!python/tuple
+    - nodes
+    # - totalinflow
+    - cuminflow
+  - !!python/tuple
+    - nodes
+    - totaloutflow_vol
+  - !!python/tuple
+    - nodes
+    # - lateralinflow
+    - cumlateralinflow
+  - !!python/tuple
+    - links
+    - depthL
+  - !!python/tuple
+    - links
+    - volumeL
+  - !!python/tuple
+    - links
+    - flow_vol
+  - !!python/tuple
+    - links
+    - setting
+
+# Key elements in loss function
+loss_weight:
+  # CC-S1: 5.0
+  # CC-S2: 5.0
+  # CC-R1: 5.0
+  # CC-R2: 5.0
+  # JK-S: 5.0
+  # JK-R1: 5.0
+  # JK-R2: 5.0
+  CC-storage: 5.0
+  JK-storage: 5.0
+  # CC-1: 5.0
+  # CC-2: 5.0
+  # JK-1: 5.0
+  # JK-2: 5.0
+
+# Action space
+action_space:
+  CC-S1:
+    !!python/tuple
+    - 0
+    - 1
+  CC-S2:
+    !!python/tuple
+    - 0
+    - 1
+  CC-R1:
+    !!python/tuple
+    - 0
+    - 1
+  CC-R2:
+    !!python/tuple
+    - 0
+    - 1
+  JK-S:
+    !!python/tuple
+    - 0
+    - 1
+  JK-R1:
+    !!python/tuple
+    - 0
+    - 1
+  JK-R2:
+    !!python/tuple
+    - 0
+    - 1
+
+# Startup shutoff thresholds
+hc_thresholds:
+  CC-S1:
+    !!python/tuple
+    - 0.5
+    - 0.8
+  CC-S2:
+    !!python/tuple
+    - 0.5
+    - 1
+  CC-R1:
+    !!python/tuple
+    - 0.5
+    - 1.2
+  CC-R2:
+    !!python/tuple
+    - 0.5
+    - 1.4
+  JK-S:
+    !!python/tuple
+    - 1
+    - 4
+  JK-R1:
+    !!python/tuple
+    - 1.2
+    - 4.2
+  JK-R2:
+    !!python/tuple
+    - 1.2
+    - 4.3
+
+# Startup shutoff thresholds for safety
+safe_thresholds:
+  CC-S1:
+    !!python/tuple
+    - 0.3
+    - 2
+  CC-S2:
+    !!python/tuple
+    - 0.3
+    - 2
+  CC-R1:
+    !!python/tuple
+    - 0.3
+    - 2
+  CC-R2:
+    !!python/tuple
+    - 0.3
+    - 2
+  JK-S:
+    !!python/tuple
+    - 0.8
+    - 5
+  JK-R1:
+    !!python/tuple
+    - 0.8
+    - 5
+  JK-R2:
+    !!python/tuple
+    - 0.8
+    - 5
+    
+# Performance Targets
+performance_targets:
+  # rainfall indicator
+  # - !!python/tuple
+  #   - "RG"
+  #   - rainfall
+  #   - -5
+  # flooding
+  - !!python/tuple
+    - "nodes"
+    - cumflooding
+    - 1
+  # tank flooding penalty
+  # - !!python/tuple
+  #   - "CC-storage"
+  #   - cumflooding
+  #   - 1000
+  # - !!python/tuple
+  #   - "JK-storage"
+  #   - cumflooding
+  #   - 1000
+  # CSOs
+  - !!python/tuple
+    - "CC-1"
+    - cuminflow
+    - 0.5
+  - !!python/tuple
+    - "CC-2"
+    - cuminflow
+    - 0.5
+  - !!python/tuple
+    - "JK-1"
+    - cuminflow
+    - 0.5
+  - !!python/tuple
+    - "JK-2"
+    - cuminflow
+    - 0.5
+  # WWTP
+  - !!python/tuple
+    - "WSC"
+    - cuminflow
+    - -0.1
+  # Pumping energy
+  - !!python/tuple
+    - "CC-S1"
+    - cumpumpenergy
+    - 1
+  - !!python/tuple
+    - "CC-S2"
+    - cumpumpenergy
+    - 1
+  - !!python/tuple
+    - "CC-R1"
+    - cumpumpenergy
+    - 1
+  - !!python/tuple
+    - "CC-R2"
+    - cumpumpenergy
+    - 1
+  - !!python/tuple
+    - "JK-S"
+    - cumpumpenergy
+    - 1
+  - !!python/tuple
+    - "JK-R1"
+    - cumpumpenergy
+    - 1
+  - !!python/tuple
+    - "JK-R2"
+    - cumpumpenergy
+    - 1
+  # Control Roughness
+  # - !!python/tuple
+  #   - "CC-S1"
+  #   - setting
+  #   - 10
+  # - !!python/tuple
+  #   - "CC-S2"
+  #   - setting
+  #   - 10
+  # - !!python/tuple
+  #   - "CC-R1"
+  #   - setting
+  #   - 10
+  # - !!python/tuple
+  #   - "CC-R2"
+  #   - setting
+  #   - 10
+  # - !!python/tuple
+  #   - "JK-S"
+  #   - setting
+  #   - 10
+  # - !!python/tuple
+  #   - "JK-R1"
+  #   - setting
+  #   - 10
+  # - !!python/tuple
+  #   - "JK-R2"
+  #   - setting
+  #   - 10
+  # Tank depth
+  # - !!python/tuple
+  #   - "CC-storage"
+  #   - depthN
+  #   - 1
+  # - !!python/tuple
+  #   - "JK-storage"
+  #   - depthN
+  #   - 1
+
+# Flooding volume in each node
+flood:
+  - !!python/tuple
+    - nodes
+    - cumflooding
+
+# distributed control sites
+site:
+  CC:
+    states:
+      - "system"
+      - "CC-storage"
+      - "YS02001757"
+      - "WS02006253"
+      - "CC-1"
+      - "CC-2"
+    action_space:
+      - !!python/tuple
+        - "CC-S1"
+        - "CC-S2"
+      - !!python/tuple
+        - "CC-R1"
+        - "CC-R2"
+  JK:
+    states:
+      - "-4"
+      - "JK-storage"
+      - "YS02001907"
+      - "WS02006238"
+      - "JK-1"
+      - "JK-2"
+    action_space:
+      - !!python/tuple
+        - "JK-S"
+      - !!python/tuple
+        - "JK-R1"
+        - "JK-R2"
+
+# TODO: Chicago Rainfall scenario parameters
+rainfall:
+  func: generate_file
+  filedir: ./envs/network/chaohu/
+  suffix: chaohu_train
+  # Rainfall pattern
+  rainfall_pattern: "Chicago (Keifer & Chu, 1957)"
+  # Events
+  rain_num: 50
+  # Rainfall duration (min)
+  dura: 120
+  # Time resolution (min)
+  delta: 5
+  # Simulation duration (min)
+  simu_dura: 300
+  # Set rainfall parameters
+  P:
+    !!python/tuple
+    - 1
+    - 5    
+  params:
+    A:
+      !!python/tuple
+      - 21.9682
+      - 38.8565
+    C:
+      !!python/tuple
+      - 0.8057
+      - 2.201
+    n:
+      !!python/tuple
+      - 0.8301
+      - 1.0792
+    b:
+      !!python/tuple
+      - 16.41
+      - 26.5
+    r:
+      !!python/tuple
+      - 0.3
+      - 0.8
+
+# if time-variant outlet boundary
+tide: False
+
+# Model predictive control parameters
+prediction:
+  no_runoff: False # if excludes runoff module and use external data
+  hsf_dir: hsf # file path to save the hotstart file
+  eval_dir: eval # file path to save the evaluation file
+  suffix: mpc_eval_ # suffix of the evaluation file
+  

@@ -1,0 +1,14 @@
+_inherits: configs/wuhan_project6_acceptance_probe.yaml
+
+# Reuse the existing exact local table only after binary-pump rows are
+# filtered by the runtime actuator semantics. The learned uncertainty gate
+# remains active for every candidate.
+controller:
+  phase_reliability:
+    exact_local_csv: outputs/targeted_v8_storage_correct_semantics_v1/exact_no_control_action_effect_dataset.csv
+    empirical_single_action_gate: true
+    fallback_to_surrogate_without_local_evidence: true
+    max_overrides_per_phase: 0
+    candidate_group_limit: 6
+    peak_tolerance_abs: 1.0
+    evidence_time_tolerance_min: 2.5

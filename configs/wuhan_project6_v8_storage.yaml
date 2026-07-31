@@ -1,0 +1,181 @@
+_inherits: configs/wuhan_project6.yaml
+
+# Isolated Project6-v8-storage-retrofit scenario.  The copied INP has the
+# same graph and hydraulics as the audited source; this configuration enables
+# ten pre-existing, real SWMM links as controllable retrofit assets.
+network:
+  inp: data/wuhan_v8_storage_retrofit.inp
+  control_enabled_actuator_ids_file: data/project6_v8_storage_retrofit_control_enabled_ids.txt
+  retrofit_asset_manifest: data/project6_v8_storage_retrofit_assets.csv
+
+controller:
+  # This retraining scenario has an explicit 36-facility deployment set. Do
+  # not train a 109-link policy and later attempt to mask it at execution.
+  actuator_scope: control_enabled
+  # Only the audited VFD pump remains continuous. ADD301.2/3 are represented
+  # by ordinary OFF/ON pump rows in the INP and must be binary at deployment.
+  pump_control_mode: binary_unless_verified
+  variable_speed_pump_ids: [add350.1]
+  # Normalized setting changes per 5-min MPC decision. Variable-speed pumps
+  # remain continuous; these limits prevent implausible speed jumps.
+  per_actuator_max_delta:
+    add350.1: 0.15
+    ADD301.2: 1.0
+    ADD301.3: 1.0
+    RTC_IN_01: 0.10
+    RTC_OUT_01: 0.10
+    RTC_IN_02: 0.10
+    RTC_OUT_02: 0.10
+    RTC_IN_03: 0.10
+    RTC_OUT_03: 0.10
+    HS2512760.1: 0.10
+    gbz1.8: 0.10
+  min_hold_steps_by_actuator:
+    add350.1: 2
+    ADD301.2: 2
+    ADD301.3: 2
+    RTC_IN_01: 1
+    RTC_OUT_01: 1
+    RTC_IN_02: 1
+    RTC_OUT_02: 1
+    RTC_IN_03: 1
+    RTC_OUT_03: 1
+  allowed_actuator_ids:
+    - ADD424.4
+    - HS1306663.1
+    - JCHdwxh02.1
+    - MH0266931.2
+    - MH0266932.2
+    - MH0266933.1
+    - VP0600010.3
+    - VP0600010.4
+    - VP0600010.5
+    - add300.1
+    - add321.1
+    - cc006.1
+    - dw3700.1
+    - dw3700.2
+    - dwxh.2
+    - jichangheTank.2
+    - ADD424.1
+    - ADD424.2
+    - ADD424.3
+    - JCW0000.1
+    - MH0002461.1
+    - Zhongyi-2.2
+    - add401.1
+    - gbz1.4
+    - jchX01.1
+    - add350.1
+    - RTC_IN_01
+    - RTC_OUT_01
+    - RTC_IN_02
+    - RTC_OUT_02
+    - RTC_IN_03
+    - RTC_OUT_03
+    - HS2512760.1
+    - gbz1.8
+    - ADD301.2
+    - ADD301.3
+  reference_policy_for_constraints: online_predicted_default
+  # Formal no-control-preserving repair contract.  A candidate may trade at
+  # most 0.5% plus 100 m3 of horizon PFV/TFV for system-risk repair; peak
+  # remains a hard constraint under the inherited peak tolerance.
+  pfv_tolerance_abs: 100.0
+  pfv_tolerance_frac: 0.005
+  tfv_tolerance_abs: 100.0
+  tfv_tolerance_frac: 0.005
+  # The deployed effect head uses a 70% conformal peak margin of about
+  # 0.66 m3/s.  This small physical/forecast allowance keeps peak as a hard
+  # constraint while avoiding automatic rejection caused by its own calibrated
+  # uncertainty bound.
+  peak_tolerance_abs: 0.75
+  peak_tolerance_frac: 0.005
+  phase_reliability:
+    # Exact SWMM no-control replay effects. The runtime filter denies active
+    # actions for pattern-phase combinations without local evidence.
+    # Keep the raw exact replay data here: it retains priority_depth_mean,
+    # which is required to prevent a locally safe action from being applied
+    # before its verified hydraulic-state window.
+    exact_local_csv: outputs/targeted_v8_storage_single/exact_no_control_action_effect_dataset.csv
+    # Reliability data restrict the sign and physical risk window; the
+    # horizon surrogate remains the final joint-action gate.  TFV-neutral
+    # actions within the declared tolerance are therefore retained.
+    allow_tfv_noninferior: true
+    require_pfv_improvement: true
+    pfv_tolerance_abs: 100.0
+    pfv_tolerance_frac: 0.005
+    tfv_tolerance_abs: 100.0
+    tfv_tolerance_frac: 0.005
+    peak_tolerance_abs: 0.75
+    peak_tolerance_frac: 0.005
+    pulse_steps: 2
+    max_overrides_per_phase: 0
+    candidate_group_limit: 4
+    # Exact local replay can certify one actuator and one direction only.
+    # Joint candidates continue to require the uncertainty-aware surrogate
+    # gate.
+    empirical_single_action_gate: true
+    fallback_to_surrogate_without_local_evidence: true
+  repair_reliable_action_filter:
+    enabled: false
+  storage_retrofit:
+    enabled: true
+    asset_manifest: data/project6_v8_storage_retrofit_assets.csv
+    max_simultaneous_storage_actuators: 4
+    max_total_active_actuators: 15
+    inlet_outlet_incompatible_action_constraint: true
+    storage_empty_full_guard: true
+    downstream_surcharge_interlock: true
+
+training:
+  # This study learns action effects against the no-control twin. EFD and
+  # Auto-RBC remain comparison policies, not optimistic per-metric labels.
+  cache_reference_policies: [no_control]
+
+rainfall:
+  formal_rain_ids: [T5, T10, T20, T30, T50, T75, T100]
+  formal_durations: [75, 105, 150, 210, 240, 300]
+  formal_patterns: [chicago_center, chicago_early, chicago_late, block, double_peak]
+
+outputs:
+  # A new data lineage.  None of these paths reuse the failed first retrofit
+  # formal run or its 109-action cache.
+  audit: outputs/audit_v8_storage_variablepump
+  network: outputs/network_v8_storage_variablepump
+  design: outputs/design_v8_storage_variablepump
+  rainfall: outputs/rainfall_library_v8_storage_variablepump
+  data_bank_train: outputs/data_bank_train_v8_storage_variablepump
+  cache: outputs/cache_v8_storage_variablepump
+  models: outputs/models_v8_storage_variablepump
+  diagnostics: outputs/diagnostics_v8_storage_variablepump
+  surrogate: outputs/surrogate_v8_storage_variablepump
+  gat_features: outputs/gat_reconstructed_features_v8_storage_variablepump
+  closed_loop: outputs/closed_loop_paired_no_controls
+
+storage_retrofit:
+  run_tag: project6_v8_storage_T5_T100_v1
+  original_v8_control_table: outputs/closed_loop_paired_no_controls/formal/project6_no_control_repair_formal_30_v8/control_actuator_table.csv
+  selected_new_assets: 10
+  training_reuse_mode: A1_historical_109_action_space
+  no_new_nodes: true
+
+horizon_surrogate:
+  model_kind: temporal_gnn
+  output_dataset: data/surrogate_v8_storage_variablepump/horizon_mpc_dataset.parquet
+  fallback_output_dataset: data/surrogate_v8_storage_variablepump/horizon_mpc_dataset.csv
+  conformal_calibration_quantile: 0.90
+  controller_uncertainty_quantile: 0.70
+  enforce_validation_gate: true
+  validation_gate:
+    min_paired_rows: 100
+    min_pfv_direction_accuracy: 0.70
+    min_tfv_direction_accuracy: 0.70
+    min_peak_direction_accuracy: 0.80
+    min_joint_safe_precision: 0.80
+    pfv_direction_tolerance_abs: 100.0
+    pfv_direction_tolerance_frac: 0.005
+    tfv_direction_tolerance_abs: 100.0
+    tfv_direction_tolerance_frac: 0.005
+    peak_direction_tolerance_abs: 0.5
+    peak_direction_tolerance_frac: 0.01

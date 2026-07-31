@@ -1,0 +1,14 @@
+_inherits: configs/wuhan_project6_36_temporal_joint_peakfixed.yaml
+
+# Recovery model trained from the corrected peak-fixed v3 checkpoint.  This
+# config remains blocked from closed-loop use until the strict model gate passes.
+controller:
+  temporal_joint:
+    model_path: outputs/models_temporal_joint_36_recovery_v2/raw_joint_36_same_state_recovery_v2.pt
+
+outputs:
+  models: outputs/models_temporal_joint_36_recovery_v2
+  diagnostics: outputs/diagnostics_temporal_joint_36_recovery_v2
+
+temporal_joint_pipeline:
+  root: outputs/project6_36_temporal_joint_recovery_v2

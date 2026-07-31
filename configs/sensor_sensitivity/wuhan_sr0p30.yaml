@@ -1,0 +1,11 @@
+﻿_inherits: wuhan.yaml
+
+experiment:
+  sensor_ratio: 0.30
+
+outputs:
+  design: outputs/sensor_sensitivity/sr0p30/design
+  models: outputs/sensor_sensitivity/sr0p30/models
+  diagnostics: outputs/sensor_sensitivity/sr0p30/diagnostics
+  closed_loop: outputs/sensor_sensitivity/sr0p30/closed_loop
+  figures: outputs/sensor_sensitivity/sr0p30/figures

@@ -1,0 +1,108 @@
+{
+  "contract_id": "PROJECT6_V4_PREDICTIVE_GENERALIZATION_GATE_V1",
+  "version": "v1",
+  "created_utc": "2026-07-23",
+  "status": "frozen",
+  "purpose": "Predictive generalization gate for the V4.1 compact head-specific surrogate. It is scored once against the brand-new independent Locked evaluation (v4.1_locked) and is the ONLY gate that may authorize the next-round closed loop. It never reinterprets the V4.0 offline integrity gate and never lifts the deferred Model Safety Gate.",
+  "must_be_frozen_before": "EvaluateV4CompactLockedV1",
+  "scope": {
+    "controls": [
+      "AuditV4PredictiveGeneralizationGateV1 verdict",
+      "authorization to plan the next-round Exact closed loop (PlanExactClosedLoopV4)"
+    ],
+    "does_not_control": [
+      "V4.0 offline safety gate",
+      "model retraining",
+      "Policy Lock",
+      "Challenge",
+      "Formal Blind",
+      "any modification of the original 1600 labels, margins, dead-zones or splits"
+    ]
+  },
+  "immutable_upstream": {
+    "v4_0_offline_gate_role": "offline_integrity_only",
+    "v4_0_offline_gate_does_not_authorize_closed_loop": true,
+    "old_calibration_eligible_for_v1_official_evaluation": false,
+    "old_locked_eligible_for_v1_official_evaluation": false,
+    "old_locked_reusable_for_model_selection": false,
+    "frozen_thresholds_untouched": {
+      "scientific_margin": {"pfv_m3": 0.0, "tfv_m3": 0.0, "peak_m3s": 0.0},
+      "dead_zone": {"pfv_m3": 1.0, "tfv_m3": 1.0, "peak_m3s": 0.001}
+    }
+  },
+  "evaluation_data": {
+    "source": "reserve_events_only",
+    "calibration_split": "v4.1_calibration",
+    "locked_split": "v4.1_locked",
+    "accrual_split": "locked_accrual_reserve",
+    "frozen_before_any_new_label": true,
+    "selected_by_predicted_feasibility_or_old_locked": false
+  },
+  "continuous": {
+    "heads": ["pfv", "tfv", "peak"],
+    "all_r2_positive": true,
+    "all_beat_mean_or_zero_baseline": true,
+    "min_relative_mae_improvement": 0.10,
+    "min_heads_improving": 2,
+    "sign_accuracy_outside_dead_zone_beats_baseline": true,
+    "event_worst_must_be_reported": true
+  },
+  "classification": {
+    "safety_heads": ["pfv_safe", "peak_noninferior"],
+    "min_mcc": 0.0,
+    "average_precision_above_prevalence": true,
+    "min_balanced_accuracy": 0.60,
+    "max_false_safe_rate": 0.20
+  },
+  "ranking_and_decision": {
+    "min_top5_feasible_recall": 0.80,
+    "min_feasible_states": 5,
+    "decision_regret_better_than_best_simple_baseline": true,
+    "selected_unsafe_rate_below_frozen_cap": true
+  },
+  "calibration_quality": {
+    "one_sided_interval_reaches_frozen_coverage": true,
+    "frozen_coverage": 0.90,
+    "ood_and_abstain_effective": true,
+    "uncertainty_error_positively_correlated": true
+  },
+  "underpowered_policy": {
+    "trigger_when": "insufficient positive class support or fewer than min_feasible_states feasible states",
+    "verdict": "underpowered",
+    "actions": [
+      "start the pre-registered locked_accrual_reserve accrual",
+      "do not change the model",
+      "do not change any threshold in this contract",
+      "do not delete or relabel the original v4.1_locked events"
+    ]
+  },
+  "verdict_semantics": {
+    "pass": "every continuous / classification / ranking / calibration condition holds; authorizes_closed_loop=true",
+    "underpowered": "power-limited (support/feasible states) but no hard scientific failure; authorizes_closed_loop=false",
+    "scientific_fail": "at least one hard condition (continuous r2 positive, beat mean baseline, false-safe within limit, mcc positive) fails; authorizes_closed_loop=false"
+  },
+  "one_shot": {
+    "pre_execution_checks": [
+      "locked_intent exists",
+      "compact model SHA frozen",
+      "calibration SHA frozen",
+      "this contract SHA frozen",
+      "locked result does not yet exist",
+      "evaluation data not read before intent is written"
+    ],
+    "locked_after_evaluation": true
+  },
+  "outputs": {
+    "locked_intent_file": "models/v4_compact_v1/v4_compact_v1_locked_intent.json",
+    "locked_result_file": "models/v4_compact_v1/v4_compact_v1_locked_evaluation.json",
+    "gate_verdict_file": "models/v4_compact_v1/v4_predictive_generalization_gate.json"
+  },
+  "prohibitions": [
+    "must not overwrite or restate the V4.0 offline gate as a predictive pass",
+    "must not use the old Calibration or old Locked as inputs",
+    "must not use new Locked results to retrain, re-select features, or re-tune thresholds and keep the same version",
+    "must not relax any threshold in this contract after the new Locked is read",
+    "must not authorize Exact/Surrogate/GAT closed loop, Policy Lock, Challenge or Formal Blind unless verdict=pass",
+    "must not auto-run PlanExactClosedLoopV4"
+  ]
+}

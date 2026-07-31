@@ -1,0 +1,17 @@
+# Optional block to merge into configs/wuhan_project6_dual_reference_v4.yaml.
+# The Python script also accepts all key paths through CLI arguments.
+oracle_pareto:
+  actuators_csv: outputs/closed_loop_paired_no_controls/formal/project6_no_control_repair_formal_30_v8/control_actuator_table.csv
+  output_root: outputs/project6_dual_reference_v4/oracle_pareto
+  development_event_splits: [development, development_v4, train]
+  event_count_target: 12
+  control_step_sec: 600
+  delta: 0.05
+  pulse_steps: 2
+  max_cases_per_event: 450
+  random_candidates_per_event: 48
+  include_relaxed_operational_constraints: true
+  strict_contract:
+    pfv_reference: min(no_control, executable_passive)
+    tfv_reference: internal_rules
+    peak_reference: internal_rules

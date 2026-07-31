@@ -1,0 +1,285 @@
+project_root: .
+python: E:/RTC_sewer/Project/env/Scripts/python.exe
+
+network:
+  inp: data/wuhan_with_controls.inp
+  priority_points_dir: data/priority_points
+  priority_nodes_file: data/project5_design/priority_pfv_core_nodes.txt
+  priority_nodes_metadata: data/project5_design/priority_pfv_core_nodes.csv
+  priority_sentinel_nodes_file: data/project5_design/priority_depth_sentinel_nodes.txt
+  priority_sentinel_nodes_metadata: data/project5_design/priority_depth_sentinel_nodes.csv
+  priority_definition: project5_waterlogging_matched_hydraulic_active_pfv_core
+
+experiment:
+  sensor_ratio: 0.10
+  control_step_sec: 300
+  routing_step_sec: 15
+  recession_min: 180
+  max_actuators: 109
+  priority_top_k: 8
+  priority_flood_depth_ratio: 0.90
+  pfv_guard_min_improve_m3: 1.0
+  tfv_guard_pct: 0.005
+  peak_guard_pct: 0.010
+  smooth_weight: 0.05
+  debug_workers: 2
+  full_workers: 8
+  random_seed: 2026
+
+sensor_selection:
+  # Project5 formal GAT-MPC uses sparse sensing, but the externally matched
+  # priority/sentinel hydraulic domain must be represented by at least a small
+  # targeted sensor budget; otherwise priority-zone reconstruction becomes the
+  # dominant control bottleneck.
+  include_priority_nodes: true
+  include_sentinel_nodes: true
+  priority_sensor_fraction: 0.25
+
+risk_stratification:
+  low_pfv_threshold: 1000.0
+  high_pfv_threshold: 20000.0
+  near_zero_pfv_epsilon: 100.0
+  low_priority_depth_threshold_m: 0.02
+  high_priority_depth_threshold_m: 0.20
+  high_risk_exposure_depth_m: 0.20
+  high_risk_exposure_time_min: 30.0
+
+controller:
+  mode: generic_gat_mpc
+  horizon_steps: 6
+  max_candidate_delta: 0.08
+  horizon_smooth_weight: 0.05
+  horizon_violation_penalty: 1000000.0
+  default_action_policy: no_control
+  reference_policy_for_constraints: internal_and_no_control
+  require_pfv_below_reference: true
+  min_pfv_improvement_abs: 1.0
+  min_pfv_improvement_frac: 0.02
+  # PFV-first tradeoff: candidate actions may increase horizon TFV by this
+  # fraction of the stricter rolling reference, while peak_TFV_rate remains
+  # guarded separately to avoid unacceptable downstream risk transfer.
+  tfv_tolerance_frac: 0.005
+  tfv_tolerance_abs: 0.0
+  max_candidate_sequences: 768
+  candidate_group_limit: 12
+  influence_khop: 3
+  influence_fallback_khop: 30
+  max_influence_candidates_per_priority: 160
+  max_storage_controls_per_priority: 10
+  max_regulators_per_priority: 48
+  max_pumps_per_priority: 57
+  allow_legacy_native_shield: true
+
+intervention_policy:
+  low_risk_mode: native_or_hold
+  medium_risk_mode: conservative_enhancement
+  high_risk_mode: aggressive_but_safe
+  min_pfv_gain_high_risk: 0.02
+  min_pfv_gain_medium_risk: 0.05
+  min_pfv_gain_low_risk: 0.20
+  max_false_intervention_rate_low_risk: 0.05
+  require_predicted_pfv_improvement: true
+  tfv_guard_pct: 0.005
+  peak_guard_pct: 0.010
+  residual_pfv_prob_min: 0.70
+  residual_safe_prob_min: 0.75
+  residual_nonzero_prob_min: 0.50
+  residual_peak_prob_min: 0.70
+  empirical_guard_block_unknown: true
+  project5_safety_shield:
+    nominal_policy: internal_rules
+    require_project5_on_policy_guard: true
+    project4_residual_use: warm_start_only
+    allowed_templates:
+      - storage_inlet_restrict
+      - pump_boost
+      - storage_outlet_retain
+      - storage_outlet_release
+    allowed_scopes_by_template:
+      storage_inlet_restrict: [priority_corridor, priority_upstream, native_rule, hot_local]
+      pump_boost: [hot_local]
+      storage_outlet_retain: [priority_corridor, priority_downstream, native_rule, hot_local]
+      storage_outlet_release: [priority_corridor, priority_downstream, native_rule, hot_local]
+    blocked_templates:
+      - pump_throttle
+      - release_plus_pump_boost
+      - storage_retain_pump_throttle
+      - inlet_restrict_pump_throttle
+      - storage_all_retain
+      - storage_all_release
+      - storage_inlet_open
+      - pump_pre_emptying
+    candidate_hold_steps: [1, 2]
+    max_candidate_delta: 0.08
+    horizon_smooth_weight: 0.05
+    horizon_violation_penalty: 1000000.0
+
+evaluation:
+  paper_policy_set:
+    - proposed_gat_mpc
+    - internal_rules
+    - efd_storage_priority
+    - auto_rbc
+    - no_control_diagnostic
+  diagnostic_policy_set:
+    - all_open
+    - random_safe
+    - efd_static
+    - proposed_native_shield
+  proposed_formal_gate:
+    min_high_risk_events: 20
+    min_pfv_mean_reduction_pct: 10.0
+    min_pfv_median_reduction_pct: 10.0
+    max_tfv_worse_frac: 0.10
+    max_peak_worse_frac: 0.10
+    max_action_change_ratio: 1.20
+    min_pfv_direction_accuracy: 0.70
+    min_safe_precision: 0.80
+    min_peak_direction_accuracy: 0.80
+    min_guard_event_coverage: 10
+    near_zero_pfv_epsilon: 100.0
+    required_baseline_policies:
+      - no_control
+      - internal_rules
+      - efd_storage_priority
+      - auto_rbc
+
+horizon_surrogate:
+  model_kind: temporal_gnn
+  formal_model_kind: temporal_gnn
+  horizon_steps: 6
+  history_steps: 3
+  max_detail_files: 0
+  min_rows_per_event: 6
+  source_scope: generic_trajectories
+  output_dataset: data/surrogate/horizon_mpc_dataset.parquet
+  fallback_output_dataset: data/surrogate/horizon_mpc_dataset.csv
+  high_risk_pfv_threshold: 1000.0
+  high_risk_threshold_quantile: 0.95
+  high_risk_min_true_count: 30
+
+uncertainty_gate:
+  method: bootstrap_residual_quantiles
+  p50_quantile: 0.50
+  p90_quantile: 0.90
+  epsilon_tfv_pct: 0.005
+  epsilon_peak_pct: 0.010
+  max_uncertainty: 1.0
+
+rainfall:
+  debug_rain_ids: [T10, T50]
+  debug_durations: [60, 120]
+  debug_patterns: [chicago_center]
+  train_rain_ids: [T3, T7, T15, T30, T75]
+  train_durations: [75, 105, 150, 210]
+  train_patterns: [chicago_center, chicago_early, chicago_late, block, double_peak]
+  formal_rain_ids: [T1, T2, T5, T10, T20, T30, T50, T75, T100]
+  formal_durations: [75, 105, 150, 210, 240, 300]
+  formal_patterns: [chicago_center, chicago_early, chicago_late, block, double_peak]
+  representative_event_ids:
+    - T20_D150_chicago_center
+    - T30_D210_chicago_late
+    - T50_D240_block
+    - T75_D210_chicago_center
+    - T75_D300_chicago_late
+    - T100_D240_double_peak
+    - T100_D300_block
+    - T50_D300_double_peak
+  design_depth_mm:
+    T1: 43.16
+    T2: 46.31
+    T3: 48.50
+    T5: 51.68
+    T7: 54.00
+    T10: 56.39
+    T15: 59.00
+    T20: 61.42
+    T30: 64.50
+    T50: 68.30
+    T75: 71.00
+    T100: 73.59
+  temporal_patterns: [chicago_center, chicago_early, chicago_late, block, double_peak]
+
+trajectory:
+  debug_policies: [no_control, auto_rbc, efd_static, efd_storage_priority, random_uniform, storage_retain, pump_emptying, mixed_safe_random]
+  full_policies:
+    - no_control
+    - all_open
+    - all_closed_safe
+    - auto_rbc
+    - efd_static
+    - efd_storage_priority
+    - random_uniform
+    - sobol_like
+    - one_at_a_time_pulse
+    - actuator_group_pulse
+    - storage_retain
+    - storage_release
+    - pump_emptying
+    - pump_throttle
+    - pre_peak_storage_retain
+    - peak_storage_retain
+    - recession_pump_emptying
+    - upstream_retain_downstream_release
+    - priority_zone_protective
+    - mixed_safe_random
+    # PFV-enrichment policies: these deliberately create paired action
+    # contrasts around storage and pump operations so the surrogate can learn
+    # Action -> delta_PFV / delta_TFV / delta_peak, instead of being dominated
+    # by zero PFV labels.
+    - priority_peak_storage_block
+    - priority_peak_storage_release
+    - pump_peak_shutdown
+    - pump_peak_boost
+    - storage_group_wave
+    - actuator_extreme_counterfactual
+    - regulator_restrict_wave
+    - regulator_release_wave
+    - storage_inlet_outlet_sweep
+    - pump_station_wave
+  debug_max_trajectories: 24
+  full_max_trajectories: 0
+
+training:
+  batch_size: 128
+  debug_epochs: 5
+  full_epochs: 120
+  lr: 0.001
+  hidden_dim: 256
+  gat_heads: 4
+  gat_max_train_samples_per_epoch: 20000
+  gat_eval_every: 5
+  gat_patience: 8
+  gat_score_full_weight: 0.45
+  gat_score_priority_weight: 0.55
+  surrogate_horizon_steps: 6
+  # Tensor cache uses current rainfall_event_table only. The graph surrogate's
+  # risk_delta is candidate minus the strictest per-metric value among these
+  # references, avoiding an implicit single Auto-RBC reference.
+  cache_reference_policies:
+    - no_control
+    - efd_storage_priority
+    - auto_rbc
+  lambda_priority: 4.0
+  lambda_high_depth: 3.0
+  lambda_volume: 0.10
+  lambda_flood: 0.20
+  lambda_direction: 0.30
+  val_fraction: 0.15
+
+outputs:
+  audit: outputs/audit
+  rainfall: outputs/rainfall_library
+  design: outputs/design
+  data_bank_train: outputs/data_bank_train_paired_no_controls
+  cache: outputs/cache_paired_no_controls
+  models: outputs/models_paired_no_controls
+  diagnostics: outputs/diagnostics_paired_no_controls
+  closed_loop: outputs/closed_loop_paired_no_controls
+  figures: outputs/figures_paired_no_controls
+
+reuse_sources:
+  project4_formal_run: E:/RTC_sewer/Project4/outputs/closed_loop_paired_no_controls/formal/formal_native_shield_horizon_lowrisk_v2
+  project4_residual_counterfactual_dir: E:/RTC_sewer/Project4/outputs/closed_loop_paired_no_controls/internal_residual_counterfactuals
+  project4_model_dir: E:/RTC_sewer/Project4/outputs/models_paired_no_controls
+  project2_design_dir: E:/RTC_sewer/Project2/outputs/project2_design

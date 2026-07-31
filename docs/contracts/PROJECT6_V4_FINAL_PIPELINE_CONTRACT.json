@@ -1,0 +1,89 @@
+{
+  "contract_id": "project6_v4_final_pipeline_v1",
+  "created_at": "2026-07-27",
+  "project_root": "E:/RTC_sewer/Project6",
+  "network_path": "data/wuhan_v8_storage_retrofit.inp",
+  "network_variant": "rainfall_only_no_dwf",
+  "network_sha256": "c44b315c31b901b188b62f001521e89ce025c2259a0c5a6ec74cf356dde4f2ca",
+  "physical_network_sha256": "96b5bd3667686d26e64c8b99d485c17038c09d547ca3b811cf0e78632bf83bce",
+  "active_dwf_flow_rows": 0,
+  "runtime_dwf_mutation_permitted": false,
+  "legacy_dwf_networks_permitted": false,
+  "facility_count": 36,
+  "canonical_facility_order": "data/project6_v8_storage_retrofit_control_enabled_ids.txt",
+  "canonical_facility_order_sha256": "b42e3a691dc0bb3a17a0437e67ccb2b3c2645ff2f8854033041d2f9dc4227957",
+  "facility_semantics": "data/project6_v3_facility_semantics_36.csv",
+  "facility_semantics_sha256": "f905cc28849b172836403d7a3603a5575a8185ac5ac2c00ead59bc198152b87c",
+  "binary_facilities": [
+    "ADD301.2",
+    "ADD301.3"
+  ],
+  "variable_speed_facilities": [
+    "add350.1"
+  ],
+  "deterministic_prefix_link_count": 90,
+  "state_record_step_sec": 300,
+  "control_interval_sec": 600,
+  "history_min": 60,
+  "history_frames": 7,
+  "horizon_min": 120,
+  "horizon_steps": 12,
+  "max_active_changes": 8,
+  "use_hotstart": false,
+  "authoritative_swmm": true,
+  "delta_direction": "candidate_minus_reference",
+  "references": {
+    "PFV": "no_control",
+    "TFV": "dynamic_internal_rules",
+    "Peak": "dynamic_internal_rules",
+    "necessity": "hold_previous"
+  },
+  "diagnostic_only_references": [
+    "hold_snapshot"
+  ],
+  "excluded_supervision_references": [
+    "passive"
+  ],
+  "kpi_units": {
+    "PFV": "m3",
+    "TFV": "m3",
+    "Peak": "m3/s"
+  },
+  "h120_window": "checkpoint_min < elapsed_min <= checkpoint_min + 120",
+  "full_label_policy": "NaN_unless_full_event_eligible_true",
+  "state_key": [
+    "event_id",
+    "checkpoint_id",
+    "checkpoint_state_sha256"
+  ],
+  "sample_key": [
+    "event_id",
+    "checkpoint_id",
+    "actual_schedule_sha256"
+  ],
+  "branches": [
+    "candidate",
+    "no_control",
+    "dynamic_internal_rules",
+    "hold_previous"
+  ],
+  "action_fields": [
+    "requested",
+    "projected",
+    "written",
+    "target",
+    "current",
+    "readback"
+  ],
+  "split_isolation_keys": [
+    "event_id",
+    "rainfall_sha256"
+  ],
+  "exit_codes": {
+    "pass": 0,
+    "blocked": 2,
+    "incomplete": 3,
+    "runtime_error": 4,
+    "scientific_fail": 5
+  }
+}

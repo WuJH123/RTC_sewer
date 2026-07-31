@@ -1,0 +1,37 @@
+{
+  "schema_version": "project6_v3_sentinel_nodes_provenance_v1",
+  "sentinel_contract_status": "human_resolution_required",
+  "reason": "Candidate sentinel nodes were recovered from prior Project4/Project5 handoff context, but this scaffold has not yet verified the original source file hash or independent selection basis.",
+  "round0_or_later_mutation_allowed": false,
+  "nodes": [
+    {
+      "node_id": "MH0200770",
+      "selection_basis": "prior_project_depth_surcharge_monitoring_candidate",
+      "source_project": "Project4/Project5",
+      "source_path": "unverified_prior_project_context",
+      "source_sha256": null,
+      "downstream_or_system_role": "depth_surcharge_monitoring",
+      "overlap_with_priority": false,
+      "depth_or_head_metric": "depth_m",
+      "safety_threshold": null,
+      "threshold_status": "uncalibrated",
+      "frozen_before_proposed_evaluation": true,
+      "provenance_status": "human_resolution_required"
+    },
+    {
+      "node_id": "HS1355904",
+      "selection_basis": "prior_project_depth_surcharge_monitoring_candidate",
+      "source_project": "Project4/Project5",
+      "source_path": "unverified_prior_project_context",
+      "source_sha256": null,
+      "downstream_or_system_role": "depth_surcharge_monitoring",
+      "overlap_with_priority": false,
+      "depth_or_head_metric": "depth_m",
+      "safety_threshold": null,
+      "threshold_status": "uncalibrated",
+      "frozen_before_proposed_evaluation": true,
+      "provenance_status": "human_resolution_required"
+    }
+  ],
+  "blocking_rule": "FatalAudit, AuditFallbacks, StateCloneTest, MPC, Smoke and Round0 generation must remain blocked until sentinel_contract_status is resolved."
+}

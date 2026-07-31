@@ -1,0 +1,9 @@
+priority_rank,node_id,role,x,y,max_depth,invert,mean_internal_highrisk_pfv,flood_events,event_count,project1_matched_points,project1_min_match_distance,note
+1,MSLBZW001,pfv_core_extra_hydraulic_bottleneck,527556.24,384267.855,1.9,22.1,16951.051744706274,80,80,,,dominant modeled PFV bottleneck near Project1 waterlogging-sensitive catchment
+2,HS1316314,pfv_core_near_waterlogging_bottleneck,528871.678,389936.463,3.15,19.57,7019.64630085738,80,80,,,hydraulically active bottleneck near external waterlogging match
+3,YS2530050,pfv_core_near_waterlogging_bottleneck,525320.745,389285.875,1.799,18.031,6592.921477323793,80,80,,,hydraulically active bottleneck near external waterlogging match
+4,HS2529198,pfv_core_near_waterlogging_bottleneck,525181.408,384371.629,2.552,18.878,5284.06823913505,74,80,,,hydraulically active bottleneck near HS2529052 exposure point
+5,MH0200773,pfv_core_extra_hydraulic_bottleneck,522778.683,384274.978,2.1,21.48,2260.427858841983,80,80,,,modeled PFV bottleneck retained as controllable hydraulic target
+6,HS1330349,pfv_core_near_waterlogging_bottleneck,527500.614,389391.21,3.08,17.16,1856.0737661717317,79,80,,,hydraulically active bottleneck near external waterlogging match
+7,HS2529139,pfv_core_near_waterlogging_bottleneck,525175.748,383994.211,2.61,18.97,1151.8805035288333,59,80,,,hydraulically active bottleneck near HS2529052 exposure point
+8,HS2529052,pfv_core_waterlogging_sensitive,525163.752,383583.14,2.803,21.567,857.1145104900463,47,80,1,74.26925867997663,Project1 matched waterlogging node with non-negligible modeled PFV

@@ -1,0 +1,47 @@
+{
+  "priority_contract_id": "PFV_CORE8_V1",
+  "priority_node_count": 8,
+  "priority_node_ids": [
+    "MSLBZW001",
+    "HS1316314",
+    "YS2530050",
+    "HS2529198",
+    "MH0200773",
+    "HS1330349",
+    "HS2529139",
+    "HS2529052"
+  ],
+  "priority_node_file": "data/project5_design/priority_pfv_core_nodes.txt",
+  "priority_node_file_sha256": "915908de0c3205ee143d4187710ef6680cc49d1839161995d165144df83313a6",
+  "metric": "priority flooding volume",
+  "unit": "m3",
+  "formula": "PFV_branch_m3 = sum_over_priority_nodes_and_intervals(flooding_rate_m3s * actual_dt_seconds)",
+  "sentinel_node_count": 2,
+  "sentinel_node_ids": [
+    "MH0200770",
+    "HS1355904"
+  ],
+  "sentinel_node_file": "data/project6_v3_sentinel_nodes.txt",
+  "sentinel_node_file_sha256": "06816141dc99bc3c9ea79d6f261a197a8705faedd9e428e9169a599ce088cd1f",
+  "sentinel_role": "monitoring_feature_only",
+  "sensitivity_zone_count": 11,
+  "sensitivity_zone_ids": [
+    "YS2530050",
+    "HS1316314",
+    "HS2529139",
+    "HS1330349",
+    "MH0200770",
+    "HS2529198",
+    "HS1355904",
+    "MH0249284",
+    "HS2529052",
+    "MSLBZW001",
+    "MH0200773"
+  ],
+  "sensitivity_zone_file": "data/project2_design/priority_zone_nodes.csv",
+  "sensitivity_zone_file_sha256": "17ad0a51656ace056a9edcbb723a62616fc9b341a84afc87af102ae006a7f2b4",
+  "sensitivity_zone_role": "secondary_analysis_only",
+  "overlap_check": "PASS",
+  "freeze_date": "2026-07-31",
+  "status": "FROZEN"
+}

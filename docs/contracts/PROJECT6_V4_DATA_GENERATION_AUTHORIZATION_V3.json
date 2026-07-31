@@ -1,0 +1,109 @@
+{
+  "contract_id": "PROJECT6_V4_DATA_GENERATION_AUTHORIZATION_V3",
+  "version": "v3",
+  "created_utc": "2026-07-23",
+  "status": "frozen",
+  "purpose": "Separate gate that authorizes Train1600 V3 planning and SWMM data generation. It is evaluated only against the frozen Gate P3 evidence and never overwrites, reinterprets or upgrades the P3 model-safety verdict.",
+  "scope": {
+    "controls": [
+      "PlanTrain1600V3",
+      "Train1600 V3 data production chain (Train rounds, Calibration, Locked Validation plans)"
+    ],
+    "does_not_control": [
+      "model training",
+      "Policy Lock",
+      "Surrogate closed loop",
+      "Challenge",
+      "Formal Blind"
+    ]
+  },
+  "immutable_upstream": {
+    "p3_verdict_status": "underpowered_validation",
+    "p3_verdict_file": "outputs/project6_dual_reference_v4/final_v4/pilot_feasibility_p3/evaluation/pilot_gate_v3_verdict.json",
+    "p3_verdict_must_not_be_overwritten": true,
+    "no_joint_found_under_budget_must_not_be_relabelled_physically_infeasible": true,
+    "underpowered_positives_must_not_be_reported_as_model_pass": true,
+    "frozen_thresholds_untouched": {
+      "scientific_margin": {"pfv_m3": 0.0, "tfv_m3": 0.0, "peak_m3s": 0.0},
+      "dead_zone": {"pfv_m3": 1.0, "tfv_m3": 1.0, "peak_m3s": 0.001}
+    }
+  },
+  "evidence_sources": {
+    "map_audit": "pilot_feasibility_p3/map/pilot_feasibility_audit.json",
+    "gate_v3_verdict": "pilot_feasibility_p3/evaluation/pilot_gate_v3_verdict.json",
+    "dataset_v3_audit": "pilot_feasibility_p3/dataset_v3/pilot_v3_dataset_audit.json",
+    "frozen_evidence_pointer": "audits/frozen_evidence/pilot_feasibility_p3/freeze_pointer.json"
+  },
+  "pass_conditions": {
+    "1_hard_authenticity_100pct": {
+      "source": "map_audit.checks.hard_authenticity_all_true",
+      "requirement": true
+    },
+    "2_exact_feasibility_map_complete": {
+      "source": "map_audit.checks.all_catalog_states_classified AND map_audit.checks.accounting_closed AND map_audit.checks.missing_zero",
+      "requirement": true
+    },
+    "3_unresolved_states_zero": {
+      "source": "map_audit.checks.execution_unresolved_zero",
+      "requirement": true
+    },
+    "4_robust_feasible_states_min": {
+      "source": "map_audit.class_counts.joint_feasible_robust",
+      "minimum": 8
+    },
+    "5_feasible_event_support_min": {
+      "source": "map_audit.recall_report.event_support",
+      "minimum": 3
+    },
+    "6_fallback_only_states_min": {
+      "source": "len(map_audit.recall_report.fallback_only_states)",
+      "minimum": 8
+    },
+    "7_fallback_event_support_min": {
+      "source": "unique event_id in map_audit.recall_report.fallback_only_states",
+      "minimum": 3
+    },
+    "8_candidate_generator_state_recall_min": {
+      "source": "map_audit.recall_report.candidate_generator_state_recall",
+      "minimum": 0.80
+    },
+    "9_missed_known_feasible_states_max": {
+      "source": "len(map_audit.recall_report.missed_feasible_states)",
+      "frozen_maximum": 0
+    },
+    "10_continuous_delta_model_improvement_min": {
+      "source": "gate_v3_verdict.metrics_used.ridge_rmse_improvement_vs_zero",
+      "minimum": 0.10
+    },
+    "11_no_event_rainfall_sha_leakage": {
+      "source": "dataset_v3_audit.checks.rainfall_sha_split_isolated AND dataset_v3_audit.checks.no_eval_split_search_rows_trainable",
+      "requirement": true
+    },
+    "12_candidate_reference_execution_chain_complete": {
+      "source": "map_audit.checks.replay_success_rate_100 AND gate_v3_verdict.checks.positive_control_replay_100pct AND map_audit.checks.accounting_closed",
+      "requirement": true
+    }
+  },
+  "outputs": {
+    "authorization_file": "train1600_v3/authorization/data_generation_authorization_v3.json",
+    "fields": [
+      "scientific_pass",
+      "train1600_planning_authorized",
+      "checks",
+      "metrics",
+      "p3_verdict_preserved"
+    ]
+  },
+  "expected_outcome_under_current_frozen_p3_evidence": {
+    "scientific_pass": true,
+    "train1600_planning_authorized": true,
+    "p3_verdict_preserved": "underpowered_validation"
+  },
+  "prohibitions": [
+    "must not overwrite or restate the P3 verdict as pass",
+    "must not authorize model training, policy lock, closed loop, challenge or formal blind",
+    "must not modify PFV/TFV/Peak margins or dead-zones",
+    "must not use Calibration or Locked Validation results as inputs",
+    "must not use future SWMM results as online candidate generator inputs"
+  ]
+}

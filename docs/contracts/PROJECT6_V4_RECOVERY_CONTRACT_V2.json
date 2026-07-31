@@ -1,0 +1,214 @@
+{
+  "contract_version": "project6_v4_recovery_contract_v2",
+  "supersedes": "project6_v4_recovery_truth_contract_v1",
+  "project": "Project6",
+  "scope": "Wuhan v8 storage-retrofit drainage network — recovery capability proof and event prescreen.",
+  "network_path": "E:/RTC_sewer/Project6/data/wuhan_v8_storage_retrofit.inp",
+  "network_sha256": "7ea1e1336c4e758f73b4e67bb8dca4fe972900f05c5d825c4ae9fbdaa52670fe",
+  "created_at": "2026-07-23",
+  "author": "Project6 agent, Gate 3.5 Recovery Capability Proof",
+
+  "recovery_state_definitions": {
+    "description": "Five mutually exclusive recovery states, evaluated in order. First match wins.",
+    "states": [
+      {
+        "id": "dry_weather_baseline",
+        "label": "Dry-weather baseline (DWF stable state)",
+        "description": "System under DWF-only forcing with no rainfall. All hydraulic variables have reached a stable diurnal cycle or steady state.",
+        "criteria": [
+          "No rainfall applied for >= dry_baseline_duration",
+          "PFV rate slope < system_volume_slope_tolerance for >= dry_baseline_stability_window",
+          "TFV rate slope < system_volume_slope_tolerance for >= dry_baseline_stability_window",
+          "System stored volume slope < system_volume_slope_tolerance for >= dry_baseline_stability_window"
+        ],
+        "usage": "Reference baseline for all recovery comparisons. Recovery is NOT defined as zero flooding — it is defined as return to this baseline band."
+      },
+      {
+        "id": "event_recession",
+        "label": "Event recession (post-rainfall drawdown)",
+        "description": "Rainfall has ceased; system is draining. Flooding may still occur but is decreasing.",
+        "criteria": [
+          "Rainfall intensity = 0 for >= 5 minutes",
+          "PFV and TFV are non-increasing (slope <= 0 over 30-min window)",
+          "System has not yet met complete recovery criteria"
+        ],
+        "usage": "Intermediate state. Recovery clock starts when recession begins."
+      },
+      {
+        "id": "hydraulic_stabilization",
+        "label": "Hydraulic stabilization (volume balance restoring)",
+        "description": "System inflow and outflow are approaching balance; stored volume is decreasing toward baseline.",
+        "criteria": [
+          "|system_inflow - system_outflow| / max(system_inflow, 1e-6) < inflow_outflow_imbalance_tolerance",
+          "System stored volume is within 2x of dry-weather baseline mean",
+          "PFV rate < PFV_tolerance for >= 30 minutes"
+        ],
+        "usage": "Pre-recovery state. System is converging but has not yet met full recovery duration."
+      },
+      {
+        "id": "complete_recovery",
+        "label": "Complete recovery (returned to DWF baseline band)",
+        "description": "All hydraulic variables have returned to within tolerance of the dry-weather baseline for a sustained period.",
+        "criteria": [
+          "PFV incremental volume < PFV_tolerance for >= stable_recovery_duration",
+          "TFV rate < TFV_tolerance for >= stable_recovery_duration",
+          "Priority flooding = 0 (no priority node flooding above baseline) for >= stable_recovery_duration",
+          "Node depths within node_depth_tolerance of DWF baseline for >= stable_recovery_duration",
+          "Storage volumes within storage_volume_tolerance of DWF baseline for >= stable_recovery_duration",
+          "System volume slope < system_volume_slope_tolerance for >= stable_recovery_duration"
+        ],
+        "usage": "Recovery is proven. Event is recovery-qualified."
+      },
+      {
+        "id": "censored_recovery",
+        "label": "Censored recovery (tail exceeded maximum without recovery)",
+        "description": "Post-rainfall tail has exceeded maximum_tail without meeting complete recovery criteria.",
+        "criteria": [
+          "Post-rainfall elapsed time > maximum_tail",
+          "Complete recovery criteria NOT met at any point during tail"
+        ],
+        "usage": "Event is censored. Can be used for H120-only stress testing but NOT for full-event recovery labels."
+      }
+    ]
+  },
+
+  "thresholds": {
+    "dry_baseline_duration": {
+      "value": 72,
+      "unit": "hours",
+      "source": "Engineering judgment — Wuhan large network needs extended DWF to stabilize from arbitrary initial conditions",
+      "description": "Minimum DWF-only simulation duration to establish baseline"
+    },
+    "dry_baseline_stability_window": {
+      "value": 12,
+      "unit": "hours",
+      "source": "Must cover at least one full diurnal DWF cycle to confirm periodic stability",
+      "description": "Continuous window over which all slope criteria must hold for baseline to be declared stable"
+    },
+    "PFV_tolerance": {
+      "value": 0.0,
+      "unit": "m3",
+      "source": "Priority flooding must not increase above DWF baseline; any incremental PFV is a violation",
+      "description": "Maximum allowable incremental Priority Flood Volume relative to DWF baseline"
+    },
+    "TFV_tolerance": {
+      "value": 1.0,
+      "unit": "m3/h",
+      "source": "Allow微量 flooding fluctuation from DWF numerical noise; based on SWMM DYNWAVE continuity tolerance",
+      "description": "Maximum allowable TFV rate above DWF baseline for recovery判定"
+    },
+    "priority_flooding_tolerance": {
+      "value": 0.0,
+      "unit": "m3",
+      "source": "Priority sentinel nodes must have zero incremental flooding for recovery",
+      "description": "Maximum allowable flooding at priority sentinel nodes above DWF baseline"
+    },
+    "node_depth_tolerance": {
+      "value": 0.05,
+      "unit": "m",
+      "source": "Engineering tolerance for node depth deviation from DWF baseline",
+      "description": "Maximum allowable node depth deviation from DWF baseline mean"
+    },
+    "storage_volume_tolerance": {
+      "value": 1.0,
+      "unit": "percent",
+      "source": "Relative to maximum storage capacity; 1% allows minor level fluctuation",
+      "description": "Maximum allowable storage volume deviation from DWF baseline, as % of max capacity"
+    },
+    "system_volume_slope_tolerance": {
+      "value": 0.1,
+      "unit": "m3/h",
+      "source": "Linear regression slope of system stored volume over stability window",
+      "description": "Maximum allowable rate of change of total system stored volume"
+    },
+    "inflow_outflow_imbalance_tolerance": {
+      "value": 5,
+      "unit": "percent",
+      "source": "Ratio |inflow - outflow| / max(inflow, 1e-6); 5% allows minor DWF imbalance",
+      "description": "Maximum allowable relative imbalance between total system inflow and outflow"
+    },
+    "stable_recovery_duration": {
+      "value": 6,
+      "unit": "hours",
+      "source": "Must sustain recovery conditions through at least half a diurnal cycle",
+      "description": "Minimum continuous duration all recovery criteria must hold for complete recovery"
+    },
+    "minimum_tail": {
+      "value": 180,
+      "unit": "minutes",
+      "source": "Minimum post-rainfall simulation tail for any recovery assessment",
+      "description": "Minimum post-rainfall simulation duration before recovery can be assessed"
+    },
+    "maximum_tail": {
+      "value": 1440,
+      "unit": "minutes",
+      "source": "24 hours post-rainfall; beyond this, event is censored",
+      "description": "Maximum post-rainfall tail; if recovery not achieved by this time, event is censored"
+    },
+    "tail_extension_increment": {
+      "value": 120,
+      "unit": "minutes",
+      "source": "Incremental extension step when recovery not yet achieved",
+      "description": "Post-rainfall tail is extended in this increment until maximum_tail is reached"
+    },
+    "censoring_rule": {
+      "description": "If post-rainfall tail > maximum_tail AND complete_recovery criteria never satisfied -> recovery_class = censored_stress, label_scope = h120_only, full_event_eligible = false"
+    }
+  },
+
+  "recovery_classification": {
+    "R0_recovered": "Complete recovery achieved within minimum_tail",
+    "R1_slow_recovery": "Recovery achieved between minimum_tail and maximum_tail",
+    "R2_censored": "No recovery within maximum_tail; censored stress event",
+    "R3_not_evaluated": "Event not yet run or evaluation failed"
+  },
+
+  "dry_weather_baseline_protocol": {
+    "rainfall": "None — zero intensity timeseries or no rain gage active",
+    "controls": "Native SWMM [CONTROLS] preserved (internal rules active)",
+    "DWF": "All 538 DWF entries with hourly/daily patterns preserved",
+    "hotstart": "FORBIDDEN — must start from standard initial conditions",
+    "duration": "72 hours minimum, or until 12-hour continuous stability achieved",
+    "report_step": "5 minutes",
+    "recorded_variables": [
+      "elapsed_min",
+      "system_inflow_m3_per_s",
+      "system_outflow_m3_per_s",
+      "system_stored_volume_m3",
+      "PFV_m3",
+      "TFV_m3",
+      "priority_flooding_m3",
+      "storage_volume_m3",
+      "continuity_error_percent",
+      "mean_node_depth_m",
+      "max_node_depth_m"
+    ]
+  },
+
+  "recovery_prescreen_protocol": {
+    "references": ["no_control", "dynamic_internal"],
+    "initial_conditions": "Standard initial conditions (no hotstart)",
+    "rainfall": "Development-only event from dev_rainfall library",
+    "post_rain_tail": "Extend from minimum_tail in tail_extension_increment steps up to maximum_tail",
+    "recovery_judgment": "Relative to dry-weather baseline, NOT absolute zero",
+    "continuity_error_max": 2.0,
+    "continuity_error_unit": "percent",
+    "hotstart": "FORBIDDEN"
+  },
+
+  "inp_recovery_capability_criteria": {
+    "description": "All 10 conditions must be met to declare inp_recovery_capability_proven = true",
+    "criteria": [
+      {"id": 1, "description": "Dry-weather baseline reaches stability (slope criteria met for >= stability_window)"},
+      {"id": 2, "description": "At least one micro-rain event recovers under both No-control and Dynamic Internal"},
+      {"id": 3, "description": "At least one light-rain event recovers under both references"},
+      {"id": 4, "description": "At least one moderate-rain event recovers under both references"},
+      {"id": 5, "description": "Recovery proven by PFV + TFV + Storage + system volume jointly"},
+      {"id": 6, "description": "SWMM continuity error < continuity_error_max in all runs"},
+      {"id": 7, "description": "Recession not caused by ponding loss (ponded area check)"},
+      {"id": 8, "description": "Boundary conditions, DWF, and controls remain correct throughout tail"},
+      {"id": 9, "description": "Deterministic: repeated runs produce identical results"},
+      {"id": 10, "description": "No hotstart used in any prescreen run"}
+    ]
+  }
+}

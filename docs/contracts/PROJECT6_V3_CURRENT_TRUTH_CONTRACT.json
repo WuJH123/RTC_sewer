@@ -1,0 +1,154 @@
+{
+  "contract_version": "project6_v3_current_truth_contract_v1",
+  "project": "Project6",
+  "run_tag": "project6_pfvfirst_dualfallback_10min_v3",
+  "purpose": "Machine-readable recovery contract for what is truly implemented, run, scientifically evaluated, blocked, or stale.",
+  "allowed_stage_statuses": [
+    "not_implemented",
+    "implemented_not_run",
+    "contract_ready",
+    "structural_only",
+    "runtime_partial",
+    "runtime_pass",
+    "scientific_gate_failed",
+    "blocked",
+    "stale",
+    "pass"
+  ],
+  "matrix_outputs": {
+    "truth_matrix": "outputs/project6_pfvfirst_dualfallback_10min_v3/status/project6_current_truth_matrix.csv",
+    "truth_report": "outputs/project6_pfvfirst_dualfallback_10min_v3/status/project6_current_truth_report.json",
+    "recovery_gate": "outputs/project6_pfvfirst_dualfallback_10min_v3/gates/project6_recovery_gate.json"
+  },
+  "matrix_columns": [
+    "stage",
+    "implementation_status",
+    "runtime_status",
+    "scientific_status",
+    "input_paths",
+    "output_paths",
+    "evidence_path",
+    "evidence_sha256",
+    "blocking_reason",
+    "next_allowed_stage"
+  ],
+  "marker_contract": {
+    "required_fields": [
+      "stage",
+      "stage_implementation_version",
+      "config_scope_hash",
+      "input_hashes",
+      "output_paths",
+      "output_hashes",
+      "runtime_actually_executed",
+      "scientific_gate_evaluated",
+      "created_at"
+    ],
+    "completion_marker_forbidden_when": [
+      "output set is empty",
+      "stage is schema-only but claims runtime pass",
+      "hotstart equivalence is not_run",
+      "hydraulic dry-run is not_run",
+      "marker references a missing file",
+      "marker script/config hash is stale"
+    ],
+    "blocked_or_failed_completion_marker": null
+  },
+  "prompt3a_gate_split": {
+    "engineering_gate": {
+      "meaning": "Static and structural engineering artifacts are present: Prompt2 import, fixed contracts, small baseline generation, state schema, coverage schema, and candidate preview.",
+      "can_pass_without_runtime_hydraulics": true,
+      "round0_unlock_allowed": false
+    },
+    "runtime_gate": {
+      "meaning": "True runtime evidence is present and internally consistent.",
+      "required_checks": [
+        "all baseline input trajectories enter the state pipeline",
+        "actual tensor feature dimensions match the frozen schemas",
+        "tail recovery is complete or explicitly censored",
+        "real hot-start files exist",
+        "real controller-memory files exist",
+        "State Clone equivalence passed",
+        "real same-state hydraulic candidate dry-run passed",
+        "truth leakage equals zero",
+        "engineering violations equal zero",
+        "Round0 plan reaches 1500 to 2000 effective candidates"
+      ],
+      "current_expected_status_until_real_evidence": "blocked"
+    },
+    "completion_gate": {
+      "pass_condition": "engineering_gate == pass AND runtime_gate == pass",
+      "must_not_use_single_structural_pass": true
+    }
+  },
+  "current_fixed_semantics": {
+    "network": "E:/RTC_sewer/Project6/data/wuhan_v8_storage_retrofit.inp",
+    "primary_gat": "sr0p15",
+    "managed_facility_count": 36,
+    "state_sampling_min": 5,
+    "control_interval_min": 10,
+    "prediction_horizon_min": 120,
+    "internal_rules_role": "PFV effectiveness benchmark",
+    "no_control_role": "diagnostic only",
+    "fallback_role": "online safety and action-necessity benchmark",
+    "binary_pumps": [
+      "ADD301.2",
+      "ADD301.3"
+    ],
+    "variable_speed_pump": "add350.1"
+  },
+  "prompt3a_small_scientific_loop": {
+    "baseline_expected_trajectory_count": 6,
+    "trajectory_key": "trajectory_id + event_id + policy_id",
+    "swmm_visible_state_interval_min": 5,
+    "rtc_decision_interval_min": 10,
+    "control_action_visible_state_span": 2,
+    "prediction_horizon_min": 120,
+    "prediction_action_steps": 12,
+    "free_residual_steps": 3,
+    "execute_first_action_only": true,
+    "swmm_time_options_must_report": [
+      "ROUTING_STEP",
+      "REPORT_STEP",
+      "WET_STEP",
+      "RULE_STEP",
+      "VARIABLE_STEP"
+    ],
+    "do_not_assume_dynamic_wave_internal_step_equals_visible_state_step": true,
+    "recovery_contract": {
+      "minimum_tail_after_rain_min": 180,
+      "continuous_recovery_min": 60,
+      "maximum_tail_hours": 12,
+      "censored_when_max_tail_without_recovery": true,
+      "required_fields": [
+        "rain_start_min",
+        "rain_end_min",
+        "simulation_start_min",
+        "simulation_end_min",
+        "rain_duration_min",
+        "minimum_tail_min",
+        "actual_tail_min",
+        "last_flood_time_min",
+        "last_priority_flood_time_min",
+        "storage_recovery_time_min",
+        "tail_termination_reason",
+        "recovery_status"
+      ]
+    },
+    "feature_indexes_required": [
+      "node_feature_index.json",
+      "facility_feature_index.json",
+      "storage_feature_index.json",
+      "feature_materialization_audit.csv"
+    ],
+    "state_clone_pass_fields": {
+      "hotstart_equivalence_status": "pass",
+      "controller_memory_restore_status": "pass",
+      "actual_setting_equivalence": "pass",
+      "PFV_equivalence": "pass",
+      "TFV_equivalence": "pass",
+      "peak_equivalence": "pass",
+      "formal_same_state_unlock_allowed": true
+    }
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "schema_version": "project6_pfvfirst_dualfallback_execution_status_v1",
+  "required_fields": [
+    "stage",
+    "status",
+    "config_path",
+    "config_sha256",
+    "started_at",
+    "finished_at",
+    "inputs",
+    "outputs",
+    "completion_marker",
+    "failure_reason"
+  ],
+  "status_values": [
+    "not_started",
+    "running",
+    "scaffold_only",
+    "completed",
+    "disabled",
+    "failed",
+    "failed_gate",
+    "blocked",
+    "contract_mismatch"
+  ],
+  "completion_marker_rules": {
+    "completed": "must_be_non_empty_valid_path",
+    "disabled": "must_be_json_null",
+    "failed": "must_be_json_null",
+    "failed_gate": "must_be_json_null",
+    "blocked": "must_be_json_null",
+    "contract_mismatch": "must_be_json_null",
+    "scaffold_only": "must_be_json_null",
+    "empty_string": "invalid_for_all_statuses"
+  },
+  "exit_code_contract": {
+    "0": "allowed read-only audit, scaffold initialization, or real completed stage success",
+    "2": "disabled or not implemented",
+    "3": "blocked by missing or stale upstream completion",
+    "4": "runtime exception",
+    "5": "real safety or model gate failed",
+    "6": "configuration, contract, or hash mismatch",
+    "7": "user input, CLI parameter, or stage-selection error"
+  },
+  "completion_marker_contract": {
+    "marker_name": "_COMPLETED.json",
+    "must_include": [
+      "stage",
+      "status",
+      "config_sha256",
+      "input_hashes",
+      "output_hashes",
+      "created_at"
+    ],
+    "downstream_stages_must_check": true
+  }
+}

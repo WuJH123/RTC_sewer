@@ -1,0 +1,109 @@
+project:
+  name: project6_dual_reference_v4
+  root: .
+  inp: data/wuhan_v8_storage_retrofit.inp
+  output_root: outputs/project6_dual_reference_v4
+
+formal_evaluation:
+  authoritative_swmm_runner_config: configs/wuhan_project6_v8_storage.yaml
+  proposed_workers: 2
+  baseline_workers: 16
+  closed_loop_mode: closed_loop_authoritative_swmm
+  prohibit_lookup_table_substitute: true
+  prohibit_hotstart: true
+
+runtime_limits:
+  # A progressing authoritative branch is not killed because it is slow.
+  per_branch_timeout_sec: 43200
+  per_event_timeout_sec: 86400
+  heartbeat_interval_sec: 60
+  no_heartbeat_stall_sec: 7200
+  retry_count: 3
+  retry_backoff_sec: 60
+  batch_event_count: 3
+  flush_manifest_every_event: true
+  flush_stdout_stderr: true
+  path_budget_chars: 235
+
+v4:
+  output_root: outputs/project6_dual_reference_v4
+  training:
+    required_min_samples: 3000
+    ensemble_size: 5
+    seeds: [20260723, 20260724, 20260725, 20260726, 20260727]
+    dataset_manifests:
+      - outputs/project6_pfvfirst_dualfallback_10min_v3/action_effect_dataset/action_effect_dataset_manifest.csv
+      - outputs/project6_pfvfirst_dualfallback_10min_v3_1/round3_dataset/round3_dataset_manifest.csv
+  dual_reference:
+    pfv_safety_references: [no_control, executable_passive]
+    tfv_peak_performance_reference: internal_rules
+    pfv_event_quantile: 0.95
+    # Frozen strict margins. Change only before Calibration and record a new version.
+    pfv_abs_margin_m3: 0.0
+    pfv_rel_margin: 0.0
+    tfv_abs_margin_m3: 0.0
+    tfv_rel_margin: 0.0
+    peak_abs_margin: 0.0
+    peak_rel_margin: 0.0
+  fallback:
+    executable_fallbacks: [executable_passive, internal_rules]
+    no_control_is_reference_not_in_branch_action: true
+    rising_and_pfv_tight: executable_passive
+    peak_and_recession_with_pfv_headroom: internal_rules
+    freeze_before_candidate_scoring: true
+  adaptive_k:
+    allowed_values: [0, 2, 4, 6, 8]
+    max_k: 8
+  readback_hard_constraint:
+    tolerance: 0.0001
+    rollback_to_frozen_fallback: true
+    block_event_if_rollback_fails: true
+  action_cost:
+    setting_deadband: 0.02
+    changed_facility_penalty: 1.0
+    variation_penalty: 1.0
+    reversal_penalty: 5.0
+    minimum_material_benefit: 25.0
+    minimum_benefit_cost_ratio: 1.5
+  model_gate:
+    reference_direction_accuracy_min:
+      PFV: 0.70
+      TFV: 0.70
+      peak: 0.80
+    residual_direction_accuracy_min:
+      PFV: 0.70
+      TFV: 0.70
+      peak: 0.80
+    # Advisory (recording-only) residual heads: user-approved 2026-07-24.
+    # Honest aug1-only evaluation showed the TFV/peak-vs-internal H120 direction
+    # heads sit near chance (0.47/0.43) on the balanced aug1 hard-negative cases;
+    # their earlier "pass" was an artifact of the base layer's one-sided TFV/peak
+    # delta distribution. The primary aug1 goal (full-event PFV direction) now
+    # passes at 0.75. At runtime the internal rules remain the TFV/peak
+    # performance benchmark and the safe fallback backstops safety, so these two
+    # heads are reported but do not hard-block the model gate. The four PFV heads
+    # (H120 + full-event) stay hard gates.
+    advisory_direction_labels:
+      - delta_TFV_H120_vs_internal
+      - delta_peak_H120_vs_internal
+    require_no_truth_future_leakage: true
+    require_metric_aligned_references: true
+  aug1:
+    # Development iteration that supplements real paired dual-reference
+    # full-recovery cases. It never overwrites the frozen base V4 model.
+    # New Gate 5R data must restore the original accepted-case target.  Legacy
+    # Aug1 duplicates do not justify lowering the new scientific data gate.
+    effective_target: 1600
+    reserve: 400
+    minimum_events: 24
+    minimum_validation_events: 8
+    full_recovery_minimum_tail_min: 180
+    full_recovery_max_tail_min: 720
+    smoke_case_count: 8
+  formal_gate:
+    pfv_compare_to: [no_control, executable_passive]
+    tfv_compare_to: internal_rules
+    peak_compare_to: internal_rules
+    event_quantile: 0.95
+    require_mean_noninferiority: true
+    require_quantile_noninferiority: true

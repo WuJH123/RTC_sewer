@@ -1,0 +1,47 @@
+{
+  "version": "project6_pfvfirst_dualfallback_10min_v3",
+  "required_fields": [
+    "forecast_issue_time",
+    "forecast_valid_time",
+    "forecast_source",
+    "forecast_version",
+    "forecast_horizon",
+    "forecast_scenario_id",
+    "timezone",
+    "rainfall_units",
+    "spatial_mode",
+    "update_interval_min",
+    "maximum_forecast_age_min",
+    "minimum_required_horizon_min",
+    "truth_available_to_controller"
+  ],
+  "main_formal_forecast_source": "operational_forecast",
+  "perfect_forecast_usage": "upper_bound_diagnostic_only",
+  "truth_available_to_controller": false,
+  "timezone": "Asia/Shanghai",
+  "rainfall_units": "mm_per_hour",
+  "spatial_mode": "single_gage_design_storm",
+  "update_interval_min": 10,
+  "maximum_forecast_age_min": 10,
+  "minimum_required_horizon_min": 120,
+  "insufficient_horizon_handling": "fail_or_safe_fallback_only",
+  "missing_forecast_fallback": "selected_safe_fallback_without_learned_candidate",
+  "operational_forecast_generator": "project6_design_storm_operational_surrogate",
+  "operational_forecast_version": "v3",
+  "required_stress_scenarios": [
+    "intensity_minus_20pct",
+    "intensity_plus_20pct",
+    "peak_shift_early",
+    "peak_shift_late",
+    "missed_second_peak",
+    "false_peak"
+  ],
+  "train_calibration_formal_consistency_checks": [
+    "schema_match",
+    "units_match",
+    "timezone_match",
+    "forecast_horizon_match",
+    "no_truth_available_to_controller"
+  ],
+  "fail_fast": true
+}

@@ -1,0 +1,31 @@
+{
+  "configs": [
+    {
+      "sensor_ratio": 0.05,
+      "label": "sr0p05",
+      "config": "E:\\RTC_sewer\\Project6\\configs\\research_sensor_sweep\\wuhan_sr0p05.yaml"
+    },
+    {
+      "sensor_ratio": 0.1,
+      "label": "sr0p10",
+      "config": "E:\\RTC_sewer\\Project6\\configs\\research_sensor_sweep\\wuhan_sr0p10.yaml"
+    },
+    {
+      "sensor_ratio": 0.15,
+      "label": "sr0p15",
+      "config": "E:\\RTC_sewer\\Project6\\configs\\research_sensor_sweep\\wuhan_sr0p15.yaml"
+    },
+    {
+      "sensor_ratio": 0.2,
+      "label": "sr0p20",
+      "config": "E:\\RTC_sewer\\Project6\\configs\\research_sensor_sweep\\wuhan_sr0p20.yaml"
+    },
+    {
+      "sensor_ratio": 0.3,
+      "label": "sr0p30",
+      "config": "E:\\RTC_sewer\\Project6\\configs\\research_sensor_sweep\\wuhan_sr0p30.yaml"
+    }
+  ],
+  "cache_dir": "E:\\RTC_sewer\\Project6\\outputs\\cache_research_mixed_gat",
+  "out_config_dir": "E:\\RTC_sewer\\Project6\\configs\\research_sensor_sweep"
+}

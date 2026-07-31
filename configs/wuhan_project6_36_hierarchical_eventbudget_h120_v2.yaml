@@ -1,0 +1,81 @@
+_inherits: configs/wuhan_project6_36_core26_residual10_eventbudget_v1.yaml
+
+# Strict 36-facility hierarchical branch.
+# Tier 0: retrofit_no_control.
+# Tier 1: frozen core26 v6/v8 engineering action templates.
+# Tier 2: residual actions on only the additional 10 retrofit assets.
+#
+# This config intentionally fails preflight while the residual10 effect model
+# has validation_gate_passed=false. That prevents silent fallback to the old
+# 36-free-action controller or the old 30 min horizon line.
+controller:
+  mode: hierarchical_core26_residual10
+  reference_policy_for_constraints: online_predicted_default
+  temporal_joint:
+    model_path: outputs/models_temporal_joint_36_tier2_residual_v8_expanded/raw_joint_36_tier2_residual_v8_expanded.pt
+    prediction_horizon_min: 120
+    prediction_horizon_steps: 24
+    move_horizon_min: 30
+    terminal_return_min: 30
+    terminal_return_steps: 6
+    candidate_search:
+      engineering_template_path: outputs/deployment_evidence/v8_26_verified_group_templates.json
+      max_candidates: 1024
+      max_simultaneous_changes: 8
+      max_change_points: 2
+      continuous_max_delta: 0.12
+      continuous_delta_levels: [0.08, 0.10, 0.12]
+      binary_pump_ids: [ADD301.2, ADD301.3]
+      binary_pump_min_dwell_steps: 2
+      max_pump_switches_per_event: 6
+      storage_interlock: true
+      max_storage_actuators: 4
+    hierarchical:
+      enabled: true
+      core26_policy_path: outputs/deployment_evidence/v8_26_verified_group_templates.json
+      legacy_model_path: outputs/models_v8_storage_variablepump/horizon_temporal_gnn.pt
+      residual10_model_path: outputs/models_temporal_joint_36_tier2_residual_v8_expanded/raw_joint_36_tier2_residual_v8_expanded.pt
+      residual10_model_report: outputs/models_temporal_joint_36_tier2_residual_v8_expanded/raw_joint_36_tier2_residual_v8_expanded_train_report.json
+      residual_validation_report: outputs/models_temporal_joint_36_tier2_residual_v8_expanded/raw_joint_36_tier2_residual_v8_expanded_train_report.json
+      require_residual_validation: true
+      uncertainty_model_path: outputs/models_v8_storage_variablepump/horizon_residual_quantile_uncertainty.npz
+      empirical_guard_path: outputs/deployment_evidence/recovered_v8_template_reliability_v2/template_reliability_rules.csv
+      residual_actuator_ids:
+        - RTC_IN_01
+        - RTC_OUT_01
+        - RTC_IN_02
+        - RTC_OUT_02
+        - RTC_IN_03
+        - RTC_OUT_03
+        - HS2512760.1
+        - gbz1.8
+        - ADD301.2
+        - ADD301.3
+    safety:
+      event_pfv_budget_enabled: true
+      event_pfv_abs_margin_m3: 100.0
+      event_pfv_rel_margin: 0.02
+      pfv_abs_margin_m3: 100.0
+      pfv_rel_margin: 0.02
+      peak_margin: 0.0
+      uncertainty_z: 0.0
+      min_tfv_lcb_reduction: 0.0
+      min_pfv_noninferiority_probability: 0.0
+      min_tfv_improvement_probability: 0.0
+      min_peak_safe_probability: 0.0
+      use_classifier_thresholds: false
+      tfv_reduction_weight: 1.6
+      peak_reduction_weight: 3500.0
+      engineering_template_bonus: 75.0
+      action_l1_penalty: 0.04
+      simultaneous_action_penalty: 0.03
+      pump_switch_penalty: 0.25
+
+outputs:
+  diagnostics: outputs/diagnostics_project6_36_hierarchical_eventbudget_h120_v2
+
+evaluation:
+  paper_policy_set:
+    - retrofit_hierarchical36
+    - no_control
+  diagnostic_policy_set: []

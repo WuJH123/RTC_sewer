@@ -1,0 +1,70 @@
+_inherits: configs/wuhan_project6_36_temporal_joint_peakfixed.yaml
+
+# Strict 36-actuator causal-effect line. PFV is a non-inferiority constraint;
+# TFV repair is optimized only after PFV and peak candidates are screened.
+controller:
+  mode: temporal_joint_36
+  reference_policy_for_constraints: online_predicted_default
+  phase_reliability:
+    require_pfv_improvement: false
+    empirical_single_action_gate: false
+    fallback_to_surrogate_without_local_evidence: false
+  temporal_joint:
+    model_path: outputs/models_temporal_joint_36_causal_effect_v3/raw_joint_36_causal_effect_v3.pt
+    predict_batch_size: 512
+    training_validation:
+      pfv_direction_tolerance_m3: 1.0
+      tfv_direction_tolerance_m3: 100.0
+      peak_direction_tolerance: 0.1
+      min_direction_samples: 30
+      target_pfv_direction_accuracy: 0.75
+      min_tfv_direction_accuracy: 0.80
+      min_peak_direction_accuracy: 0.85
+      min_rows_per_class: 8
+      min_events_per_class: 3
+      min_pfv_noninferiority_balanced_accuracy: 0.85
+      min_tfv_improvement_balanced_accuracy: 0.80
+      min_peak_safe_balanced_accuracy: 0.85
+      min_pfv_unsafe_recall: 0.90
+      min_peak_unsafe_recall: 0.90
+      max_pfv_false_safe_rate: 0.10
+      max_zero_action_relative_error: 0.005
+    candidate_search:
+      max_candidates: 1024
+      max_simultaneous_changes: 6
+      max_change_points: 2
+      continuous_max_delta: 0.20
+      continuous_delta_levels: [0.05, 0.10, 0.20]
+      binary_pump_ids: [ADD301.2, ADD301.3]
+      binary_pump_min_dwell_steps: 2
+      max_pump_switches_per_event: 6
+      storage_interlock: true
+      max_storage_actuators: 4
+    safety:
+      pfv_abs_margin_m3: 100.0
+      pfv_rel_margin: 0.02
+      peak_margin: 0.0
+      uncertainty_z: 1.645
+      min_tfv_lcb_reduction: 0.0
+      min_pfv_noninferiority_probability: 0.50
+      min_tfv_improvement_probability: 0.50
+      min_peak_safe_probability: 0.50
+    legacy_groups: []
+    paired_groups:
+      - [cc006.1, dwxh.2, ADD424.1, ADD424.2, ADD424.3, Zhongyi-2.2]
+      - [ADD424.4, ADD424.1, ADD424.2, ADD424.3]
+
+experiment_design:
+  pfv_margin_sensitivity_abs_m3: [50, 100, 200]
+  pfv_margin_sensitivity_rel: [0.005, 0.01, 0.02]
+  effect_training_excluded_splits: [calibration, formal]
+
+outputs:
+  models: outputs/models_temporal_joint_36_causal_effect_v3
+  diagnostics: outputs/diagnostics_temporal_joint_36_causal_effect_v3
+
+temporal_joint_pipeline:
+  root: outputs/project6_36_causal_effect_v3
+  base_effect_dataset: outputs/project6_36_temporal_joint_peakfixed_v1/effect_dataset/same_state_raw_joint_36_peakfixed_v1.npz
+  coverage_manifest: outputs/project6_36_causal_effect_v3/paired_plan/targeted_causal_effect_manifest.csv
+  maximum_supplement_candidate_cases: 720

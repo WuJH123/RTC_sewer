@@ -1,0 +1,9 @@
+_inherits: configs/wuhan_project6_36_temporal_joint.yaml
+experiment:
+  sensor_ratio: 0.3
+outputs:
+  cache: outputs\cache_research_mixed_gat_smoke
+  design: outputs\research_sensor_sweep_smoke/sr0p30/design
+  models: outputs\research_sensor_sweep_smoke/sr0p30/models
+  diagnostics: outputs\research_sensor_sweep_smoke/sr0p30/diagnostics
+  gat_features: outputs\research_sensor_sweep_smoke/sr0p30/gat_reconstructed_features

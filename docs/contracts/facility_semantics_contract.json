@@ -1,0 +1,73 @@
+{
+  "contract_name": "project6_v3_facility_semantics_36",
+  "network": "E:/RTC_sewer/Project6/data/wuhan_v8_storage_retrofit.inp",
+  "managed_facility_count": 36,
+  "facility_semantics_csv": "E:/RTC_sewer/Project6/data/project6_v3_facility_semantics_36.csv",
+  "general_rules": {
+    "orifice_and_weir_controls": {
+      "binary_or_continuous": "continuous",
+      "nominal_range": [0, 1],
+      "rate_limit_status": "pending_calibration",
+      "missing_flow_is_not_zero": true
+    },
+    "storage_interlock": {
+      "inlet_outlet_simultaneous_large_open_forbidden_without_hydraulic_basis": true,
+      "interlock_groups": ["storage_01", "storage_02", "storage_03"],
+      "threshold_status": "uncalibrated"
+    },
+    "native_rule_audit": {
+      "preliminary_text_reference_is_not_control_confirmation": true,
+      "native_action_clause_confirmed_requires_THEN_or_ELSE_action": true
+    }
+  },
+  "pump_semantics": {
+    "add350.1": {
+      "facility_type": "pump",
+      "pump_control_mode": "variable_speed",
+      "binary_or_continuous": "continuous",
+      "engineering_semantics_source": "user_confirmed",
+      "confirmation_status": "confirmed",
+      "residual_action_meaning": "continuous speed or speed setting",
+      "must_not_use_binary_toggle_sampling": true,
+      "must_record_target_speed_setting": true,
+      "must_record_actual_current_speed_setting": true,
+      "numerical_bounds_status": "pending_inp_and_rule_audit",
+      "lower_bound": null,
+      "upper_bound": null,
+      "residual_override_allowed": false,
+      "candidate_generation_status": "blocked_until_bounds_verified",
+      "conflict_policy": {
+        "if_inp_or_old_source_conflicts_with_user_confirmation": "engineering_contract_conflict",
+        "block_learning_candidate_until_human_resolution": true,
+        "do_not_silently_override_user_confirmation": true
+      }
+    },
+    "ADD301.2": {
+      "facility_type": "pump",
+      "pump_control_mode": "binary",
+      "binary_or_continuous": "binary",
+      "action_set": [0, 1],
+      "intermediate_setting_allowed": false,
+      "minimum_on_min": null,
+      "minimum_off_min": null,
+      "dwell_min": null,
+      "dwell_status": "uncalibrated"
+    },
+    "ADD301.3": {
+      "facility_type": "pump",
+      "pump_control_mode": "binary",
+      "binary_or_continuous": "binary",
+      "action_set": [0, 1],
+      "intermediate_setting_allowed": false,
+      "minimum_on_min": null,
+      "minimum_off_min": null,
+      "dwell_min": null,
+      "dwell_status": "uncalibrated"
+    }
+  },
+  "blocking_rules": {
+    "unresolved_pump_semantics_blocks_audit_fallbacks": true,
+    "unresolved_pump_semantics_blocks_generate_round0": true,
+    "add350_bounds_pending_blocks_residual_candidate_generation": true
+  }
+}

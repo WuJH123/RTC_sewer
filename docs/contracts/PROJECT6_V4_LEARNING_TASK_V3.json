@@ -1,0 +1,189 @@
+{
+  "contract_id": "project6_v4_learning_task_v3",
+  "task_version": "v3",
+  "purpose": "two-tier learning task: when an intervention opportunity exists (state level) and which candidate is better vs fallback (candidate level); replaces the single joint binary classifier task of pilot v2",
+  "created_at": "2026-07-28",
+  "user_authorized": true,
+  "parent_contracts": {
+    "gate_p3": "docs/contracts/PROJECT6_V4_PILOT_FEASIBILITY_GATE_P3.json",
+    "frozen_physics_thresholds_references": "inherited unchanged from gate_p3; margins and dead-zones remain modification_prohibited"
+  },
+  "gate_split_v3": {
+    "data_generation_authorization": "docs/contracts/PROJECT6_V4_DATA_GENERATION_AUTHORIZATION_V3.json",
+    "model_safety_gate": "docs/contracts/PROJECT6_V4_MODEL_SAFETY_GATE_V3.json",
+    "locked_validation_accrual": "docs/contracts/PROJECT6_V4_LOCKED_VALIDATION_ACCRUAL_V3.json",
+    "train1600_dataset": "docs/contracts/PROJECT6_V4_TRAIN1600_DATASET_V3.json",
+    "p3_verdict_preserved": "underpowered_validation (immutable, never overwritten by the gate split)"
+  },
+  "feasibility_map_inputs": {
+    "map_root": "outputs/project6_dual_reference_v4/final_v4/pilot_feasibility_p3/map",
+    "map_facts": {
+      "states_total": 32,
+      "joint_feasible_robust": 9,
+      "joint_boundary_found": 4,
+      "no_joint_found_under_budget": 18,
+      "no_pfv_safe_found": 1,
+      "execution_unresolved": 0,
+      "exact_joint_feasible_states": 9,
+      "online_generator_joint_states": 9,
+      "candidate_generator_state_recall": 1.0,
+      "joint_event_support": 4,
+      "positive_control_replay_success_rate": 1.0,
+      "p3_recommendation": "generator_recall_perfect",
+      "former_30pct_all_responsive_gate": "declared inappropriate; remaining states must not be forced to produce joints"
+    }
+  },
+  "state_level_head": {
+    "labels": [
+      "intervention_feasible_found",
+      "fallback_only_under_budget",
+      "boundary_or_uncertain",
+      "ood_or_unresolved"
+    ],
+    "label_mapping_from_feasibility_class": {
+      "joint_feasible_found": "intervention_feasible_found",
+      "joint_feasible_robust": "intervention_feasible_found",
+      "joint_boundary_found": "boundary_or_uncertain",
+      "no_joint_found_under_budget": "fallback_only_under_budget",
+      "no_pfv_safe_found": "fallback_only_under_budget",
+      "execution_unresolved": "ood_or_unresolved"
+    },
+    "allowed_inputs": [
+      "current and past 60-min hydraulic state (5-min sampled)",
+      "future H120 rainfall forecast",
+      "storage levels / headroom",
+      "actuator states (binary/VSP settings, dwell, interlocks)",
+      "priority/sentinel node risk features",
+      "downstream capacity features",
+      "graph structure"
+    ],
+    "forbidden_inputs": [
+      "exact SWMM search results or any function of them (offline labels only)",
+      "future SWMM results",
+      "reference branch outcomes not available online"
+    ],
+    "exact_search_results_role": "offline labels only, never model inputs"
+  },
+  "candidate_level_heads": {
+    "heads": [
+      "delta_pfv_h120_vs_no_control (continuous regression)",
+      "delta_tfv_h120_vs_dynamic_internal (continuous regression)",
+      "delta_peak_h120_vs_dynamic_internal (continuous regression)",
+      "12-step process residual (continuous)",
+      "pfv_safe (binary safety)",
+      "peak_noninferior (binary safety)",
+      "candidate ranking within state",
+      "uncertainty estimate",
+      "ood flag",
+      "fallback recommendation"
+    ],
+    "joint_label_policy": "joint noninferiority is composed from the continuous/safety heads (pfv_safe AND tfv delta within margin AND peak delta within margin); no standalone joint binary classifier gate"
+  },
+  "flat_policy": {
+    "confirmed_flat_samples_kept": 14,
+    "flat_event_support": 1,
+    "flat_state_role": "auxiliary mask only",
+    "response_magnitude": "continuous label (replaces flat binary as primary signal)",
+    "formal_flat_classification_head": "disabled while flat event support < 3",
+    "flat_fraction_core_gate": false,
+    "flat_not_a_train1600_blocking_gate": true,
+    "flat_confirmed_only_by_real_swmm": true
+  },
+  "dataset_v3": {
+    "sources": [
+      "pilot primary400 (frozen v1)",
+      "joint extension 60 (frozen v2)",
+      "flat auxiliary 19 (frozen v2)",
+      "feasibility map samples eligible for development training"
+    ],
+    "feasibility_samples_total": 653,
+    "feasibility_samples_by_split": {
+      "pilot_train": 417,
+      "pilot_calibration": 111,
+      "pilot_challenge": 70,
+      "pilot_validation": 55
+    },
+    "training_eligibility": {
+      "rule": "exact-search samples from calibration/validation/challenge states must never enter training; only pilot_train state search samples are training-eligible",
+      "training_eligible_feasibility_samples": 417,
+      "excluded_feasibility_samples": 236
+    },
+    "oracle_revealed_policy": {
+      "oracle_revealed_states": 12,
+      "rule": "oracle-searched non-train states must not be reused as unseen evaluation; evaluation splits are re-labelled and any state whose exact search informed development is flagged oracle_revealed",
+      "replacement_source": "if locked validation feasible states are insufficient, add unseen development validation events from the 182-event standard pool; never reuse oracle-searched states"
+    },
+    "per_state_added_columns": [
+      "state_feasibility_class",
+      "oracle_search_budget",
+      "exact_joint_found",
+      "online_joint_found",
+      "candidate_generator_hit",
+      "fallback_target",
+      "feasibility_label_validity"
+    ]
+  },
+  "pilot_gate_v3_criteria": {
+    "hard_authenticity": "100% (unchanged from gate_p3 hard gates)",
+    "core_scientific_gates": {
+      "exact_joint_feasible_states_min": 8,
+      "joint_event_support_min": 3,
+      "candidate_generator_state_recall_min": 0.8,
+      "unresolved_states_max": 0,
+      "ridge_rmse_improvement_vs_zero_min": 0.1,
+      "joint_safety_classification": {
+        "balanced_accuracy_min": 0.6,
+        "mcc_positive": true,
+        "auprc_above_positive_prevalence": true,
+        "false_safe_max": 0.2
+      },
+      "top5_feasible_recall_min": 0.8,
+      "feasible_states_in_evaluation_min": 8,
+      "fallback_only_cross_event_support_required": true,
+      "flat_fraction_core_blocking_gate": false
+    },
+    "underpowered_validation_rule": {
+      "trigger": "locked validation feasible states < 5",
+      "verdict": "underpowered_validation",
+      "consequence": "train1600 not authorized; add independent unseen development validation events from the standard pool; never reuse oracle-searched states"
+    }
+  },
+  "train1600_redesign": {
+    "authorization": "data generation is authorized by PROJECT6_V4_DATA_GENERATION_AUTHORIZATION_V3 (train1600_planning_authorized=true); the P3 verdict stays underpowered_validation and is never overwritten; model safety remains deferred under PROJECT6_V4_MODEL_SAFETY_GATE_V3; formal 1600-sample SWMM runs never start automatically",
+    "dataset_contract": "docs/contracts/PROJECT6_V4_TRAIN1600_DATASET_V3.json",
+    "target": "64 events x 5 states x 5 accepted samples = 1600",
+    "per_state_candidate_composition": {
+      "joint_feasible_state": [
+        "joint-beneficial",
+        "second-family joint",
+        "safety boundary",
+        "hard-negative",
+        "neutral/uncertainty"
+      ],
+      "fallback_only_under_budget_state": [
+        "near-reference neutral",
+        "pfv_safe but tfv-failing",
+        "peak-failing",
+        "high-response hard-negative",
+        "uncertainty/coverage-gap"
+      ]
+    },
+    "no_forced_joint_positive_per_state": true,
+    "model_must_learn": [
+      "when an intervention opportunity exists",
+      "which candidate is better",
+      "when to fall back"
+    ]
+  },
+  "prohibitions": [
+    "no exact search results as online model features",
+    "no training on calibration/validation/challenge exact-search samples",
+    "no reuse of oracle-revealed states as unseen evaluation",
+    "no modification of frozen margins or dead-zones",
+    "no automatic PlanTrain1600",
+    "no overwriting of the P3 underpowered_validation verdict",
+    "no relabelling of no_joint_found_under_budget as physically infeasible",
+    "no Active Learning on Calibration or Locked Validation results",
+    "no future SWMM results as online candidate generator inputs"
+  ]
+}

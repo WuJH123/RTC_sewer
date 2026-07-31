@@ -1,0 +1,14 @@
+_inherits: configs/wuhan_project6_36_hierarchical_residual_v7.yaml
+
+# Latest 36-actuator branch after gate relaxation and 20% sparse-sensor GAT.
+# The parent keeps the no-control PFV-noninferiority objective, smoke gate,
+# calibration/formal thresholds, and controller.gat_model_path at sr0p20.
+controller:
+  temporal_joint:
+    model_path: outputs/models_temporal_joint_36_tier2_residual_v8_expanded/raw_joint_36_tier2_residual_v8_expanded.pt
+    hierarchical:
+      residual_validation_report: outputs/models_temporal_joint_36_tier2_residual_v8_expanded/raw_joint_36_tier2_residual_v8_expanded_train_report.json
+      require_residual_validation: true
+
+outputs:
+  diagnostics: outputs/diagnostics_temporal_joint_36_tier2_residual_v8_gateupdate

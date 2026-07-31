@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://project6/contracts/PROJECT6_V4_RECOVERY_TRUTH_CONTRACT.schema.json",
+  "title": "Project6 V4 Recovery Truth Contract",
+  "type": "object",
+  "required": [
+    "contract_version",
+    "network_path",
+    "network_sha256",
+    "engineering36_canonical_order",
+    "facility_semantics",
+    "control_step_sec",
+    "control_interval_sec",
+    "prediction_horizon_min",
+    "execute_only_first_step",
+    "max_k",
+    "deterministic_prefix_replay",
+    "hotstart_forbidden_in_formal",
+    "authoritative_swmm_required",
+    "kpi_definitions",
+    "delta_convention",
+    "reference_roles",
+    "no_control_semantics",
+    "dynamic_internal_semantics",
+    "passive_semantics",
+    "hold_previous_semantics",
+    "exact_tolerances",
+    "dead_zones",
+    "future_information_contract",
+    "authoritative_swmm_contract",
+    "checkpoint_replay_contract",
+    "split_contract",
+    "conflicts_with_v3"
+  ],
+  "properties": {
+    "contract_version": {"type": "string"},
+    "network_path": {"type": "string"},
+    "network_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "engineering36_canonical_order": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "facility_semantics": {
+      "type": "object",
+      "required": ["binary_pumps", "variable_speed_pumps", "all_others"],
+      "properties": {
+        "binary_pumps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "action_set"],
+            "properties": {
+              "id": {"type": "string"},
+              "action_set": {"type": "array", "items": {"type": "number"}}
+            }
+          }
+        },
+        "variable_speed_pumps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "domain"],
+            "properties": {
+              "id": {"type": "string"},
+              "domain": {"type": "string"}
+            }
+          }
+        },
+        "all_others": {"type": "string"}
+      }
+    },
+    "control_step_sec": {"type": "integer", "const": 300},
+    "control_interval_sec": {"type": "integer", "const": 600},
+    "prediction_horizon_min": {"type": "integer", "const": 120},
+    "execute_only_first_step": {"type": "boolean", "const": true},
+    "max_k": {"type": "integer", "const": 8},
+    "deterministic_prefix_replay": {"type": "boolean", "const": true},
+    "hotstart_forbidden_in_formal": {"type": "boolean", "const": true},
+    "authoritative_swmm_required": {"type": "boolean", "const": true},
+    "kpi_definitions": {
+      "type": "object",
+      "required": ["PFV", "TFV", "Peak"],
+      "properties": {
+        "PFV": {"type": "object"},
+        "TFV": {"type": "object"},
+        "Peak": {"type": "object"}
+      }
+    },
+    "delta_convention": {"type": "string"},
+    "reference_roles": {
+      "type": "object",
+      "required": ["PFV", "TFV", "Peak"],
+      "properties": {
+        "PFV": {"type": "object"},
+        "TFV": {"type": "object"},
+        "Peak": {"type": "object"}
+      }
+    },
+    "no_control_semantics": {"type": "object"},
+    "dynamic_internal_semantics": {"type": "object"},
+    "passive_semantics": {"type": "object"},
+    "hold_previous_semantics": {"type": "object"},
+    "exact_tolerances": {"type": "object"},
+    "dead_zones": {"type": "object"},
+    "future_information_contract": {"type": "object"},
+    "authoritative_swmm_contract": {"type": "object"},
+    "checkpoint_replay_contract": {"type": "object"},
+    "split_contract": {"type": "object"},
+    "conflicts_with_v3": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["key", "v3_value", "v4_value", "reason"],
+        "properties": {
+          "key": {"type": "string"},
+          "v3_value": {},
+          "v4_value": {},
+          "reason": {"type": "string"}
+        }
+      }
+    }
+  }
+}

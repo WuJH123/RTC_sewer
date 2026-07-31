@@ -1,0 +1,24 @@
+_inherits: configs/wuhan_project6_36_causal_effect_v3.yaml
+
+# Coverage-expanded same-state causal-effect experiment. This config keeps the
+# strict 36-actuator controller semantics while isolating all new artifacts.
+controller:
+  temporal_joint:
+    model_path: outputs/models_temporal_joint_36_causal_effect_boundary_v6_round2/raw_joint_36_causal_effect_boundary_v6_round2.pt
+
+outputs:
+  # Closed-loop resolves GAT and the legacy horizon surrogate from this shared
+  # model directory. The raw-joint residual checkpoint has its own explicit path.
+  models: outputs/models_v8_storage_variablepump
+  diagnostics: outputs/diagnostics_temporal_joint_36_causal_effect_coverage_v2
+
+temporal_joint_pipeline:
+  root: outputs/project6_36_causal_effect_coverage_v2
+  base_effect_dataset: outputs/project6_36_temporal_joint_peakfixed_v1/effect_dataset/same_state_raw_joint_36_peakfixed_v1.npz
+  coverage_manifest: outputs/project6_36_causal_effect_coverage_v2/paired_plan/targeted_causal_effect_manifest.csv
+  minimum_train_events_per_feasible_cell: 5
+  minimum_validation_events_per_feasible_cell: 3
+  magnitude_levels: [0.05, 0.10, 0.20]
+  profiles_per_context: 2
+  joint_case_fraction: 0.15
+  maximum_supplement_candidate_cases: 800

@@ -1,0 +1,54 @@
+_inherits: configs/wuhan_project6_36_actual_repair_v1.yaml
+
+# Engineering-template deployment v2.
+# Compared with v1, the deployment stratum includes rainfall duration. The
+# first v1 formal20 run showed that a broad "chicago_center T20-T50" rule
+# over-controlled long-duration events. This branch keeps the frozen action
+# templates, but only generalizes them to the short/mid-duration center storms
+# where the hydraulic response is closest to the evidence events.
+controller:
+  temporal_joint:
+    candidate_search:
+      max_candidates: 768
+      max_simultaneous_changes: 8
+      max_change_points: 2
+      continuous_max_delta: 0.12
+      continuous_delta_levels: [0.05, 0.10, 0.12]
+      binary_pump_ids: [ADD301.2, ADD301.3]
+      binary_pump_min_dwell_steps: 2
+      max_pump_switches_per_event: 6
+      storage_interlock: true
+      max_storage_actuators: 4
+      engineering_template_path: outputs/deployment_evidence/engineering_templates_tfv_boost_profile_v1.json
+    deployment_reliability:
+      evidence_csv: outputs/deployment_evidence/actual_repair_v1_tfv_boost_profile_windows.csv
+      require_evidence: true
+      time_tolerance_min: 0.25
+      stratum_rules:
+        - patterns: [chicago_center]
+          return_period_min: 20
+          return_period_max: 75
+          duration_min: 75
+          duration_max: 150
+        - patterns: [chicago_center]
+          return_period_min: 50
+          return_period_max: 75
+          durations_min: [210]
+    safety:
+      pfv_abs_margin_m3: 100.0
+      pfv_rel_margin: 0.02
+      peak_margin: 0.0
+      uncertainty_z: 0.0
+      min_tfv_lcb_reduction: 0.0
+      use_classifier_thresholds: false
+      tfv_reduction_weight: 1.0
+      peak_reduction_weight: 2500.0
+      engineering_template_bonus: 1000.0
+      action_l1_penalty: 0.02
+      simultaneous_action_penalty: 0.01
+      pump_switch_penalty: 0.05
+    hierarchical:
+      require_residual_validation: false
+
+outputs:
+  diagnostics: outputs/diagnostics_temporal_joint_36_engineering_templates_v2

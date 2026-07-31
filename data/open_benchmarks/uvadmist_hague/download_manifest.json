@@ -1,0 +1,23 @@
+[
+  {
+    "file": "hague_v22_passive.inp",
+    "url": "https://raw.githubusercontent.com/UVAdMIST/swmm_wq_rl/main/swmm_models/hague_v22_passive.inp",
+    "path": "E:\\RTC_sewer\\Project5\\data\\open_benchmarks\\uvadmist_hague\\hague_v22_passive.inp",
+    "status": "downloaded",
+    "bytes": 5788442
+  },
+  {
+    "file": "hague_v22_simpleRBC.inp",
+    "url": "https://raw.githubusercontent.com/UVAdMIST/swmm_wq_rl/main/swmm_models/hague_v22_simpleRBC.inp",
+    "path": "E:\\RTC_sewer\\Project5\\data\\open_benchmarks\\uvadmist_hague\\hague_v22_simpleRBC.inp",
+    "status": "downloaded",
+    "bytes": 5788442
+  },
+  {
+    "file": "hague_v22_simpleRBC_hs.inp",
+    "url": "https://raw.githubusercontent.com/UVAdMIST/swmm_wq_rl/main/swmm_models/hague_v22_simpleRBC_hs.inp",
+    "path": "E:\\RTC_sewer\\Project5\\data\\open_benchmarks\\uvadmist_hague\\hague_v22_simpleRBC_hs.inp",
+    "status": "downloaded",
+    "bytes": 5788496
+  }
+]

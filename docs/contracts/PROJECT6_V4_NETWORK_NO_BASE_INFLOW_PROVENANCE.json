@@ -1,0 +1,19 @@
+{
+  "contract_version": "project6_v4_network_no_base_inflow_v1",
+  "created_at": "2026-07-26",
+  "active_network": "E:/RTC_sewer/Project6/data/wuhan_v8_storage_retrofit.inp",
+  "active_network_sha256": "c44b315c31b901b188b62f001521e89ce025c2259a0c5a6ec74cf356dde4f2ca",
+  "preserved_original": "E:/RTC_sewer/Project6/data/wuhan_v8_storage_retrofit_original_with_base_inflow_7ea1e133.inp",
+  "preserved_original_sha256": "7ea1e1336c4e758f73b4e67bb8dca4fe972900f05c5d825c4ae9fbdaa52670fe",
+  "removed_inp_sections": [
+    "sanitary base inflow section",
+    "three patterns used exclusively by that section"
+  ],
+  "removed_pattern_ids": [
+    "Hourly_HXH",
+    "Hourly_JCH",
+    "A-380L_Day"
+  ],
+  "other_network_content_changed": false,
+  "active_gate5r_config": "E:/RTC_sewer/Project6/configs/wuhan_project6_v4_gate5r.yaml"
+}

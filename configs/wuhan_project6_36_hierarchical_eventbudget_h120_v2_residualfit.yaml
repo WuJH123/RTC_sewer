@@ -1,0 +1,14 @@
+_inherits: configs/wuhan_project6_36_hierarchical_eventbudget_h120_v2.yaml
+
+controller:
+  temporal_joint:
+    model_path: outputs/models_hierarchical_residual10_h120_v2/raw_joint_residual10_core_h120_v1.pt
+    hierarchical:
+      residual10_model_path: outputs/models_hierarchical_residual10_h120_v2/raw_joint_residual10_core_h120_v1.pt
+      residual10_model_report: outputs/models_hierarchical_residual10_h120_v2/raw_joint_residual10_core_h120_v1_train_report.json
+      residual_validation_report: outputs/models_hierarchical_residual10_h120_v2/raw_joint_residual10_core_h120_v1_train_report.json
+      uncertainty_model_path: outputs/models_hierarchical_residual10_h120_v2/raw_joint_residual10_core_h120_v1_conformal_uncertainty.json
+      empirical_guard_path: outputs/project6_36_residual10_core_paired_h120_v1/empirical_guard/residual10_fit_only_empirical_guard.csv
+
+outputs:
+  diagnostics: outputs/diagnostics_project6_36_hierarchical_eventbudget_h120_v2_residualfit

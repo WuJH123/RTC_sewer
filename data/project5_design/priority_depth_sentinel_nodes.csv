@@ -1,0 +1,3 @@
+sentinel_rank,node_id,role,x,y,max_depth,invert,mean_internal_highrisk_pfv,flood_events,event_count,high_fill_event_count,max_fill_ratio_proxy,median_event_max_fill_ratio_proxy,note
+1,MH0200770,depth_surcharge_sentinel,522913.125,384266.759,2.43,21.24,18.19612401279911,47,80,80,1.0,1.0,low PFV contribution but persistent high water-level/full-pipe proxy
+2,HS1355904,depth_surcharge_sentinel,525438.521,389017.589,3.49,17.28,1.448438857642914,7,80,29,1.0,0.8831,external waterlogging-sensitive node retained for depth/surcharge monitoring

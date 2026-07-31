@@ -1,0 +1,89 @@
+_inherits: configs/wuhan_project6_v8_storage.yaml
+
+# Isolated 36-facility Project6-v8 retraining line.
+# The 109-dimensional registry is retained for action-index compatibility,
+# while trajectory generation and closed-loop execution use only the explicit
+# 26 v8 assets plus the 10 audited storage/regulator/pump assets.
+network:
+  inp: data/wuhan_v8_storage_retrofit.inp
+  control_enabled_actuator_ids_file: data/project6_v8_storage_retrofit_control_enabled_ids.txt
+  retrofit_asset_manifest: data/project6_v8_storage_retrofit_assets.csv
+
+controller:
+  actuator_scope: control_enabled
+  existing_assets_only: false
+  allow_virtual_assets: false
+  pump_control_mode: binary_unless_verified
+  regulator_control_mode: continuous
+  # The two ADD301 pump links are binary SWMM pumps (their INP rows are OFF
+  # and have no verified variable-speed setting). add350.1 is retained as the
+  # only previously verified continuous pump in the v8 line.
+  variable_speed_pump_ids: [add350.1]
+  reference_policy_for_constraints: online_predicted_default
+  phase_reliability:
+    exact_local_csv: ""
+    empirical_single_action_gate: false
+  repair_reliable_action_filter:
+    enabled: false
+  storage_retrofit:
+    enabled: true
+    asset_manifest: data/project6_v8_storage_retrofit_assets.csv
+    max_simultaneous_storage_actuators: 4
+    max_total_active_actuators: 15
+    inlet_outlet_incompatible_action_constraint: true
+    storage_empty_full_guard: true
+    downstream_surcharge_interlock: true
+
+training:
+  cache_reference_policies: [no_control]
+
+rainfall:
+  formal_rain_ids: [T5, T10, T20, T30, T50, T75, T100]
+  formal_durations: [75, 105, 150, 210, 240, 300]
+  formal_patterns: [chicago_center, chicago_early, chicago_late, block, double_peak]
+
+outputs:
+  audit: outputs/audit_v8_storage_36
+  network: outputs/network_v8_storage_36
+  design: outputs/design_v8_storage_36
+  rainfall: outputs/rainfall_library_v8_storage_36
+  data_bank_train: outputs/data_bank_train_v8_storage_36
+  cache: outputs/cache_v8_storage_36
+  models: outputs/models_v8_storage_36
+  diagnostics: outputs/diagnostics_v8_storage_36
+  surrogate: outputs/surrogate_v8_storage_36
+  gat_features: outputs/gat_reconstructed_features_v8_storage_36
+  closed_loop: outputs/closed_loop_paired_no_controls
+
+storage_retrofit:
+  run_tag: project6_v8_storage_36_full_v1
+  original_v8_control_table: outputs/closed_loop_paired_no_controls/formal/project6_no_control_repair_formal_30_v8/control_actuator_table.csv
+  selected_new_assets: 10
+  training_reuse_mode: fresh_36_scope_retraining
+  no_new_nodes: true
+
+horizon_surrogate:
+  output_dataset: data/surrogate_v8_storage_36/horizon_mpc_dataset.parquet
+  fallback_output_dataset: data/surrogate_v8_storage_36/horizon_mpc_dataset.csv
+  model_kind: temporal_gnn
+  enforce_validation_gate: true
+
+evaluation:
+  paper_policy_set:
+    - proposed_gat_mpc
+    - no_control
+    - internal_rules
+    - efd_storage_priority
+    - auto_rbc
+  diagnostic_policy_set:
+    - all_open
+    - all_closed_safe
+    - efd_static
+    - random_safe
+  no_control_repair_gate:
+    min_high_risk_events: 20
+    superiority_policies:
+      - internal_rules
+      - efd_storage_priority
+      - auto_rbc
+

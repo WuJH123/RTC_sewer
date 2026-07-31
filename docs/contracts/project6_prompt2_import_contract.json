@@ -1,0 +1,8 @@
+{
+  "contract_version": "project6_prompt2_import_contract_v1",
+  "requires_prompt2_readiness_pass": true,
+  "requires_independent_holdout_robustness_pass": true,
+  "requires_node_level_7frame_state_validation": true,
+  "round0_unlock_allowed": false,
+  "gat_holdout_use": "state_estimation_validation_only"
+}
