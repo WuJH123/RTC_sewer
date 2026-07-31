@@ -9,7 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from sewerrtc.v4.v42_r0_paper_dataset import build_r0_paper_dataset
+from sewerrtc.v4.v42_r0_paper_dataset_strict import build_r0_paper_dataset_strict
 
 
 def main() -> int:
@@ -41,7 +41,7 @@ def main() -> int:
     )
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    result = build_r0_paper_dataset(
+    result = build_r0_paper_dataset_strict(
         project_root=args.project_root,
         physical_manifest=args.r0_dir / "reusable_pool_manifest.parquet",
         case_manifest=args.r0_dir / "reusable_case_manifest.parquet",
@@ -57,6 +57,7 @@ def main() -> int:
                 "accepted_count": result.accepted_count,
                 "rejected_count": result.rejected_count,
                 "sample_lineage_sha256": result.lineage_sha256,
+                "formal_target_domain_only": True,
             },
             indent=2,
         )
