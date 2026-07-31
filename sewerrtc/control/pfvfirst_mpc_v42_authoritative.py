@@ -1,9 +1,9 @@
 """Authoritative adapters around the V4.2 PFV-first selector.
 
-The selector intentionally operates on already-audited candidates.  Formal use
-must therefore derive K/engineering status from the projected action and retain
-post-write readback evidence instead of letting arbitrary caller booleans stand
-in for the engineering guard layer.
+Formal V4.2 use must derive K/engineering status from the projected action,
+retain post-write readback evidence, and enforce the frozen H12 x Engineering36
+shape. Arbitrary caller booleans or differently shaped action arrays cannot
+stand in for the engineering contract.
 """
 from __future__ import annotations
 
@@ -12,14 +12,12 @@ from typing import Mapping
 
 import numpy as np
 
-from .pfvfirst_mpc_v42 import (
-    EngineeringStatus,
-    MPCandidate,
-    MPCDecision,
-)
+from .pfvfirst_mpc_v42 import EngineeringStatus, MPCandidate, MPCDecision
 
 
 REQUIRED_ENGINEERING_CHECKS = ("bounds", "rate", "ramp", "dwell", "interlock")
+FORMAL_HORIZON_STEPS = 12
+FORMAL_FACILITY_COUNT = 36
 
 
 @dataclass(frozen=True)
@@ -63,6 +61,8 @@ class ExecutionReadbackAudit:
             "engineering_status_derived_from_execution": True,
             "changed_facilities_derived_from_executed_action": True,
             "readback_verified": self.passed,
+            "horizon_steps": FORMAL_HORIZON_STEPS,
+            "facility_count": FORMAL_FACILITY_COUNT,
         }
 
 
@@ -77,10 +77,20 @@ def _vector(name: str, value: np.ndarray, n: int | None = None) -> np.ndarray:
     return arr
 
 
-def _sequence(value: np.ndarray) -> np.ndarray:
+def _sequence(
+    value: np.ndarray,
+    *,
+    expected_horizon_steps: int = FORMAL_HORIZON_STEPS,
+    expected_facility_count: int = FORMAL_FACILITY_COUNT,
+) -> np.ndarray:
     arr = np.asarray(value, dtype=float)
-    if arr.ndim != 2 or arr.shape[0] < 1 or arr.shape[1] < 1:
+    if arr.ndim != 2:
         raise ValueError("projected action sequence must be [H,A]")
+    expected = (int(expected_horizon_steps), int(expected_facility_count))
+    if arr.shape != expected:
+        raise ValueError(
+            f"formal V4.2 projected action sequence must be {expected}, got {arr.shape}"
+        )
     if not np.isfinite(arr).all():
         raise ValueError("projected action sequence contains NaN/Inf")
     return arr
@@ -108,13 +118,9 @@ def build_authoritative_mpc_candidate(
     changed_atol: float = 1.0e-9,
     metadata: Mapping[str, object] | None = None,
 ) -> MPCandidate:
-    """Build a selector candidate from projected action + guard evidence.
-
-    K is derived from the projected first action relative to the frozen/current
-    anchor; callers cannot supply a self-asserted changed-facility count.
-    """
+    """Build a formal H12 x Engineering36 candidate from guard evidence."""
     sequence = _sequence(projected_action_sequence)
-    anchor = _vector("anchor_action", anchor_action, sequence.shape[1])
+    anchor = _vector("anchor_action", anchor_action, FORMAL_FACILITY_COUNT)
     changed = _changed(sequence[0], anchor, changed_atol)
     engineering = guard_evidence.engineering_status()
     meta = dict(metadata or {})
@@ -124,6 +130,8 @@ def build_authoritative_mpc_candidate(
             "engineering_guard_contract_sha256": guard_evidence.contract_sha256,
             "changed_facilities_authority": "derived_from_projected_first_action_vs_anchor",
             "anchor_action": anchor.tolist(),
+            "formal_horizon_steps": FORMAL_HORIZON_STEPS,
+            "formal_facility_count": FORMAL_FACILITY_COUNT,
         }
     )
     return MPCandidate(
@@ -153,11 +161,14 @@ def audit_executed_decision_readback(
     max_changed_facilities: int = 8,
     atol: float = 1.0e-6,
 ) -> ExecutionReadbackAudit:
-    """Verify the selected first action is what was written and read back."""
-    execute = _vector("decision.execute_action", decision.execute_action)
-    anchor = _vector("anchor_action", anchor_action, execute.size)
-    written = _vector("written_action", written_action, execute.size)
-    readback = _vector("readback_action", readback_action, execute.size)
+    """Verify that the H12/Engineering36 first action was written and read back."""
+    selected_sequence = _sequence(decision.selected_sequence)
+    execute = _vector("decision.execute_action", decision.execute_action, FORMAL_FACILITY_COUNT)
+    if not np.allclose(execute, selected_sequence[0], atol=atol, rtol=0.0):
+        raise ValueError("decision.execute_action differs from selected_sequence[0]")
+    anchor = _vector("anchor_action", anchor_action, FORMAL_FACILITY_COUNT)
+    written = _vector("written_action", written_action, FORMAL_FACILITY_COUNT)
+    readback = _vector("readback_action", readback_action, FORMAL_FACILITY_COUNT)
     reasons: list[str] = []
     if not np.allclose(execute, written, atol=atol, rtol=0.0):
         reasons.append("selected_action_differs_from_written_action")
