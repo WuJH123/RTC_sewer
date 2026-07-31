@@ -10,8 +10,8 @@ from sewerrtc.v4.v42_case_alignment_audit import audit_case_alignment
 def main() -> int:
     parser = argparse.ArgumentParser()
     default_dir = Path(
-        r"E:\RTC_sewer\Project6\outputs\project6_dual_reference_v4\"
-        r"final_v4\v42_paper\data_reuse"
+        r"E:\RTC_sewer\Project6\outputs\project6_dual_reference_v4"
+        r"\final_v4\v42_paper\data_reuse"
     )
     parser.add_argument("--project-root", type=Path, default=Path(r"E:\RTC_sewer\Project6"))
     parser.add_argument("--audit-dir", type=Path, default=default_dir)

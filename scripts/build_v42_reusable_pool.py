@@ -11,8 +11,8 @@ from sewerrtc.v4.v42_reusable_pool import build_reusable_paper_pool
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Build target-masked reusable V4.2 manifests")
     default_root = Path(
-        r"E:\RTC_sewer\Project6\outputs\project6_dual_reference_v4\"
-        r"final_v4\v42_paper\data_reuse"
+        r"E:\RTC_sewer\Project6\outputs\project6_dual_reference_v4"
+        r"\final_v4\v42_paper\data_reuse"
     )
     p.add_argument("--audit-dir", type=Path, default=default_root)
     p.add_argument("--exclude-source-domain", action="store_true")

@@ -93,6 +93,23 @@ def _max_abs(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.max(np.abs(a - b))) if a.size else 0.0
 
 
+def _read_detail_for_alignment(detail_path: Path, cache: dict) -> pd.DataFrame:
+    """Read alignment-relevant columns from a detail file, with path-level cache."""
+    key = str(detail_path)
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+    header_cols = list(pd.read_csv(detail_path, nrows=0).columns)
+    needed = ["elapsed_min", "rainfall_mm_h"]
+    for col in header_cols:
+        cs = str(col)
+        if cs.startswith("h:") or cs.startswith("storage_volume:") or cs.startswith("flow:") or cs.startswith("setting:"):
+            needed.append(cs)
+    df = pd.read_csv(detail_path, usecols=needed, engine="c")
+    cache[key] = df
+    return df
+
+
 def audit_case_alignment(
     *,
     project_root: str | Path,
@@ -120,8 +137,14 @@ def audit_case_alignment(
         for row in physical.itertuples(index=False)
     }
 
+    detail_cache: dict[str, pd.DataFrame] = {}
     results: list[CaseAlignmentResult] = []
-    for case in cases.itertuples(index=False):
+    total_cases = len(cases)
+    for case_idx, case in enumerate(cases.itertuples(index=False)):
+        if case_idx % 50 == 0 and case_idx > 0:
+            import sys as _sys
+            _sys.stderr.write(f"[R0.3] {case_idx}/{total_cases} cases processed\n")
+            _sys.stderr.flush()
         case_uid = str(getattr(case, "case_uid"))
         checkpoint_raw = getattr(case, "checkpoint_min", None)
         checkpoint = None if checkpoint_raw is None or pd.isna(checkpoint_raw) else float(checkpoint_raw)
@@ -144,7 +167,8 @@ def audit_case_alignment(
             ]
             arrays: dict[str, dict[str, np.ndarray]] = {}
             for role in FOUR_ROLES:
-                detail = pd.read_csv(Path(role_map[role].detail_path))
+                detail_path = Path(role_map[role].detail_path)
+                detail = _read_detail_for_alignment(detail_path, detail_cache)
                 history = _select_times(detail, history_times)
                 future = _select_times(detail, future_times)
                 if "rainfall_mm_h" not in future.columns:

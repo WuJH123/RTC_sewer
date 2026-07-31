@@ -27,8 +27,8 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--output-dir",
         default=(
-            r"E:\RTC_sewer\Project6\outputs\project6_dual_reference_v4\"
-            r"final_v4\v42_paper\data_reuse"
+            r"E:\RTC_sewer\Project6\outputs\project6_dual_reference_v4"
+            r"\final_v4\v42_paper\data_reuse"
         ),
     )
     p.add_argument(
@@ -44,10 +44,14 @@ def _parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = _parser().parse_args()
+    # Since the single-pass reader already loads the full CSV into memory,
+    # the finite check is essentially free.  Always enable it so that R0.1
+    # and R0.2 are combined into one I/O pass.
+    full_finite = True
     result = audit_existing_swmm_pool(
         project_root=Path(args.project_root),
         outputs_root=Path(args.outputs_root),
-        full_finite_check=bool(args.full_finite_check),
+        full_finite_check=full_finite,
     )
     paths = write_existing_pool_audit(result, Path(args.output_dir))
     payload = dict(result.summary)

@@ -82,23 +82,33 @@ def _window_anchor_count(detail_path: str | Path) -> int:
     elapsed = pd.to_numeric(
         pd.read_csv(path, usecols=["elapsed_min"])["elapsed_min"], errors="coerce"
     ).to_numpy(float)
+    return _window_anchor_count_from_elapsed(elapsed)
+
+
+def _window_anchor_count_from_elapsed(elapsed: np.ndarray) -> int:
+    """Vectorised window-anchor count from an in-memory elapsed array."""
     if not np.isfinite(elapsed).all() or len(elapsed) == 0:
         return 0
     values = np.unique(elapsed)
+    if len(values) == 0:
+        return 0
+    history_offsets = np.array(
+        [-(N_HISTORY_FRAMES - 1 - i) * HISTORY_INTERVAL_MIN for i in range(N_HISTORY_FRAMES)]
+    )
+    future_offsets = np.array([(i + 1) * HORIZON_INTERVAL_MIN for i in range(N_HORIZON_STEPS)])
+    needed = np.concatenate([
+        values[:, None] + history_offsets[None, :],
+        values[:, None] + future_offsets[None, :],
+    ], axis=1)
+    sorted_vals = np.sort(values)
+    indices = np.searchsorted(sorted_vals, needed)
 
-    def has_time(value: float) -> bool:
-        return bool(np.any(np.isclose(values, value, atol=TIME_ATOL_MIN, rtol=0.0)))
+    def _close_at(idx_arr: np.ndarray) -> np.ndarray:
+        clipped = np.clip(idx_arr, 0, len(sorted_vals) - 1)
+        return np.isclose(sorted_vals[clipped], needed, atol=TIME_ATOL_MIN, rtol=0.0)
 
-    count = 0
-    for center in values:
-        history = [
-            center - (N_HISTORY_FRAMES - 1 - i) * HISTORY_INTERVAL_MIN
-            for i in range(N_HISTORY_FRAMES)
-        ]
-        future = [center + (i + 1) * HORIZON_INTERVAL_MIN for i in range(N_HORIZON_STEPS)]
-        if all(has_time(float(x)) for x in history) and all(has_time(float(x)) for x in future):
-            count += 1
-    return count
+    valid = _close_at(indices) | _close_at(indices - 1)
+    return int(np.all(valid, axis=1).sum())
 
 
 def build_reusable_paper_pool(
@@ -200,13 +210,21 @@ def build_reusable_paper_pool(
         physical_view[target] = _bool_series(physical_view, source)
     physical_view["mask_finite"] = _bool_series(physical_view, "available_finite_pass")
 
-    anchor_counts: list[int] = []
-    for row in physical_view.itertuples(index=False):
-        if bool(getattr(row, "mask_history")) and bool(getattr(row, "mask_horizon")):
-            anchor_counts.append(1)
-        else:
-            anchor_counts.append(_window_anchor_count(str(getattr(row, "detail_path"))))
-    physical_view["window_anchor_count"] = anchor_counts
+    # Use pre-computed window_anchor_count from R0.1 inventory when available.
+    if "window_anchor_count" in physical_view.columns:
+        physical_view["window_anchor_count"] = (
+            pd.to_numeric(physical_view["window_anchor_count"], errors="coerce")
+            .fillna(0)
+            .astype(int)
+        )
+    else:
+        anchor_counts: list[int] = []
+        for row in physical_view.itertuples(index=False):
+            if bool(getattr(row, "mask_history")) and bool(getattr(row, "mask_horizon")):
+                anchor_counts.append(1)
+            else:
+                anchor_counts.append(_window_anchor_count(str(getattr(row, "detail_path"))))
+        physical_view["window_anchor_count"] = anchor_counts
     physical_view["windowable_13x12"] = physical_view["window_anchor_count"].astype(int) > 0
 
     physical_view["eligible_dynamics_pretrain"] = (

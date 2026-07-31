@@ -23,9 +23,15 @@ modifies historical evidence.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import math
+import os
 import re
+import sys
+import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from enum import Enum
 from pathlib import Path
@@ -128,6 +134,7 @@ class PhysicalRunRecord:
     target: TargetAvailability
     missing_target_groups: tuple[str, ...]
     audit_reasons: tuple[str, ...]
+    window_anchor_count: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         row = asdict(self)
@@ -200,6 +207,49 @@ def _sha256_file(path: Path, chunk_size: int = 4 * 1024 * 1024) -> str:
                 yield block
 
     return _sha256_bytes(chunks())
+
+
+def _window_anchor_count_from_elapsed(elapsed: np.ndarray) -> int:
+    """Count valid 13x5+12x10 window centers from an in-memory elapsed array."""
+    if elapsed is None or len(elapsed) == 0:
+        return 0
+    if not np.isfinite(elapsed).all():
+        return 0
+    values = np.unique(elapsed)
+    if len(values) == 0:
+        return 0
+    history_offsets = np.array(
+        [-(N_HISTORY_FRAMES - 1 - i) * HISTORY_INTERVAL_MIN for i in range(N_HISTORY_FRAMES)]
+    )
+    future_offsets = np.array([(i + 1) * HORIZON_INTERVAL_MIN for i in range(N_HORIZON_STEPS)])
+    needed = np.concatenate([
+        values[:, None] + history_offsets[None, :],
+        values[:, None] + future_offsets[None, :],
+    ], axis=1)
+    sorted_vals = np.sort(values)
+    indices = np.searchsorted(sorted_vals, needed)
+    # Check both idx and idx-1 since the closest value might be on either side.
+    def _close_at(idx_arr: np.ndarray) -> np.ndarray:
+        clipped = np.clip(idx_arr, 0, len(sorted_vals) - 1)
+        return np.isclose(sorted_vals[clipped], needed, atol=TIME_ATOL_MIN, rtol=0.0)
+    valid = _close_at(indices)
+    valid_prev = _close_at(indices - 1)
+    valid = valid | valid_prev
+    return int(np.all(valid, axis=1).sum())
+
+
+def _read_file_once(path: Path, chunk_size: int = 4 * 1024 * 1024) -> tuple[str, bytes]:
+    """Read file once, return (sha256, raw_bytes)."""
+    h = hashlib.sha256()
+    parts: list[bytes] = []
+    with path.open("rb") as f:
+        while True:
+            block = f.read(chunk_size)
+            if not block:
+                break
+            h.update(block)
+            parts.append(block)
+    return h.hexdigest(), b"".join(parts)
 
 
 def _sha256_text(text: str) -> str:
@@ -307,22 +357,31 @@ def _branch_detail_from_completion(
     return out
 
 
-def _action_sha(path: Path, facility_ids: list[str]) -> str:
+def _action_sha(path: Path, facility_ids: list[str], _df: pd.DataFrame | None = None) -> str:
     """Hash the authoritative readback action sequence if available.
 
     Empty string means the historical file has no complete Engineering36
     readback contract; it is never replaced by requested actions.
     """
-    header = pd.read_csv(path, nrows=0)
+    if _df is not None:
+        header = _df.iloc[:0]
+    else:
+        header = pd.read_csv(path, nrows=0)
     lookup = {str(c)[len("setting:"):].casefold(): str(c) for c in header.columns if str(c).startswith("setting:")}
     required = [lookup.get(fid.casefold()) for fid in facility_ids]
     if any(c is None for c in required):
         return ""
     usecols = [str(c) for c in required]
-    if "elapsed_min" in header.columns:
-        usecols = ["elapsed_min"] + usecols
-    df = pd.read_csv(path, usecols=usecols)
-    numeric = df.apply(pd.to_numeric, errors="coerce")
+    if _df is not None:
+        if not all(c in _df.columns for c in usecols):
+            return ""
+        numeric = _df[usecols].apply(pd.to_numeric, errors="coerce")
+    else:
+        read_cols = usecols[:]
+        if "elapsed_min" in header.columns:
+            read_cols = ["elapsed_min"] + read_cols
+        df = pd.read_csv(path, usecols=read_cols)
+        numeric = df.apply(pd.to_numeric, errors="coerce")
     if numeric.isna().any().any():
         return ""
     arr = numeric.to_numpy(dtype=np.float64)
@@ -368,17 +427,24 @@ def _depth_semantics(
     *,
     node_ids: list[str],
     invert_by_id: dict[str, float],
+    _df: pd.DataFrame | None = None,
 ) -> str:
     """Determine whether h is depth and head is hydraulic head from real values."""
-    header = pd.read_csv(path, nrows=0)
-    lookup = _casefold_columns(header.columns)
+    if _df is not None:
+        lookup = _casefold_columns(_df.columns)
+    else:
+        header = pd.read_csv(path, nrows=0)
+        lookup = _casefold_columns(header.columns)
     sample_ids = [x for x in node_ids if f"h:{x}".casefold() in lookup and f"head:{x}".casefold() in lookup][:8]
     if not sample_ids:
         return "unknown"
     usecols: list[str] = []
     for nid in sample_ids:
         usecols.extend([lookup[f"h:{nid}".casefold()], lookup[f"head:{nid}".casefold()]])
-    df = pd.read_csv(path, usecols=usecols, nrows=32)
+    if _df is not None:
+        df = _df[usecols].head(32)
+    else:
+        df = pd.read_csv(path, usecols=usecols, nrows=32)
     diffs_a: list[float] = []
     diffs_b: list[float] = []
     for nid in sample_ids:
@@ -400,13 +466,16 @@ def _depth_semantics(
     return "ambiguous"
 
 
-def _time_coverage(path: Path, checkpoint_min: float | None) -> tuple[bool, bool]:
+def _time_coverage(path: Path, checkpoint_min: float | None, _elapsed: np.ndarray | None = None) -> tuple[bool, bool]:
     if checkpoint_min is None:
         return False, False
-    header = pd.read_csv(path, nrows=0)
-    if "elapsed_min" not in header.columns:
-        return False, False
-    elapsed = pd.to_numeric(pd.read_csv(path, usecols=["elapsed_min"])["elapsed_min"], errors="coerce").to_numpy(float)
+    if _elapsed is not None:
+        elapsed = _elapsed
+    else:
+        header = pd.read_csv(path, nrows=0)
+        if "elapsed_min" not in header.columns:
+            return False, False
+        elapsed = pd.to_numeric(pd.read_csv(path, usecols=["elapsed_min"])["elapsed_min"], errors="coerce").to_numpy(float)
     if not np.isfinite(elapsed).all():
         return False, False
     history_times = np.asarray(
@@ -427,14 +496,17 @@ def _time_coverage(path: Path, checkpoint_min: float | None) -> tuple[bool, bool
     return present(history_times), present(future_times)
 
 
-def _finite_target_check(path: Path, expected: dict[str, list[str]]) -> bool:
+def _finite_target_check(path: Path, expected: dict[str, list[str]], _df: pd.DataFrame | None = None) -> bool:
     """Full finite check for columns that are actually present.
 
     Callers can disable this expensive pass during inventory discovery.  A
     metadata-only result is never represented as a finite scientific pass.
     """
-    header = pd.read_csv(path, nrows=0)
-    lookup = _casefold_columns(header.columns)
+    if _df is not None:
+        lookup = _casefold_columns(_df.columns)
+    else:
+        header = pd.read_csv(path, nrows=0)
+        lookup = _casefold_columns(header.columns)
     cols: list[str] = []
     for names in expected.values():
         for name in names:
@@ -444,6 +516,9 @@ def _finite_target_check(path: Path, expected: dict[str, list[str]]) -> bool:
     cols = sorted(set(cols))
     if not cols:
         return False
+    if _df is not None:
+        numeric = _df[cols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+        return bool(np.isfinite(numeric).all())
     for chunk in pd.read_csv(path, usecols=cols, chunksize=64):
         numeric = chunk.apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
         if not np.isfinite(numeric).all():
@@ -472,9 +547,13 @@ def _audit_target_availability(
     incoming_links: dict[str, list[str]],
     checkpoint_min: float | None,
     full_finite_check: bool,
+    _df: pd.DataFrame | None = None,
 ) -> tuple[TargetAvailability, tuple[str, ...]]:
-    header = pd.read_csv(path, nrows=0)
-    lookup = _casefold_columns(header.columns)
+    if _df is not None:
+        lookup = _casefold_columns(_df.columns)
+    else:
+        header = pd.read_csv(path, nrows=0)
+        lookup = _casefold_columns(header.columns)
     expected = _target_columns(
         node_ids=node_ids,
         storage_ids=storage_ids,
@@ -482,15 +561,18 @@ def _audit_target_availability(
         outfall_ids=outfall_ids,
     )
     present = {name: _all_columns_present(lookup, cols) for name, cols in expected.items()}
-    history_complete, horizon_complete = _time_coverage(path, checkpoint_min)
-    semantics = _depth_semantics(path, node_ids=node_ids, invert_by_id=invert_by_id)
+    elapsed = None
+    if _df is not None and "elapsed_min" in _df.columns:
+        elapsed = pd.to_numeric(_df["elapsed_min"], errors="coerce").to_numpy(float)
+    history_complete, horizon_complete = _time_coverage(path, checkpoint_min, _elapsed=elapsed)
+    semantics = _depth_semantics(path, node_ids=node_ids, invert_by_id=invert_by_id, _df=_df)
     incoming_ok = bool(outfall_ids)
     for outfall in outfall_ids:
         links = incoming_links.get(outfall.casefold(), [])
         if not links or not all(f"flow:{link}".casefold() in lookup for link in links):
             incoming_ok = False
             break
-    finite_pass = _finite_target_check(path, expected) if full_finite_check else False
+    finite_pass = _finite_target_check(path, expected, _df=_df) if full_finite_check else False
     target = TargetAvailability(
         node_depth=present["node_depth"],
         hydraulic_head=present["hydraulic_head"],
@@ -563,10 +645,40 @@ def _completion_payload(path: Path) -> dict[str, Any]:
         return {}
 
 
+# Directories that must never contribute to the reusable pool.
+_SKIP_DIR_NAMES = frozenset({
+    "formal_blind", "challenge", "formal_evaluation",
+    "locked_validation_b_timeseries", "calibration_a_timeseries",
+})
+
+
+def _walk_skip_dir(dirpath: str) -> bool:
+    """Return True if this directory should be pruned from discovery."""
+    parts = dirpath.replace("\\", "/").lower().split("/")
+    return bool(_SKIP_DIR_NAMES & set(parts))
+
+
+def _fast_rglob(root: Path, pattern: str) -> list[Path]:
+    """Fast recursive glob that prunes reserved directories."""
+    results: list[Path] = []
+    root_str = str(root.resolve())
+    for dirpath, dirnames, filenames in os.walk(root_str):
+        # Prune reserved / irrelevant subtrees in-place.
+        dirnames[:] = [
+            d for d in dirnames
+            if d.lower() not in _SKIP_DIR_NAMES
+            and not _walk_skip_dir(os.path.join(dirpath, d))
+        ]
+        for fn in filenames:
+            if fn == pattern or (pattern.startswith("*") and fn.endswith(pattern[1:])):
+                results.append(Path(dirpath) / fn)
+    return results
+
+
 def _discover_completion_details(outputs_root: Path) -> tuple[list[dict[str, Any]], set[Path]]:
     rows: list[dict[str, Any]] = []
     referenced: set[Path] = set()
-    for completion_path in outputs_root.rglob("completion.json"):
+    for completion_path in _fast_rglob(outputs_root, "completion.json"):
         payload = _completion_payload(completion_path)
         case_id = str(payload.get("case_id") or payload.get("event_id") or completion_path.parent.name)
         event_id = str(payload.get("event_id") or case_id.split("__")[0])
@@ -597,31 +709,37 @@ def _discover_completion_details(outputs_root: Path) -> tuple[list[dict[str, Any
 def _discover_orphan_details(outputs_root: Path, referenced: set[Path]) -> list[dict[str, Any]]:
     """Discover legacy/PFV-first/closed-loop details not represented by completion.json."""
     rows: list[dict[str, Any]] = []
-    patterns = ("detail.csv", "*_detail.csv")
     seen: set[Path] = set()
-    for pattern in patterns:
-        for detail in outputs_root.rglob(pattern):
-            path = detail.resolve()
-            if path in seen or path in referenced:
-                continue
-            seen.add(path)
-            role = _infer_role_from_filename(path)
-            # Unknown legacy detail remains useful as hydraulic pretraining evidence.
-            rows.append(
-                {
-                    "completion_path": None,
-                    "detail_path": path,
-                    "case_id": path.parent.name,
-                    "event_id": path.parent.name,
-                    "checkpoint_min": None,
-                    "network_sha256": "",
-                    "rainfall_sha256": "",
-                    "branch_role": role,
-                    "completion_status": "legacy_detail_only",
-                    "prefix_hash_match": None,
-                    "checkpoint_hash_match": None,
-                }
-            )
+    root_str = str(outputs_root.resolve())
+    for dirpath, dirnames, filenames in os.walk(root_str):
+        dirnames[:] = [
+            d for d in dirnames
+            if d.lower() not in _SKIP_DIR_NAMES
+            and not _walk_skip_dir(os.path.join(dirpath, d))
+        ]
+        for fn in filenames:
+            if fn == "detail.csv" or fn.endswith("_detail.csv"):
+                detail = Path(dirpath) / fn
+                path = detail.resolve()
+                if path in seen or path in referenced:
+                    continue
+                seen.add(path)
+                role = _infer_role_from_filename(path)
+                rows.append(
+                    {
+                        "completion_path": None,
+                        "detail_path": path,
+                        "case_id": path.parent.name,
+                        "event_id": path.parent.name,
+                        "checkpoint_min": None,
+                        "network_sha256": "",
+                        "rainfall_sha256": "",
+                        "branch_role": role,
+                        "completion_status": "legacy_detail_only",
+                        "prefix_hash_match": None,
+                        "checkpoint_hash_match": None,
+                    }
+                )
     return rows
 
 
@@ -743,11 +861,125 @@ def _classify_case(group: pd.DataFrame) -> CaseReuseRecord:
     )
 
 
+def _audit_single_row(
+    row,
+    *,
+    outputs_root: Path,
+    node_ids: list[str],
+    storage_ids: list[str],
+    facility_ids: list[str],
+    outfall_ids: list[str],
+    invert_by_id: dict[str, float],
+    incoming_links: dict[str, list[str]],
+    active_sha: str,
+    full_finite_check: bool,
+    detail_cache: dict,
+    cache_lock: threading.Lock,
+) -> PhysicalRunRecord:
+    """Audit one discovery row — designed to run in a thread pool."""
+    path = Path(row.detail_path)
+    reasons: list[str] = []
+    window_anchor = 0
+    try:
+        detail_sha, raw_bytes = _read_file_once(path)
+        df = pd.read_csv(io.BytesIO(raw_bytes))
+        # Pre-compute window_anchor_count while df is in memory.
+        if "elapsed_min" in df.columns:
+            elapsed_arr = pd.to_numeric(df["elapsed_min"], errors="coerce").to_numpy(float)
+            window_anchor = _window_anchor_count_from_elapsed(elapsed_arr)
+        action_sha = _action_sha(path, facility_ids, _df=df)
+        checkpoint = None if row.checkpoint_min is None or (isinstance(row.checkpoint_min, float) and math.isnan(row.checkpoint_min)) else float(row.checkpoint_min)
+        cache_key = (detail_sha, checkpoint)
+        with cache_lock:
+            cached = detail_cache.get(cache_key)
+        if cached is not None:
+            target, missing, cached_action, cached_wac = cached
+            if not action_sha:
+                action_sha = cached_action
+            if not window_anchor:
+                window_anchor = cached_wac
+        else:
+            target, missing = _audit_target_availability(
+                path,
+                node_ids=node_ids,
+                storage_ids=storage_ids,
+                facility_ids=facility_ids,
+                outfall_ids=outfall_ids,
+                invert_by_id=invert_by_id,
+                incoming_links=incoming_links,
+                checkpoint_min=checkpoint,
+                full_finite_check=full_finite_check,
+                _df=df,
+            )
+            with cache_lock:
+                detail_cache[cache_key] = (target, missing, action_sha, window_anchor)
+    except Exception as exc:
+        detail_sha = ""
+        action_sha = ""
+        target = TargetAvailability()
+        missing = (
+            "node_depth",
+            "node_flooding_rate",
+            "storage_volume",
+            "managed_facility_flow",
+            "outfall_flow",
+            "readback_setting",
+            "rainfall",
+        )
+        reasons.append(f"detail_audit_error:{type(exc).__name__}:{exc}")
+        checkpoint = None if row.checkpoint_min is None else row.checkpoint_min
+
+    network_sha = str(row.network_sha256 or "")
+    domain_id = _infer_domain_id(path, network_sha=network_sha, active_network_sha=active_sha)
+    active_match = None if not network_sha else bool(network_sha == active_sha)
+    if target.depth_semantics == "ambiguous":
+        reasons.append("ambiguous_h_head_semantics")
+    if not action_sha:
+        reasons.append("engineering36_readback_incomplete")
+    physical_id = _identity_sha(
+        detail_sha=detail_sha,
+        network_sha=network_sha,
+        rainfall_sha=str(row.rainfall_sha256 or ""),
+        checkpoint_min=checkpoint,
+        branch_role=str(row.branch_role),
+        action_sha=action_sha,
+        domain_id=domain_id,
+    )
+    return PhysicalRunRecord(
+        source_root=str(outputs_root),
+        source_experiment=_source_experiment(outputs_root, path),
+        run_dir=str(path.parent),
+        completion_path=None if row.completion_path is None else str(row.completion_path),
+        detail_path=str(path),
+        detail_sha256=detail_sha,
+        detail_size_bytes=int(path.stat().st_size) if path.exists() else 0,
+        case_id=str(row.case_id),
+        event_id=str(row.event_id),
+        rainfall_sha256=str(row.rainfall_sha256 or ""),
+        checkpoint_min=checkpoint,
+        branch_role=str(row.branch_role),
+        network_sha256=network_sha,
+        active_network_sha_match=active_match,
+        domain_id=domain_id,
+        source_role=_source_role(path),
+        action_readback_sha256=action_sha,
+        physical_identity_sha256=physical_id,
+        completion_status=str(row.completion_status),
+        prefix_hash_match=row.prefix_hash_match,
+        checkpoint_hash_match=row.checkpoint_hash_match,
+        target=target,
+        missing_target_groups=missing,
+        audit_reasons=tuple(reasons),
+        window_anchor_count=window_anchor,
+    )
+
+
 def audit_existing_swmm_pool(
     *,
     project_root: str | Path,
     outputs_root: str | Path,
     full_finite_check: bool = False,
+    max_workers: int = 16,
 ) -> ExistingPoolAuditResult:
     """Discover and audit all historical Project6 SWMM detail evidence.
 
@@ -756,9 +988,12 @@ def audit_existing_swmm_pool(
     """
     project_root = Path(project_root)
     outputs_root = Path(outputs_root)
+    t0 = time.monotonic()
+    print("[R0] discovering details …", file=sys.stderr, flush=True)
     discovery = discover_existing_details(outputs_root)
     if discovery.empty:
         raise FileNotFoundError(f"no detail.csv or *_detail.csv found under {outputs_root}")
+    print(f"[R0] discovered {len(discovery)} details in {time.monotonic()-t0:.1f}s", file=sys.stderr, flush=True)
 
     graph = _load_graph_topology(project_root)
     node_ids = list(graph["node_ids"])
@@ -771,94 +1006,47 @@ def audit_existing_swmm_pool(
     active_sha = _active_network_sha(project_root)
 
     records: list[PhysicalRunRecord] = []
-    # Avoid repeating expensive target audits for exact frozen copies.
     detail_cache: dict[tuple[str, float | None], tuple[TargetAvailability, tuple[str, ...], str]] = {}
+    cache_lock = threading.Lock()
 
-    for row in discovery.itertuples(index=False):
-        path = Path(row.detail_path)
-        reasons: list[str] = []
-        try:
-            detail_sha = _sha256_file(path)
-            action_sha = _action_sha(path, facility_ids)
-            checkpoint = None if row.checkpoint_min is None or (isinstance(row.checkpoint_min, float) and math.isnan(row.checkpoint_min)) else float(row.checkpoint_min)
-            cache_key = (detail_sha, checkpoint)
-            if cache_key in detail_cache:
-                target, missing, cached_action = detail_cache[cache_key]
-                if not action_sha:
-                    action_sha = cached_action
-            else:
-                target, missing = _audit_target_availability(
-                    path,
-                    node_ids=node_ids,
-                    storage_ids=storage_ids,
-                    facility_ids=facility_ids,
-                    outfall_ids=outfall_ids,
-                    invert_by_id=invert_by_id,
-                    incoming_links=incoming_links,
-                    checkpoint_min=checkpoint,
-                    full_finite_check=full_finite_check,
+    rows_list = list(discovery.itertuples(index=False))
+    total = len(rows_list)
+    done_count = 0
+    t1 = time.monotonic()
+    print(f"[R0] auditing {total} files with {max_workers} threads …", file=sys.stderr, flush=True)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(
+                _audit_single_row,
+                row,
+                outputs_root=outputs_root,
+                node_ids=node_ids,
+                storage_ids=storage_ids,
+                facility_ids=facility_ids,
+                outfall_ids=outfall_ids,
+                invert_by_id=invert_by_id,
+                incoming_links=incoming_links,
+                active_sha=active_sha,
+                full_finite_check=full_finite_check,
+                detail_cache=detail_cache,
+                cache_lock=cache_lock,
+            ): idx
+            for idx, row in enumerate(rows_list)
+        }
+        for future in as_completed(futures):
+            records.append(future.result())
+            done_count += 1
+            if done_count % 200 == 0 or done_count == total:
+                elapsed = time.monotonic() - t1
+                rate = done_count / elapsed if elapsed > 0 else 0
+                eta = (total - done_count) / rate if rate > 0 else 0
+                print(
+                    f"[R0] {done_count}/{total}  elapsed={elapsed:.0f}s  "
+                    f"rate={rate:.1f}/s  eta={eta:.0f}s  "
+                    f"cache={len(detail_cache)}",
+                    file=sys.stderr, flush=True,
                 )
-                detail_cache[cache_key] = (target, missing, action_sha)
-        except Exception as exc:
-            detail_sha = ""
-            action_sha = ""
-            target = TargetAvailability()
-            missing = (
-                "node_depth",
-                "node_flooding_rate",
-                "storage_volume",
-                "managed_facility_flow",
-                "outfall_flow",
-                "readback_setting",
-                "rainfall",
-            )
-            reasons.append(f"detail_audit_error:{type(exc).__name__}:{exc}")
-            checkpoint = None if row.checkpoint_min is None else row.checkpoint_min
-
-        network_sha = str(row.network_sha256 or "")
-        domain_id = _infer_domain_id(path, network_sha=network_sha, active_network_sha=active_sha)
-        active_match = None if not network_sha else bool(network_sha == active_sha)
-        if target.depth_semantics == "ambiguous":
-            reasons.append("ambiguous_h_head_semantics")
-        if not action_sha:
-            reasons.append("engineering36_readback_incomplete")
-        physical_id = _identity_sha(
-            detail_sha=detail_sha,
-            network_sha=network_sha,
-            rainfall_sha=str(row.rainfall_sha256 or ""),
-            checkpoint_min=checkpoint,
-            branch_role=str(row.branch_role),
-            action_sha=action_sha,
-            domain_id=domain_id,
-        )
-        records.append(
-            PhysicalRunRecord(
-                source_root=str(outputs_root),
-                source_experiment=_source_experiment(outputs_root, path),
-                run_dir=str(path.parent),
-                completion_path=None if row.completion_path is None else str(row.completion_path),
-                detail_path=str(path),
-                detail_sha256=detail_sha,
-                detail_size_bytes=int(path.stat().st_size) if path.exists() else 0,
-                case_id=str(row.case_id),
-                event_id=str(row.event_id),
-                rainfall_sha256=str(row.rainfall_sha256 or ""),
-                checkpoint_min=checkpoint,
-                branch_role=str(row.branch_role),
-                network_sha256=network_sha,
-                active_network_sha_match=active_match,
-                domain_id=domain_id,
-                source_role=_source_role(path),
-                action_readback_sha256=action_sha,
-                physical_identity_sha256=physical_id,
-                completion_status=str(row.completion_status),
-                prefix_hash_match=row.prefix_hash_match,
-                checkpoint_hash_match=row.checkpoint_hash_match,
-                target=target,
-                missing_target_groups=missing,
-                audit_reasons=tuple(reasons),
-            )
-        )
 
     physical_all = pd.DataFrame([record.as_dict() for record in records])
     # Add convenient target-level columns used by case classification.
