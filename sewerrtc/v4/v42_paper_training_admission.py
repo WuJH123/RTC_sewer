@@ -1,9 +1,10 @@
 """Admission gate for formal V4.2 trajectory-surrogate training.
 
 Formal training is authorized only when the raw Independent Oracle passes every
-admitted sample and the audited raw hydraulic targets are complete.  The gate is
-population based: it does not assume that the final evidence pool contains a
-fixed 1200/1600 rows.
+admitted case and the raw hydraulic target audit is complete for the *same
+R0-derived population*. Population lineage is mandatory; a target audit from a
+different subset cannot authorize training merely because both audits pass in
+isolation.
 """
 from __future__ import annotations
 
@@ -39,6 +40,7 @@ class TrainingAdmission:
             "hydraulic_target_audit_sha256": self.hydraulic_target_audit_sha256,
             "legacy_v42_kpi_head_trainer_authorized": False,
             "fixed_sample_quota_required": False,
+            "population_lineage_required": True,
         }
 
 
@@ -59,12 +61,6 @@ def audit_training_admission(
     hydraulic_target_audit: str | Path,
     expected_sample_count: int | None = None,
 ) -> TrainingAdmission:
-    """Require raw-oracle truth and complete hydraulic target coverage.
-
-    ``expected_sample_count`` is optional and exists only for a deliberately
-    frozen experiment.  The project-wide R0 pool must not be forced back to a
-    historical Train1200/Train1600 quota.
-    """
     oracle_path = Path(independent_oracle_summary)
     target_path = Path(hydraulic_target_audit)
     reasons: list[str] = []
@@ -100,16 +96,12 @@ def audit_training_admission(
             reasons.append(
                 f"oracle_row_count_mismatch:{oracle_row_count}!={int(expected_sample_count)}"
             )
-        if (
-            pass_count != oracle_row_count
-            or fail_count != 0
-            or oracle.get("all_pass") is not True
-        ):
+        if pass_count != oracle_row_count or fail_count != 0 or oracle.get("all_pass") is not True:
             reasons.append("raw_independent_oracle_not_all_pass")
         declared_expected = oracle.get("expected_count")
-        if (
-            expected_sample_count is not None
-            and declared_expected not in (None, int(expected_sample_count))
+        if expected_sample_count is not None and declared_expected not in (
+            None,
+            int(expected_sample_count),
         ):
             reasons.append("oracle_expected_count_contract_mismatch")
 
@@ -148,13 +140,14 @@ def audit_training_admission(
         if not expected_groups.issubset(required):
             reasons.append("hydraulic_target_group_contract_incomplete")
 
-        # When both independent audits carry an explicit population lineage,
-        # they must match.  Absence remains backward-compatible until the R0
-        # materializer emits this field everywhere.
-        oracle_lineage = str(oracle.get("sample_lineage_sha256", "")) if oracle else ""
-        target_lineage = str(target.get("sample_lineage_sha256", ""))
-        if oracle_lineage and target_lineage and oracle_lineage != target_lineage:
-            reasons.append("oracle_target_population_lineage_mismatch")
+    oracle_lineage = str(oracle.get("sample_lineage_sha256", "")) if oracle else ""
+    target_lineage = str(target.get("sample_lineage_sha256", "")) if target else ""
+    if not oracle_lineage:
+        reasons.append("oracle_population_lineage_missing")
+    if not target_lineage:
+        reasons.append("target_population_lineage_missing")
+    if oracle_lineage and target_lineage and oracle_lineage != target_lineage:
+        reasons.append("oracle_target_population_lineage_mismatch")
 
     if not reasons and oracle_row_count > 0:
         admitted = int(oracle_row_count)
@@ -164,30 +157,20 @@ def audit_training_admission(
         reasons=tuple(reasons),
         oracle_summary_sha256=oracle_sha,
         hydraulic_target_audit_sha256=target_sha,
-        expected_sample_count=(
-            None if expected_sample_count is None else int(expected_sample_count)
-        ),
+        expected_sample_count=(None if expected_sample_count is None else int(expected_sample_count)),
         admitted_sample_count=int(admitted),
     )
 
 
-def write_training_admission(
-    *,
-    output_path: str | Path,
-    admission: TrainingAdmission,
-) -> Path:
+def write_training_admission(*, output_path: str | Path, admission: TrainingAdmission) -> Path:
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(admission.as_dict(), indent=2, allow_nan=False),
-        encoding="utf-8",
-    )
+    path.write_text(json.dumps(admission.as_dict(), indent=2, allow_nan=False), encoding="utf-8")
     return path
 
 
 def assert_formal_training_authorized(admission: TrainingAdmission) -> None:
     if not admission.authorized:
         raise RuntimeError(
-            "Formal V4.2 paper training is not authorized: "
-            + ";".join(admission.reasons)
+            "Formal V4.2 paper training is not authorized: " + ";".join(admission.reasons)
         )
