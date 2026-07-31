@@ -72,11 +72,7 @@ def _string_series(df: pd.DataFrame, column: str) -> pd.Series:
 
 
 def _window_anchor_count(detail_path: str | Path) -> int:
-    """Count valid centers with 13x5-min history and 12x10-min future.
-
-    This enables whole-event historical trajectories to be reused for generic
-    dynamics pretraining without inventing a formal counterfactual checkpoint.
-    """
+    """Count valid centers with 13x5-min history and 12x10-min future."""
     path = Path(detail_path)
     if not path.exists():
         return 0
@@ -112,15 +108,16 @@ def build_reusable_paper_pool(
     output_physical_manifest: str | Path,
     output_case_manifest: str | Path,
     audit_output: str | Path,
+    alignment_inventory: str | Path | None = None,
     include_source_domain: bool = True,
     include_consumed_development: bool = True,
 ) -> ReusablePoolResult:
     """Create masked task views without pretending that missing targets exist.
 
-    ``physical_inventory`` must come from :func:`audit_existing_swmm_pool`.
-    Every target mask is copied from the evidence audit.  No target tensor or
-    label is materialised here, so there is no opportunity to silently fill a
-    missing variable with zero.
+    Counterfactual case-level supervision is fail-closed: it is enabled only
+    when a numeric four-branch alignment audit proves a common hydraulic prefix
+    and common future rainfall forcing.  Generic single-branch dynamics reuse
+    does not require that four-reference proof.
     """
     physical_path = Path(physical_inventory)
     case_path = Path(case_inventory)
@@ -130,6 +127,23 @@ def build_reusable_paper_pool(
         raise ValueError("physical inventory is empty")
     if cases.empty:
         raise ValueError("case inventory is empty")
+
+    alignment_present = alignment_inventory is not None and Path(alignment_inventory).exists()
+    if alignment_present:
+        alignment = _read_table(Path(alignment_inventory))
+        required = {"case_uid", "same_state_numeric_pass", "same_forcing_pass"}
+        if not required.issubset(alignment.columns):
+            raise KeyError(f"alignment inventory missing columns: {sorted(required - set(alignment.columns))}")
+        cases = cases.merge(
+            alignment[["case_uid", "same_state_numeric_pass", "same_forcing_pass", "error"]],
+            on="case_uid",
+            how="left",
+            validate="one_to_one",
+        )
+    else:
+        cases["same_state_numeric_pass"] = False
+        cases["same_forcing_pass"] = False
+        cases["error"] = "alignment_audit_not_provided"
 
     allowed_classes = {
         ReuseClassification.FULL_REUSE.value,
@@ -144,6 +158,12 @@ def build_reusable_paper_pool(
         case_keep = case_keep[case_keep["source_role"] != "consumed_development"].copy()
     if "source_role" in case_keep.columns:
         case_keep = case_keep[case_keep["source_role"] != "reserved_evaluation"].copy()
+    # Frozen copies / repeated manifests may produce duplicate logical case rows.
+    # A sorted physical-branch identity set is the canonical case evidence key.
+    if "branch_physical_ids" in case_keep.columns:
+        case_keep = case_keep.sort_values(["branch_physical_ids", "source_role"]).drop_duplicates(
+            "branch_physical_ids", keep="first"
+        ).reset_index(drop=True)
 
     mask_sources = {
         "mask_depth": "available_node_depth",
@@ -164,9 +184,6 @@ def build_reusable_paper_pool(
     for target, source in mask_sources.items():
         physical_view[target] = _bool_series(physical_view, source)
 
-    # Formal same-state rows already have a checkpoint-specific complete window.
-    # Legacy whole-event details may still expose many valid windows; count them
-    # once here so they can be used for generic dynamics pretraining.
     anchor_counts: list[int] = []
     for row in physical_view.itertuples(index=False):
         if bool(getattr(row, "mask_history")) and bool(getattr(row, "mask_horizon")):
@@ -188,9 +205,7 @@ def build_reusable_paper_pool(
         & physical_view["mask_readback"]
         & physical_view["windowable_13x12"]
     )
-    physical_view["eligible_storage_supervision"] = (
-        physical_view["mask_storage"] & physical_view["windowable_13x12"]
-    )
+    physical_view["eligible_storage_supervision"] = physical_view["mask_storage"] & physical_view["windowable_13x12"]
     physical_view["eligible_outfall_supervision"] = physical_view["mask_outfall_flow"]
     physical_view["formal_complete_branch"] = (
         physical_view["mask_history"]
@@ -229,11 +244,13 @@ def build_reusable_paper_pool(
         physical_view["outfall_reconstruction_candidate"] = False
         physical_view["outfall_requires_validation_before_reconstruction"] = False
 
+    aligned = _bool_series(case_keep, "same_state_numeric_pass") & _bool_series(case_keep, "same_forcing_pass")
     four = _bool_series(case_keep, "four_reference_complete")
     core = _bool_series(case_keep, "core_trajectory_targets")
     full = _bool_series(case_keep, "full_reuse_targets")
-    case_keep["eligible_counterfactual_flood"] = four & core
-    case_keep["eligible_formal_all_target"] = four & full
+    case_keep["alignment_audit_present"] = bool(alignment_present)
+    case_keep["eligible_counterfactual_flood"] = four & core & aligned
+    case_keep["eligible_formal_all_target"] = four & full & aligned
     case_keep["eligible_target_no_dwf"] = _string_series(case_keep, "domain_id").str.startswith("target_no_dwf")
     case_keep["eligible_source_domain"] = _string_series(case_keep, "domain_id").str.startswith("source_")
 
@@ -260,10 +277,13 @@ def build_reusable_paper_pool(
         "contract": "PROJECT6_V42_REUSABLE_POOL_V1",
         "physical_inventory": str(physical_path),
         "case_inventory": str(case_path),
+        "alignment_inventory": None if alignment_inventory is None else str(alignment_inventory),
+        "alignment_audit_present": bool(alignment_present),
         "missing_targets_are_imputed": False,
         "formal_strict_builder_preserved": True,
         "availability_mask_authority": "existing_pool_audit_only",
         "legacy_window_policy": "whole-event detail may contribute only to generic pretraining when a real 13x5 + 12x10 window exists",
+        "counterfactual_policy": "requires numeric same-state prefix and same future rainfall forcing",
         "task_counts": task_counts,
         "outfall_policy": (
             "explicit labels train outfall head; incoming-link reconstruction remains disabled "
