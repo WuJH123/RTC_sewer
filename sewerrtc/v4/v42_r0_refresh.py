@@ -1,18 +1,17 @@
 """Discovery-safe and incrementally refreshable Phase-R0 audit.
 
-This module protects two formal-evidence invariants that are easy to violate in
-large historical pools:
+This module protects two formal-evidence invariants:
 
 1. continuation trajectories such as ``candidate_then_internal.csv`` and
    ``candidate_then_passive.csv`` are useful physical evidence, but their file
    names alone do not prove that they are the canonical Dynamic-Internal or
    Hold-Previous references. They therefore enter R0 with explicit auxiliary
-   roles until provenance proves otherwise;
+   roles until authoritative provenance proves otherwise;
 2. a persisted expensive scan cache may be resumed only if it covers the
    *current* discovery population. When new historical files are found, refresh
    audits only new/changed logical rows and reuses unchanged cached rows.
 
-The raw SWMM files remain authoritative and read-only.
+Raw SWMM files remain authoritative and read-only.
 """
 from __future__ import annotations
 
@@ -39,11 +38,11 @@ AUX_CANDIDATE_THEN_PASSIVE = "candidate_then_passive_aux"
 
 
 def _formal_role_from_filename(path: Path) -> str:
-    """Infer only roles whose semantics are proven by the filename convention.
+    """Infer only branch roles proven by the filename convention.
 
-    PFV-first continuation files are deliberately *not* promoted to canonical
-    reference roles. Their branch meaning must be recovered from authoritative
-    manifest/generator provenance before a later importer may relabel them.
+    PFV-first continuation files are deliberately not promoted to canonical
+    reference roles. A later provenance importer may relabel them only after
+    verifying the generator/manifest semantics.
     """
     name = path.name.lower()
     if "candidate_then_internal" in name:
@@ -75,13 +74,26 @@ def _formal_discovery_semantics():
 
 
 def discover_formal_existing_details(outputs_root: str | Path) -> pd.DataFrame:
-    """Run heterogeneous discovery with fail-closed PFV-first role semantics."""
+    """Discover heterogeneous details with fail-closed PFV-first role semantics."""
     with _formal_discovery_semantics():
         return base.discover_existing_details(outputs_root)
 
 
+def _missing(value: Any) -> bool:
+    if value is None:
+        return True
+    try:
+        return bool(pd.isna(value))
+    except Exception:
+        return False
+
+
+def _text(value: Any) -> str:
+    return "" if _missing(value) else str(value)
+
+
 def _normal_checkpoint(value: Any) -> str:
-    if value is None or (isinstance(value, float) and math.isnan(value)):
+    if _missing(value):
         return ""
     try:
         return f"{float(value):.9f}"
@@ -89,7 +101,7 @@ def _normal_checkpoint(value: Any) -> str:
         return str(value)
 
 
-def _logical_key_from_mapping(row: Any) -> tuple[str, ...]:
+def _logical_key(row: Any) -> tuple[str, ...]:
     def value(name: str) -> Any:
         if isinstance(row, dict):
             return row.get(name)
@@ -97,37 +109,47 @@ def _logical_key_from_mapping(row: Any) -> tuple[str, ...]:
             return row.get(name)
         return getattr(row, name, None)
 
-    path = Path(str(value("detail_path"))).resolve()
-    completion = value("completion_path")
-    completion_text = "" if completion is None or str(completion) == "nan" else str(completion)
+    detail_text = _text(value("detail_path"))
+    if not detail_text:
+        raise ValueError("logical R0 row has no detail_path")
     return (
-        str(path),
-        str(value("case_id") or ""),
-        str(value("event_id") or ""),
+        str(Path(detail_text).resolve()),
+        _text(value("case_id")),
+        _text(value("event_id")),
         _normal_checkpoint(value("checkpoint_min")),
-        str(value("network_sha256") or ""),
-        str(value("rainfall_sha256") or ""),
-        str(value("branch_role") or ""),
-        completion_text,
+        _text(value("network_sha256")),
+        _text(value("rainfall_sha256")),
+        _text(value("branch_role")),
+        _text(value("completion_path")),
     )
 
 
-def _discovery_manifest(discovery: pd.DataFrame) -> tuple[list[dict[str, Any]], str]:
-    records: list[dict[str, Any]] = []
+def _discovery_index(discovery: pd.DataFrame) -> tuple[dict[tuple[str, ...], dict[str, Any]], str]:
+    """Return logical-key metadata and a deterministic current-population hash."""
+    index: dict[tuple[str, ...], dict[str, Any]] = {}
+    fingerprint_rows: list[dict[str, Any]] = []
     for row in discovery.itertuples(index=False):
-        path = Path(str(row.detail_path)).resolve()
+        key = _logical_key(row)
+        if key in index:
+            raise RuntimeError(f"duplicate logical discovery key: {key}")
+        path = Path(key[0])
         stat = path.stat()
-        records.append(
+        info = {
+            "detail_path": str(path),
+            "size": int(stat.st_size),
+            "mtime_ns": int(stat.st_mtime_ns),
+        }
+        index[key] = info
+        fingerprint_rows.append(
             {
-                "logical_key": list(_logical_key_from_mapping(row)),
-                "detail_path": str(path),
-                "size": int(stat.st_size),
-                "mtime_ns": int(stat.st_mtime_ns),
+                "logical_key": list(key),
+                "size": info["size"],
+                "mtime_ns": info["mtime_ns"],
             }
         )
-    records.sort(key=lambda x: tuple(x["logical_key"]))
-    payload = json.dumps(records, sort_keys=True, separators=(",", ":"))
-    return records, hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    fingerprint_rows.sort(key=lambda item: tuple(item["logical_key"]))
+    payload = json.dumps(fingerprint_rows, sort_keys=True, separators=(",", ":"))
+    return index, hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _cache_meta_path(cache_path: Path) -> Path:
@@ -147,7 +169,7 @@ def _read_cache_meta(cache_path: Path) -> dict[str, Any]:
 def _stamp_discovery_meta(
     *,
     cache_path: Path,
-    discovery: pd.DataFrame,
+    discovery_count: int,
     fingerprint: str,
 ) -> None:
     meta_path = _cache_meta_path(cache_path)
@@ -155,7 +177,7 @@ def _stamp_discovery_meta(
     meta.update(
         {
             "discovery_schema": DISCOVERY_CACHE_SCHEMA,
-            "discovery_record_count": int(len(discovery)),
+            "discovery_record_count": int(discovery_count),
             "discovery_fingerprint_sha256": str(fingerprint),
             "discovery_checked_at_unix": time.time(),
         }
@@ -168,30 +190,33 @@ def _stamp_discovery_meta(
 def _cache_matches_current_discovery(
     *,
     cache_path: Path,
-    discovery: pd.DataFrame,
+    discovery_count: int,
     fingerprint: str,
 ) -> tuple[bool, str]:
     meta = _read_cache_meta(cache_path)
     if meta.get("discovery_schema") != DISCOVERY_CACHE_SCHEMA:
         return False, "cache_has_no_current_discovery_contract"
-    if int(meta.get("discovery_record_count", -1)) != int(len(discovery)):
+    if int(meta.get("discovery_record_count", -1)) != int(discovery_count):
         return False, "discovery_record_count_changed"
     if str(meta.get("discovery_fingerprint_sha256", "")) != str(fingerprint):
         return False, "discovery_fingerprint_changed"
     return True, ""
 
 
-def _file_is_reusable_from_cache(cached: Any, current_manifest: dict[str, Any], cache_meta: dict[str, Any]) -> bool:
-    cached_size = int(getattr(cached, "detail_size_bytes", -1))
-    if cached_size != int(current_manifest["size"]):
+def _file_is_reusable_from_cache(
+    cached: Any,
+    current: dict[str, Any],
+    cache_meta: dict[str, Any],
+) -> bool:
+    if int(getattr(cached, "detail_size_bytes", -1)) != int(current["size"]):
         return False
     cached_mtime = getattr(cached, "source_mtime_ns", None)
-    if cached_mtime is not None and not pd.isna(cached_mtime):
-        return int(cached_mtime) == int(current_manifest["mtime_ns"])
-    # Backward compatibility for caches created before mtime was persisted:
-    # reuse only when the source was not modified after that cache was written.
+    if not _missing(cached_mtime):
+        return int(cached_mtime) == int(current["mtime_ns"])
+    # Backward compatibility for the 20,002-row cache created before mtime was
+    # persisted: reuse it only when the source file predates that cache write.
     created = float(cache_meta.get("created_at_unix", 0.0))
-    return created > 0.0 and int(current_manifest["mtime_ns"]) <= int(created * 1e9)
+    return created > 0.0 and int(current["mtime_ns"]) <= int(created * 1e9)
 
 
 def _prepare_audit_context(project_root: Path) -> dict[str, Any]:
@@ -240,7 +265,11 @@ def _audit_subset(
     total = len(rows)
     done = 0
     t0 = time.monotonic()
-    print(f"[R0-refresh] auditing {total} new/changed logical rows with {max_workers} threads ...", file=sys.stderr, flush=True)
+    print(
+        f"[R0-refresh] auditing {total} new/changed logical rows with {max_workers} threads ...",
+        file=sys.stderr,
+        flush=True,
+    )
     with strict._strict_runtime_semantics():
         with ThreadPoolExecutor(max_workers=max(1, int(max_workers))) as pool:
             futures = {
@@ -269,7 +298,8 @@ def _audit_subset(
                     rate = done / elapsed if elapsed else 0.0
                     eta = (total - done) / rate if rate else 0.0
                     print(
-                        f"[R0-refresh] {done}/{total} elapsed={elapsed:.0f}s rate={rate:.1f}/s eta={eta:.0f}s",
+                        f"[R0-refresh] {done}/{total} elapsed={elapsed:.0f}s "
+                        f"rate={rate:.1f}/s eta={eta:.0f}s",
                         file=sys.stderr,
                         flush=True,
                     )
@@ -277,7 +307,7 @@ def _audit_subset(
     if frame.empty:
         return frame
     frame["source_mtime_ns"] = [
-        int(Path(str(p)).stat().st_mtime_ns) for p in frame["detail_path"]
+        int(Path(str(path)).stat().st_mtime_ns) for path in frame["detail_path"]
     ]
     return strict._enrich_physical_frame(frame)
 
@@ -304,10 +334,18 @@ def _finalize(
     if refresh_stats is not None:
         summary["incremental_refresh"] = refresh_stats
     return base.ExistingPoolAuditResult(
-        physical_runs=strict._sort_frame(result.physical_runs, ["physical_identity_sha256", "source_role", "detail_path"]),
+        physical_runs=strict._sort_frame(
+            result.physical_runs,
+            ["physical_identity_sha256", "source_role", "detail_path"],
+        ),
         cases=strict._sort_frame(result.cases, ["case_uid", "source_role"]),
-        duplicate_lineage=strict._sort_frame(result.duplicate_lineage, ["physical_identity_sha256", "source_role", "detail_path"]),
-        source_summary=strict._sort_frame(result.source_summary, ["source_experiment", "classification"]),
+        duplicate_lineage=strict._sort_frame(
+            result.duplicate_lineage,
+            ["physical_identity_sha256", "source_role", "detail_path"],
+        ),
+        source_summary=strict._sort_frame(
+            result.source_summary, ["source_experiment", "classification"]
+        ),
         target_summary=strict._sort_frame(result.target_summary, ["target"]),
         summary=summary,
     )
@@ -331,9 +369,10 @@ def audit_existing_swmm_pool_refreshable(
     cache_path = Path(cache_path)
 
     discovery = discover_formal_existing_details(outputs_root)
-    manifest, fingerprint = _discovery_manifest(discovery)
+    discovery_index, fingerprint = _discovery_index(discovery)
     print(
-        f"[R0] formal discovery sees {len(discovery)} logical detail rows; fingerprint={fingerprint[:12]}",
+        f"[R0] formal discovery sees {len(discovery)} logical detail rows; "
+        f"fingerprint={fingerprint[:12]}",
         file=sys.stderr,
         flush=True,
     )
@@ -348,10 +387,9 @@ def audit_existing_swmm_pool_refreshable(
                 logical_cache_path=cache_path,
                 resume_from_logical_cache=False,
             )
-        # Add mtimes for future incremental refreshes without reopening CSV content.
         cached = strict._read_table(cache_path)
         cached["source_mtime_ns"] = [
-            int(Path(str(p)).stat().st_mtime_ns) for p in cached["detail_path"]
+            int(Path(str(path)).stat().st_mtime_ns) for path in cached["detail_path"]
         ]
         strict._write_scan_cache(
             cached,
@@ -360,7 +398,11 @@ def audit_existing_swmm_pool_refreshable(
             outputs_root=outputs_root,
             full_finite_check=full_finite_check,
         )
-        _stamp_discovery_meta(cache_path=cache_path, discovery=discovery, fingerprint=fingerprint)
+        _stamp_discovery_meta(
+            cache_path=cache_path,
+            discovery_count=len(discovery),
+            fingerprint=fingerprint,
+        )
         return _finalize(result, cache_path=cache_path, resume=False, refresh_stats=None)
 
     cache_meta = _read_cache_meta(cache_path)
@@ -375,7 +417,7 @@ def audit_existing_swmm_pool_refreshable(
     if resume:
         matches, reason = _cache_matches_current_discovery(
             cache_path=cache_path,
-            discovery=discovery,
+            discovery_count=len(discovery),
             fingerprint=fingerprint,
         )
         if not matches:
@@ -383,25 +425,28 @@ def audit_existing_swmm_pool_refreshable(
                 f"R0 scan cache is stale relative to current discovery ({reason}); "
                 "run with --refresh-scan-cache instead of silently omitting new data"
             )
-        result = strict._postprocess_physical_frame(cached, full_finite_check=full_finite_check)
+        result = strict._postprocess_physical_frame(
+            cached, full_finite_check=full_finite_check
+        )
         return _finalize(result, cache_path=cache_path, resume=True, refresh_stats=None)
 
-    current_by_key = {
-        _logical_key_from_mapping(row): (row, info)
-        for row, info in zip(discovery.itertuples(index=False), manifest)
+    discovery_rows = {
+        _logical_key(row): row for row in discovery.itertuples(index=False)
     }
-    cached_by_key = {
-        _logical_key_from_mapping(row): row
-        for row in cached.itertuples(index=False)
+    cached_rows = {
+        _logical_key(row): row for row in cached.itertuples(index=False)
     }
 
     reused_records: list[dict[str, Any]] = []
     to_audit: list[Any] = []
     changed = 0
-    for key, (discovery_row, info) in current_by_key.items():
-        cached_row = cached_by_key.get(key)
-        if cached_row is not None and _file_is_reusable_from_cache(cached_row, info, cache_meta):
-            reused_records.append(cached.loc[cached["detail_path"].astype(str) == str(getattr(cached_row, "detail_path"))].iloc[0].to_dict())
+    for key, discovery_row in discovery_rows.items():
+        cached_row = cached_rows.get(key)
+        info = discovery_index[key]
+        if cached_row is not None and _file_is_reusable_from_cache(
+            cached_row, info, cache_meta
+        ):
+            reused_records.append(dict(cached_row._asdict()))
         else:
             if cached_row is not None:
                 changed += 1
@@ -418,16 +463,21 @@ def audit_existing_swmm_pool_refreshable(
     combined = pd.concat([reused, new_frame], ignore_index=True, sort=False)
     if combined.empty:
         raise RuntimeError("incremental R0 refresh produced an empty cache")
+    if len(combined) != len(discovery):
+        raise RuntimeError(
+            f"incremental R0 refresh population mismatch: {len(combined)} != {len(discovery)}"
+        )
+
     if "source_mtime_ns" not in combined.columns:
         combined["source_mtime_ns"] = [
-            int(Path(str(p)).stat().st_mtime_ns) for p in combined["detail_path"]
+            int(Path(str(path)).stat().st_mtime_ns) for path in combined["detail_path"]
         ]
     else:
         missing_mtime = combined["source_mtime_ns"].isna()
         if bool(missing_mtime.any()):
             combined.loc[missing_mtime, "source_mtime_ns"] = [
-                int(Path(str(p)).stat().st_mtime_ns)
-                for p in combined.loc[missing_mtime, "detail_path"]
+                int(Path(str(path)).stat().st_mtime_ns)
+                for path in combined.loc[missing_mtime, "detail_path"]
             ]
 
     strict._write_scan_cache(
@@ -437,9 +487,15 @@ def audit_existing_swmm_pool_refreshable(
         outputs_root=outputs_root,
         full_finite_check=full_finite_check,
     )
-    _stamp_discovery_meta(cache_path=cache_path, discovery=discovery, fingerprint=fingerprint)
-    result = strict._postprocess_physical_frame(combined, full_finite_check=full_finite_check)
-    removed = len(set(cached_by_key) - set(current_by_key))
+    _stamp_discovery_meta(
+        cache_path=cache_path,
+        discovery_count=len(discovery),
+        fingerprint=fingerprint,
+    )
+    result = strict._postprocess_physical_frame(
+        combined, full_finite_check=full_finite_check
+    )
+    removed = len(set(cached_rows) - set(discovery_rows))
     stats = {
         "current_discovery_rows": int(len(discovery)),
         "reused_cached_rows": int(len(reused)),
@@ -447,5 +503,9 @@ def audit_existing_swmm_pool_refreshable(
         "changed_cached_rows": int(changed),
         "removed_logical_rows": int(removed),
     }
-    print(f"[R0-refresh] completed: {json.dumps(stats, sort_keys=True)}", file=sys.stderr, flush=True)
+    print(
+        f"[R0-refresh] completed: {json.dumps(stats, sort_keys=True)}",
+        file=sys.stderr,
+        flush=True,
+    )
     return _finalize(result, cache_path=cache_path, resume=False, refresh_stats=stats)
