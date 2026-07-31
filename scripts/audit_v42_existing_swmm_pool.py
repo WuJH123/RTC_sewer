@@ -46,21 +46,47 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Backward-compatible no-op: full finite audit is already the default.",
     )
+    p.add_argument(
+        "--scan-cache",
+        type=Path,
+        default=None,
+        help=(
+            "Checkpoint the expensive logical-detail scan before case classification. "
+            "Default: <output-dir>/_r0_logical_detail_cache.parquet."
+        ),
+    )
+    p.add_argument(
+        "--resume-scan-cache",
+        action="store_true",
+        help=(
+            "Skip the expensive CSV audit and resume post-processing from --scan-cache. "
+            "The cache is fail-closed against project/output/network/mode mismatches."
+        ),
+    )
     return p
 
 
 def main() -> int:
     args = _parser().parse_args()
     full_finite = not bool(args.metadata_only)
+    output_dir = Path(args.output_dir)
+    cache_path = (
+        Path(args.scan_cache)
+        if args.scan_cache is not None
+        else output_dir / "_r0_logical_detail_cache.parquet"
+    )
     result = audit_existing_swmm_pool_strict(
         project_root=Path(args.project_root),
         outputs_root=Path(args.outputs_root),
         full_finite_check=full_finite,
         max_workers=max(1, min(int(args.workers), 32)),
+        logical_cache_path=cache_path,
+        resume_from_logical_cache=bool(args.resume_scan_cache),
     )
-    paths = write_existing_pool_audit(result, Path(args.output_dir))
+    paths = write_existing_pool_audit(result, output_dir)
     payload = dict(result.summary)
     payload["outputs"] = {k: str(v) for k, v in paths.items()}
+    payload["scan_cache"] = str(cache_path)
     print(json.dumps(payload, indent=2, allow_nan=False))
     return 0
 
