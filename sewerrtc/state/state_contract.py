@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 # Final V4.2 paper contract: 60 min of causal history sampled every 5 min,
-# including the decision-time frame.  Keep this chronological so every
+# including the decision-time frame. Keep this chronological so every
 # downstream tensor has the same t-60,...,t semantics as the trajectory builder.
 TEMPORAL_FRAME_OFFSETS_MIN = list(range(-60, 1, 5))
 
@@ -140,7 +140,9 @@ STATE_RECONSTRUCTION_OUTPUTS = {
 }
 
 
-def build_state_feature_contract(config_sha256: str | None, network_sha256: str | None) -> dict:
+def build_state_feature_contract(
+    config_sha256: str | None, network_sha256: str | None
+) -> dict:
     return {
         "contract_name": "project6_v42_sparse_state_contract",
         "control_interval_min": 10,
@@ -160,11 +162,17 @@ def build_state_feature_contract(config_sha256: str | None, network_sha256: str 
             "forecast_valid_time_is_not_observation_time": True,
         },
         "gat_selection": {
-            "selected_primary_gat": "sr0p15",
-            "selection_decision_status": "user_confirmed",
-            "selection_lock_status": "pending_manual_execution",
-            "gat_robustness_status": "pending",
-            "compatible_strict_required_for_formal": True,
+            "historical_selected_depth_gat": "sr0p15",
+            "historical_selection_status": "user_confirmed",
+            "historical_role": "legacy_single_snapshot_depth_validation_only",
+            "historical_can_authorize_formal_step1": False,
+            "formal_reconstructor": (
+                "sewerrtc.models.temporal_sparse_gat_v42."
+                "TemporalSparseGATReconstructorV42"
+            ),
+            "formal_reconstructor_training_status": "pending",
+            "formal_uncertainty_calibration_status": "pending",
+            "formal_compatibility_audit_status": "pending",
         },
         "sentinel": {
             "candidate_nodes": ["MH0200770", "HS1355904"],
@@ -185,6 +193,14 @@ def build_state_feature_contract(config_sha256: str | None, network_sha256: str 
             "offline_swmm_truth_must_not_be_labelled_reconstructed": True,
             "reconstructed_depth_requires_gat_inference": True,
             "uncertainty_requires_model_or_calibrated_residual_evidence": True,
+        },
+        "formal_admission": {
+            "requires_13x5min_history": True,
+            "requires_historical_actions": True,
+            "requires_link_static_attributes": True,
+            "requires_gat_uncertainty": True,
+            "requires_ood_score": True,
+            "legacy_sr0p15_alone_is_insufficient": True,
         },
         "provenance": {
             "config_sha256": config_sha256,
