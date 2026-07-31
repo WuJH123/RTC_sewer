@@ -154,9 +154,13 @@ def test_postprocess_keeps_same_case_from_two_sources_as_distinct_case_uids():
 
 def test_persisted_false_string_is_not_cast_to_true():
     frame = pd.DataFrame([_record("candidate")])
-    frame.loc[0, AVAILABILITY_COLUMNS["finite_pass"]] = "False"
+    col = AVAILABILITY_COLUMNS["finite_pass"]
+    # pandas 3 forbids assigning a string directly into a bool block; object
+    # dtype mirrors a CSV/heterogeneous persisted representation instead.
+    frame[col] = frame[col].astype(object)
+    frame.loc[0, col] = "False"
     checked = _enrich_physical_frame(frame)
-    assert bool(checked.loc[0, AVAILABILITY_COLUMNS["finite_pass"]]) is False
+    assert bool(checked.loc[0, col]) is False
 
 
 def test_alignment_duplicate_role_selection_prefers_audited_complete_row():
