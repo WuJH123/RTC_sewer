@@ -6,10 +6,8 @@ from pathlib import Path
 
 import yaml
 
-from sewerrtc.v4.v42_fasttrack import (
-    audit_fasttrack_workflow,
-    prepare_fasttrack_core,
-)
+from sewerrtc.v4.v42_fasttrack import audit_fasttrack_workflow
+from sewerrtc.v4.v42_fasttrack_prepare import prepare_fasttrack_core_strict
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -52,7 +50,8 @@ def main() -> int:
     thresholds = cfg.get("thresholds", {})
 
     if args.command == "prepare-core":
-        evidence = prepare_fasttrack_core(
+        core_thresholds = thresholds.get("core_pool", {})
+        evidence = prepare_fasttrack_core_strict(
             project_root=args.project_root,
             r01_audit_dir=args.r01_audit_dir,
             output_dir=args.output_dir,
@@ -61,8 +60,9 @@ def main() -> int:
                 args.cases_per_event if args.cases_per_event is not None else ft.get("cases_per_event", 3)
             ),
             seed=int(args.seed if args.seed is not None else ft.get("seed", 42)),
-            min_events=int(thresholds.get("core_pool", {}).get("independent_rainfall_groups", 8)),
-            min_aligned_cases=int(thresholds.get("core_pool", {}).get("aligned_cases", 12)),
+            min_events=int(core_thresholds.get("independent_rainfall_groups", 8)),
+            min_aligned_cases=int(core_thresholds.get("aligned_cases", 12)),
+            min_finite_fraction=float(core_thresholds.get("finite_pass_fraction", 0.95)),
         )
         print(json.dumps(evidence, indent=2, allow_nan=False))
         return 0 if evidence.get("status") == "pass" else 5
