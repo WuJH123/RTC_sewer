@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 
+from sewerrtc.v4.v42_case_alignment_audit import _select_role_rows
 from sewerrtc.v4.v42_existing_pool_audit import (
     PhysicalRunRecord,
     ReuseClassification,
@@ -50,6 +52,7 @@ def _record(
     source_role: str = "development",
     target: TargetAvailability | None = None,
 ) -> dict:
+    target_value = target or _target()
     item = PhysicalRunRecord(
         source_root="outputs",
         source_experiment=source_experiment,
@@ -72,8 +75,8 @@ def _record(
         completion_status="pass",
         prefix_hash_match=True,
         checkpoint_hash_match=True,
-        target=target or _target(),
-        missing_target_groups=() if (target or _target()).outfall_flow else ("outfall_flow",),
+        target=target_value,
+        missing_target_groups=() if target_value.outfall_flow else ("outfall_flow",),
         audit_reasons=(),
         window_anchor_count=1,
     )
@@ -149,6 +152,35 @@ def test_persisted_false_string_is_not_cast_to_true():
     frame.loc[0, AVAILABILITY_COLUMNS["finite_pass"]] = "False"
     checked = _enrich_physical_frame(frame)
     assert bool(checked.loc[0, AVAILABILITY_COLUMNS["finite_pass"]]) is False
+
+
+def test_alignment_duplicate_role_selection_prefers_audited_complete_row():
+    good = SimpleNamespace(
+        branch_role="candidate",
+        physical_identity_sha256="p-good",
+        detail_path="good.csv",
+        available_finite_pass=True,
+        formal_all_target_complete=True,
+        core_trajectory_complete=True,
+        available_history_complete=True,
+        available_horizon_complete=True,
+        available_node_depth=True,
+        available_storage_volume=True,
+        available_managed_facility_flow=True,
+        available_readback_setting=True,
+        available_rainfall=True,
+    )
+    bad = SimpleNamespace(
+        branch_role="candidate",
+        physical_identity_sha256="p-bad",
+        detail_path="bad.csv",
+        available_finite_pass=False,
+        formal_all_target_complete=False,
+        core_trajectory_complete=False,
+    )
+    selected = _select_role_rows([bad, good])
+    assert selected["candidate"].physical_identity_sha256 == "p-good"
+    assert _select_role_rows([good, bad])["candidate"].physical_identity_sha256 == "p-good"
 
 
 def test_scan_cache_roundtrip_is_schema_and_network_guarded(tmp_path: Path):
