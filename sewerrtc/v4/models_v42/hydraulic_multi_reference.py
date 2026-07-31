@@ -12,7 +12,7 @@ Predicted branch trajectories
 -----------------------------
 * node depth [m]
 * node flooding rate [m3/s]
-* storage volume proxy head [m3] at declared storage nodes
+* storage volume [m3] at declared storage nodes
 * managed-facility flow [m3/s]
 * outfall flow [m3/s] at declared outfall nodes
 * system flooding-rate sequence [m3/s]
@@ -48,10 +48,14 @@ class HydraulicKPIBundle:
 
 def _require_pyg() -> None:
     if GATConv is None:
-        raise RuntimeError("torch_geometric is required for V4.2 hydraulic surrogate") from _PYG_IMPORT_ERROR
+        raise RuntimeError(
+            "torch_geometric is required for V4.2 hydraulic surrogate"
+        ) from _PYG_IMPORT_ERROR
 
 
-def _batch_edge_index(edge_index: torch.Tensor, batch_size: int, n_nodes: int) -> torch.Tensor:
+def _batch_edge_index(
+    edge_index: torch.Tensor, batch_size: int, n_nodes: int
+) -> torch.Tensor:
     if edge_index.ndim != 2 or edge_index.shape[0] != 2:
         raise ValueError("edge_index must have shape [2,E]")
     offsets = (
@@ -62,7 +66,9 @@ def _batch_edge_index(edge_index: torch.Tensor, batch_size: int, n_nodes: int) -
     return edge_index.repeat(1, batch_size) + offsets.unsqueeze(0)
 
 
-def _as_index_tensor(indices: Iterable[int], *, device: torch.device) -> torch.Tensor:
+def _as_index_tensor(
+    indices: Iterable[int], *, device: torch.device
+) -> torch.Tensor:
     values = [int(i) for i in indices]
     if not values:
         return torch.empty(0, dtype=torch.long, device=device)
@@ -98,7 +104,9 @@ class HydraulicHistoryEncoder(nn.Module):
             hidden_size=hidden_dim,
             batch_first=True,
         )
-        self.input_proj = nn.Linear(hidden_dim + static_feature_dim, hidden_dim)
+        self.input_proj = nn.Linear(
+            hidden_dim + static_feature_dim, hidden_dim
+        )
 
         per_head = max(4, hidden_dim // gat_heads)
         gat_out = per_head * gat_heads
@@ -118,7 +126,9 @@ class HydraulicHistoryEncoder(nn.Module):
             )
             self.norms.append(nn.LayerNorm(gat_out))
             self.skips.append(
-                nn.Identity() if layer_in == gat_out else nn.Linear(layer_in, gat_out, bias=False)
+                nn.Identity()
+                if layer_in == gat_out
+                else nn.Linear(layer_in, gat_out, bias=False)
             )
         self.output_dim = gat_out
 
@@ -133,15 +143,24 @@ class HydraulicHistoryEncoder(nn.Module):
         if state_history.ndim == 3:
             state_history = state_history.unsqueeze(-1)
         if state_history.ndim != 4:
-            raise ValueError("state_history must be [B,T,N] or [B,T,N,F]")
+            raise ValueError(
+                "state_history must be [B,T,N] or [B,T,N,F]"
+            )
         B, T, N, F = state_history.shape
         if N != self.n_nodes or F != self.state_feature_dim:
             raise ValueError(
-                f"state_history expected [B,T,{self.n_nodes},{self.state_feature_dim}], got {tuple(state_history.shape)}"
+                f"state_history expected [B,T,{self.n_nodes},{self.state_feature_dim}], "
+                f"got {tuple(state_history.shape)}"
             )
         if T != 13:
-            raise ValueError(f"formal V4.2 history requires 13 frames, got {T}")
-        if historical_actions.ndim != 3 or historical_actions.shape != (B, T, self.n_facilities):
+            raise ValueError(
+                f"formal V4.2 history requires 13 frames, got {T}"
+            )
+        if historical_actions.ndim != 3 or historical_actions.shape != (
+            B,
+            T,
+            self.n_facilities,
+        ):
             raise ValueError(
                 f"historical_actions must be [B,13,{self.n_facilities}]"
             )
@@ -153,14 +172,23 @@ class HydraulicHistoryEncoder(nn.Module):
         # Normalise only the incidence aggregation, not hydraulic values.
         incidence = action_node_map.abs()
         denom = incidence.sum(dim=0).clamp_min(1.0)
-        node_action = torch.einsum("bta,an->btn", historical_actions, incidence) / denom[None, None, :]
-        temporal_input = torch.cat([state_history, node_action.unsqueeze(-1)], dim=-1)
-        seq = temporal_input.permute(0, 2, 1, 3).reshape(B * N, T, F + 1)
+        node_action = (
+            torch.einsum("bta,an->btn", historical_actions, incidence)
+            / denom[None, None, :]
+        )
+        temporal_input = torch.cat(
+            [state_history, node_action.unsqueeze(-1)], dim=-1
+        )
+        seq = temporal_input.permute(0, 2, 1, 3).reshape(
+            B * N, T, F + 1
+        )
         _, h_last = self.temporal_gru(seq)
         hist = h_last[-1].reshape(B, N, self.hidden_dim)
 
         static = node_static[None, :, :].expand(B, -1, -1)
-        x = self.input_proj(torch.cat([hist, static], dim=-1).reshape(B * N, -1)).relu()
+        x = self.input_proj(
+            torch.cat([hist, static], dim=-1).reshape(B * N, -1)
+        ).relu()
         be = _batch_edge_index(edge_index, B, N)
         for gat, norm, skip in zip(self.gats, self.norms, self.skips):
             h = gat(x, be)
@@ -171,7 +199,12 @@ class HydraulicHistoryEncoder(nn.Module):
 class MultiReferenceHydraulicSurrogate(nn.Module):
     """Shared four-branch hydraulic dynamics with trajectory-derived KPIs."""
 
-    BRANCHES = ("candidate", "no_control", "dynamic_internal", "hold_previous")
+    BRANCHES = (
+        "candidate",
+        "no_control",
+        "dynamic_internal",
+        "hold_previous",
+    )
 
     def __init__(
         self,
@@ -205,7 +238,9 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
             dropout=dropout,
         )
         state_dim = self.history_encoder.output_dim
-        self.rain_encoder = RainfallEncoder(horizon=horizon, hidden_dim=hidden_dim)
+        self.rain_encoder = RainfallEncoder(
+            horizon=horizon, hidden_dim=hidden_dim
+        )
         self.action_encoder = ActuatorActionEncoder(
             n_facilities=n_facilities,
             hidden_dim=hidden_dim,
@@ -215,16 +250,24 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
         self.dynamics = nn.GRUCell(hidden_dim * 3, hidden_dim)
 
         self.depth_head = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, 1)
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1),
         )
         self.flood_head = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, 1)
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1),
         )
         self.storage_head = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, 1)
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1),
         )
         self.outfall_head = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, 1)
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1),
         )
         self.facility_flow_head = nn.Sequential(
             nn.Linear(hidden_dim + 1, hidden_dim),
@@ -243,19 +286,31 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
         outfall_indices: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
         B, N, _ = initial_state.shape
-        if action_schedule.shape != (B, self.horizon, self.n_facilities):
+        if action_schedule.shape != (
+            B,
+            self.horizon,
+            self.n_facilities,
+        ):
             raise ValueError(
                 f"action schedule must be [B,{self.horizon},{self.n_facilities}]"
             )
-        action_embed = self.action_encoder(action_schedule, action_node_map)
-        h = self.state_to_hidden(initial_state).reshape(B * N, self.hidden_dim)
+        action_embed = self.action_encoder(
+            action_schedule, action_node_map
+        )
+        h = self.state_to_hidden(initial_state).reshape(
+            B * N, self.hidden_dim
+        )
 
         depths: list[torch.Tensor] = []
         floods: list[torch.Tensor] = []
         hidden_steps: list[torch.Tensor] = []
         prev_depth: torch.Tensor | None = None
         for k in range(self.horizon):
-            rain_k = rain_embed[:, k, :][:, None, :].expand(B, N, -1).reshape(B * N, -1)
+            rain_k = (
+                rain_embed[:, k, :][:, None, :]
+                .expand(B, N, -1)
+                .reshape(B * N, -1)
+            )
             act_k = action_embed[:, k, :, :].reshape(B * N, -1)
             inp = torch.cat([h, rain_k, act_k], dim=-1)
             h = self.dynamics(inp, h)
@@ -266,7 +321,9 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
             if prev_depth is None:
                 depth = torch.nn.functional.softplus(raw_depth)
             else:
-                depth = torch.relu(prev_depth + 0.25 * torch.tanh(raw_depth))
+                depth = torch.relu(
+                    prev_depth + 0.25 * torch.tanh(raw_depth)
+                )
             flood = torch.nn.functional.softplus(
                 self.flood_head(h).reshape(B, N)
             )
@@ -274,7 +331,7 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
             floods.append(flood)
             prev_depth = depth
 
-        hidden_seq = torch.stack(hidden_steps, dim=1)  # [B,H,N,D]
+        hidden_seq = torch.stack(hidden_steps, dim=1)
         node_depth = torch.stack(depths, dim=1)
         node_flood = torch.stack(floods, dim=1)
         system_flood = node_flood.sum(dim=-1)
@@ -285,7 +342,9 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
                 self.storage_head(storage_hidden).squeeze(-1)
             )
         else:
-            storage_volume = hidden_seq.new_zeros((B, self.horizon, 0))
+            storage_volume = hidden_seq.new_zeros(
+                (B, self.horizon, 0)
+            )
 
         if outfall_indices.numel():
             outfall_hidden = hidden_seq.index_select(2, outfall_indices)
@@ -293,17 +352,24 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
                 self.outfall_head(outfall_hidden).squeeze(-1)
             )
         else:
-            outfall_flow = hidden_seq.new_zeros((B, self.horizon, 0))
+            outfall_flow = hidden_seq.new_zeros(
+                (B, self.horizon, 0)
+            )
 
         incidence = action_node_map.abs()
         denom = incidence.sum(dim=1).clamp_min(1.0)
-        # endpoint/node embeddings -> facility embeddings [B,H,A,D]
-        facility_hidden = torch.einsum("an,bhnd->bhad", incidence, hidden_seq)
-        facility_hidden = facility_hidden / denom[None, None, :, None]
+        facility_hidden = torch.einsum(
+            "an,bhnd->bhad", incidence, hidden_seq
+        )
+        facility_hidden = (
+            facility_hidden / denom[None, None, :, None]
+        )
         facility_input = torch.cat(
             [facility_hidden, action_schedule.unsqueeze(-1)], dim=-1
         )
-        facility_flow = self.facility_flow_head(facility_input).squeeze(-1)
+        facility_flow = self.facility_flow_head(
+            facility_input
+        ).squeeze(-1)
 
         return {
             "node_depth": node_depth,
@@ -323,7 +389,9 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
         flood = branch["node_flooding_rate"]
         if priority_indices.numel() == 0:
             raise ValueError("priority_node_indices cannot be empty")
-        priority_rate = flood.index_select(2, priority_indices).sum(dim=-1)
+        priority_rate = flood.index_select(
+            2, priority_indices
+        ).sum(dim=-1)
         system_rate = branch["system_flooding_rate"]
         return HydraulicKPIBundle(
             pfv_m3=priority_rate.sum(dim=1) * self.dt_sec,
@@ -350,17 +418,24 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
     ) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
         """Roll all four branches with one shared F_theta.
 
-        No branch may be omitted or silently substituted.  Returned scientific
+        No branch may be omitted or silently substituted. Returned scientific
         KPI deltas are deterministic functions of predicted flooding-rate
         trajectories; there are no free-standing KPI regression heads.
         """
         B = state_history.shape[0]
         if rainfall_forecast.shape != (B, self.horizon):
-            raise ValueError(f"rainfall_forecast must be [B,{self.horizon}]")
-        if action_node_map.shape != (self.n_facilities, self.n_nodes):
+            raise ValueError(
+                f"rainfall_forecast must be [B,{self.horizon}]"
+            )
+        if action_node_map.shape != (
+            self.n_facilities,
+            self.n_nodes,
+        ):
             raise ValueError("action_node_map shape mismatch")
         priority_idx = torch.as_tensor(
-            priority_node_indices, dtype=torch.long, device=state_history.device
+            priority_node_indices,
+            dtype=torch.long,
+            device=state_history.device,
         ).reshape(-1)
         storage_idx = _as_index_tensor(
             [] if storage_node_indices is None else storage_node_indices,
@@ -375,7 +450,9 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
             ("storage", storage_idx),
             ("outfall", outfall_idx),
         ):
-            if idx.numel() and ((idx < 0).any() or (idx >= self.n_nodes).any()):
+            if idx.numel() and (
+                (idx < 0).any() or (idx >= self.n_nodes).any()
+            ):
                 raise ValueError(f"{name} node index outside graph")
 
         initial = self.history_encoder(
@@ -403,11 +480,36 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
                 storage_indices=storage_idx,
                 outfall_indices=outfall_idx,
             )
-            kpis[name] = self._derive_kpi(branches[name], priority_idx)
+            kpis[name] = self._derive_kpi(
+                branches[name], priority_idx
+            )
 
         candidate = kpis["candidate"]
         no_control = kpis["no_control"]
         dynamic_internal = kpis["dynamic_internal"]
+
+        # Integrals are linear, so compute the counterfactual *rate difference*
+        # before summing.  This avoids catastrophic cancellation when C and NC
+        # (or C and DI) each have large absolute volumes but a small scientific
+        # delta.  Peak is intentionally different: by definition it is
+        # max(C)-max(DI), not max(C-DI).
+        cand_flood = branches["candidate"]["node_flooding_rate"]
+        nc_flood = branches["no_control"]["node_flooding_rate"]
+        cand_priority = cand_flood.index_select(2, priority_idx)
+        nc_priority = nc_flood.index_select(2, priority_idx)
+        pfv_delta = (
+            (cand_priority - nc_priority).sum(dim=(1, 2))
+            * self.dt_sec
+        )
+        tfv_delta = (
+            (
+                branches["candidate"]["system_flooding_rate"]
+                - branches["dynamic_internal"]["system_flooding_rate"]
+            ).sum(dim=1)
+            * self.dt_sec
+        )
+        peak_delta = candidate.peak_m3s - dynamic_internal.peak_m3s
+
         return {
             "branches": branches,
             "kpi_candidate": {
@@ -425,13 +527,15 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
                 "tfv_m3": dynamic_internal.tfv_m3,
                 "peak_m3s": dynamic_internal.peak_m3s,
             },
-            "pfv_delta": candidate.pfv_m3 - no_control.pfv_m3,
-            "tfv_delta": candidate.tfv_m3 - dynamic_internal.tfv_m3,
-            "peak_delta": candidate.peak_m3s - dynamic_internal.peak_m3s,
+            "pfv_delta": pfv_delta,
+            "tfv_delta": tfv_delta,
+            "peak_delta": peak_delta,
             "metadata": {
                 "role": "hydraulic_surrogate_not_policy",
                 "shared_parameters_across_branches": True,
                 "kpis_derived_from_flooding_rate_trajectory": True,
+                "volume_delta_integrated_from_rate_difference": True,
+                "peak_definition": "max_candidate_minus_max_dynamic_internal",
                 "dt_sec": self.dt_sec,
             },
         }
