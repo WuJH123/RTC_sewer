@@ -170,11 +170,11 @@ def test_validated_outfall_reconstruction_is_exact_on_fixture(tmp_path: Path):
     np.testing.assert_allclose(reconstructed["outfall_flow:O1"], [1.0, 2.0, 3.0])
 
 
-def test_reusable_pool_masks_missing_outfall_without_zero_imputation(tmp_path: Path):
-    physical = pd.DataFrame(
+def _physical_rows(n: int) -> pd.DataFrame:
+    return pd.DataFrame(
         [
             {
-                "physical_identity_sha256": "p1",
+                "physical_identity_sha256": f"p{i}",
                 "source_role": "development",
                 "domain_id": "target_no_dwf",
                 "available_node_depth": True,
@@ -186,11 +186,17 @@ def test_reusable_pool_masks_missing_outfall_without_zero_imputation(tmp_path: P
                 "available_rainfall": True,
                 "available_history_complete": True,
                 "available_horizon_complete": True,
-                "available_outfall_reconstruction_candidate": True,
+                "available_outfall_reconstruction_candidate": i == 0,
+                "available_finite_checked": True,
+                "available_finite_pass": True,
             }
+            for i in range(n)
         ]
     )
-    cases = pd.DataFrame(
+
+
+def _case_rows() -> pd.DataFrame:
+    return pd.DataFrame(
         [
             {
                 "case_uid": "c1",
@@ -203,10 +209,13 @@ def test_reusable_pool_masks_missing_outfall_without_zero_imputation(tmp_path: P
             }
         ]
     )
+
+
+def test_reusable_pool_masks_missing_outfall_without_zero_imputation(tmp_path: Path):
     physical_path = tmp_path / "physical.csv"
     case_path = tmp_path / "cases.csv"
-    physical.to_csv(physical_path, index=False)
-    cases.to_csv(case_path, index=False)
+    _physical_rows(1).to_csv(physical_path, index=False)
+    _case_rows().to_csv(case_path, index=False)
     result = build_reusable_paper_pool(
         physical_inventory=physical_path,
         case_inventory=case_path,
@@ -224,43 +233,10 @@ def test_reusable_pool_masks_missing_outfall_without_zero_imputation(tmp_path: P
 
 
 def test_reusable_pool_has_no_fixed_1600_cap(tmp_path: Path):
-    physical = pd.DataFrame(
-        [
-            {
-                "physical_identity_sha256": f"p{i}",
-                "source_role": "development",
-                "domain_id": "target_no_dwf",
-                "available_node_depth": True,
-                "available_node_flooding_rate": True,
-                "available_storage_volume": True,
-                "available_managed_facility_flow": True,
-                "available_outfall_flow": False,
-                "available_readback_setting": True,
-                "available_rainfall": True,
-                "available_history_complete": True,
-                "available_horizon_complete": True,
-                "available_outfall_reconstruction_candidate": False,
-            }
-            for i in range(1601)
-        ]
-    )
-    cases = pd.DataFrame(
-        [
-            {
-                "case_uid": "c1",
-                "classification": "PARTIAL_AUX_REUSE",
-                "source_role": "development",
-                "domain_id": "target_no_dwf",
-                "four_reference_complete": True,
-                "core_trajectory_targets": True,
-                "full_reuse_targets": False,
-            }
-        ]
-    )
     p = tmp_path / "p.csv"
     c = tmp_path / "c.csv"
-    physical.to_csv(p, index=False)
-    cases.to_csv(c, index=False)
+    _physical_rows(1601).to_csv(p, index=False)
+    _case_rows().to_csv(c, index=False)
     result = build_reusable_paper_pool(
         physical_inventory=p,
         case_inventory=c,
@@ -269,3 +245,19 @@ def test_reusable_pool_has_no_fixed_1600_cap(tmp_path: Path):
         audit_output=tmp_path / "audit.json",
     )
     assert result.physical_row_count == 1601
+
+
+def test_metadata_only_inventory_cannot_authorize_training_pool(tmp_path: Path):
+    physical = _physical_rows(1).drop(columns=["available_finite_checked", "available_finite_pass"])
+    p = tmp_path / "p.csv"
+    c = tmp_path / "c.csv"
+    physical.to_csv(p, index=False)
+    _case_rows().to_csv(c, index=False)
+    with pytest.raises(KeyError, match="finite-audit"):
+        build_reusable_paper_pool(
+            physical_inventory=p,
+            case_inventory=c,
+            output_physical_manifest=tmp_path / "reuse.csv",
+            output_case_manifest=tmp_path / "reuse_cases.csv",
+            audit_output=tmp_path / "audit.json",
+        )
