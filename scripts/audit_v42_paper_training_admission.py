@@ -21,7 +21,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--oracle-summary", type=Path, required=True)
     parser.add_argument("--hydraulic-target-audit", type=Path, required=True)
-    parser.add_argument("--expected-count", type=int, default=1200)
+    parser.add_argument(
+        "--expected-count",
+        type=int,
+        default=None,
+        help=(
+            "Optional frozen experiment count. Omit for the project-wide R0 pool; "
+            "formal admission is not quota-limited."
+        ),
+    )
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args()
 

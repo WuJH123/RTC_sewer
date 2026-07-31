@@ -16,7 +16,11 @@ from sewerrtc.v4.paper_workflow_v42 import audit_paper_workflow
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Audit the fail-closed V4.2 paper workflow in scientific order."
+        description=(
+            "Audit Step 4 of the fail-closed V4.2 paper workflow: true-state/offline, "
+            "closed loops, Policy Lock, Challenge and Formal Blind. Use "
+            "scripts/project6_v42_mainline.py for the full R0->Step1->Step2->Step3->Step4 chain."
+        )
     )
     parser.add_argument(
         "--config",
@@ -37,7 +41,8 @@ def main() -> int:
     output_root = (
         Path(args.output_root)
         if args.output_root
-        else root / str(
+        else root
+        / str(
             config.get("project", {}).get(
                 "output_root", "outputs/project6_dual_reference_v4/final_v4"
             )

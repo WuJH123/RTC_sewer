@@ -1,15 +1,15 @@
-"""Build masked reusable V4.2 task manifests from an existing-pool audit."""
+"""Build strict target-masked reusable V4.2 task manifests."""
 from __future__ import annotations
 
 import argparse
 import json
 from pathlib import Path
 
-from sewerrtc.v4.v42_reusable_pool import build_reusable_paper_pool
+from sewerrtc.v4.v42_reusable_pool_strict import build_reusable_paper_pool_strict
 
 
 def _parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Build target-masked reusable V4.2 manifests")
+    p = argparse.ArgumentParser(description="Build strict target-masked reusable V4.2 manifests")
     default_root = Path(
         r"E:\RTC_sewer\Project6\outputs\project6_dual_reference_v4"
         r"\final_v4\v42_paper\data_reuse"
@@ -37,7 +37,7 @@ def main() -> int:
             f"missing {alignment}; run scripts/audit_v42_case_alignment.py first, "
             "or explicitly use --allow-missing-alignment-audit for generic pretraining only"
         )
-    result = build_reusable_paper_pool(
+    result = build_reusable_paper_pool_strict(
         physical_inventory=root / "physical_run_inventory.parquet",
         case_inventory=root / "target_coverage_by_case.csv",
         alignment_inventory=alignment if alignment.exists() else None,
@@ -55,6 +55,7 @@ def main() -> int:
                 "audit": str(result.audit_path),
                 "physical_rows": result.physical_row_count,
                 "case_rows": result.case_row_count,
+                "strict_scientific_admission": True,
             },
             indent=2,
         )
