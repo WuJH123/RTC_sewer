@@ -1,13 +1,14 @@
 """End-to-end scientific gate for the V4.2 paper mainline.
 
-This module connects the pieces that were previously audited independently:
+This module connects the formal chain:
 
 Phase R0 -> Step 1 temporal sparse GAT -> Step 2 four-reference hydraulic
 surrogate -> Step 3 PFV-first MPC -> Step 4 closed-loop/lock/blind evidence.
 
 It is an audit/orchestration gate, not a substitute for executing training or
-SWMM.  Missing evidence stops the chain at the first incomplete scientific
-stage.
+SWMM. Missing evidence stops the chain at the first incomplete scientific stage.
+The gate also verifies cross-stage model lineage so a different GAT/surrogate
+cannot be substituted after training validation.
 """
 from __future__ import annotations
 
@@ -18,7 +19,12 @@ from typing import Any, Mapping
 
 import pandas as pd
 
-from .paper_workflow_v42 import CONTRACT_ID, MODEL_LINE, audit_paper_workflow
+from .paper_workflow_v42 import (
+    CONTRACT_ID,
+    EVIDENCE_RELATIVE_PATHS,
+    MODEL_LINE,
+    audit_paper_workflow,
+)
 
 
 MAINLINE_ID = "PROJECT6_V42_MAINLINE_V1"
@@ -79,6 +85,21 @@ def _read_table(path: Path) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
+def _coerce_bool_series(series: pd.Series, *, column: str) -> pd.Series:
+    """Parse persisted booleans without treating the string 'False' as True."""
+    if pd.api.types.is_bool_dtype(series.dtype):
+        return series.fillna(False).astype(bool)
+    if pd.api.types.is_numeric_dtype(series.dtype):
+        return series.fillna(0).astype(float).ne(0.0)
+    text = series.fillna("").astype(str).str.strip().str.casefold()
+    true_values = {"true", "1", "yes", "y", "t"}
+    false_values = {"false", "0", "no", "n", "f", "", "none", "nan"}
+    unknown = sorted(set(text.unique()) - true_values - false_values)
+    if unknown:
+        raise ValueError(f"boolean column {column!r} has unsupported values: {unknown[:10]}")
+    return text.isin(true_values)
+
+
 def _payload_common(payload: Mapping[str, Any], stage: str) -> list[str]:
     reasons: list[str] = []
     if payload.get("contract_id") != CONTRACT_ID:
@@ -107,6 +128,8 @@ def audit_phase_r0(output_root: Path) -> MainlineStageAudit:
             reasons.append("r0_missing_target_policy_invalid")
         if summary.get("strict_semantics_wrapper") is not True:
             reasons.append("r0_strict_semantics_not_proven")
+        if summary.get("discovery_cache_current") is False:
+            reasons.append("r0_scan_cache_does_not_cover_current_discovery")
     except Exception as exc:
         reasons.append(f"r0_audit_unreadable:{type(exc).__name__}")
     try:
@@ -125,9 +148,10 @@ def audit_phase_r0(output_root: Path) -> MainlineStageAudit:
         if align.empty:
             reasons.append("r0_alignment_empty")
         else:
-            ok = (
-                align["same_state_numeric_pass"].fillna(False).astype(bool)
-                & align["same_forcing_pass"].fillna(False).astype(bool)
+            ok = _coerce_bool_series(
+                align["same_state_numeric_pass"], column="same_state_numeric_pass"
+            ) & _coerce_bool_series(
+                align["same_forcing_pass"], column="same_forcing_pass"
             )
             if not bool(ok.any()):
                 reasons.append("r0_no_numeric_same_state_same_forcing_case")
@@ -138,7 +162,9 @@ def audit_phase_r0(output_root: Path) -> MainlineStageAudit:
         if split.empty or "split_group_key" not in split.columns:
             reasons.append("r0_rainfall_split_groups_missing")
         if "reserved_evaluation" in split.columns and bool(
-            split["reserved_evaluation"].fillna(False).astype(bool).any()
+            _coerce_bool_series(
+                split["reserved_evaluation"], column="reserved_evaluation"
+            ).any()
         ):
             reasons.append("r0_reusable_split_contains_reserved_evaluation")
     except Exception as exc:
@@ -154,6 +180,8 @@ def _audit_step1(output_root: Path) -> MainlineStageAudit:
         reasons.extend(_payload_common(p, "step1_sparse_state"))
         if p.get("formal_reconstructor") != "TemporalSparseGATReconstructorV42":
             reasons.append("wrong_step1_reconstructor")
+        if p.get("reconstructor_contract") not in (None, "formal_temporal_v42"):
+            reasons.append("step1_reconstructor_contract_not_formal_temporal")
         if p.get("new_formal_training") is not True:
             reasons.append("step1_new_training_not_proven")
         if p.get("rainfall_group_isolated_split") is not True:
@@ -218,6 +246,10 @@ def _audit_step3(output_root: Path) -> MainlineStageAudit:
             reasons.append("step3_wrong_tfv_reference")
         if int(p.get("max_changed_facilities", -1)) != 8:
             reasons.append("step3_K_contract_mismatch")
+        if int(p.get("horizon_steps", 12)) != 12:
+            reasons.append("step3_horizon_contract_mismatch")
+        if int(p.get("facility_count", 36)) != 36:
+            reasons.append("step3_engineering36_contract_mismatch")
         if p.get("tfv_is_hard_safety_constraint") is not False:
             reasons.append("step3_tfv_must_not_be_hard_gate")
         if p.get("engineering_status_derived_from_execution") is not True:
@@ -231,6 +263,36 @@ def _audit_step3(output_root: Path) -> MainlineStageAudit:
     except Exception as exc:
         reasons.append(f"step3_evidence_unreadable:{type(exc).__name__}")
     return MainlineStageAudit("step3_pfvfirst_mpc", not reasons, tuple(reasons), str(path))
+
+
+def _cross_stage_lineage_reasons(output_root: Path) -> list[str]:
+    """Bind Step-1/Step-2 trained models to every formal downstream stage."""
+    reasons: list[str] = []
+    try:
+        step1 = _read_json(output_root / "v42_paper" / "step1_gat" / "evidence.json")
+        step2 = _read_json(output_root / "v42_paper" / "step2_surrogate" / "evidence.json")
+        expected_gat = str(step1.get("gat_model_sha256", ""))
+        expected_surrogate = str(step2.get("surrogate_model_sha256", ""))
+        if not expected_gat or not expected_surrogate:
+            return ["cross_stage_training_model_hash_missing"]
+
+        checks = (
+            ("true_state_offline_validation", "surrogate_model_sha256", expected_surrogate),
+            ("surrogate_closed_loop", "surrogate_model_sha256", expected_surrogate),
+            ("gat_integrated_closed_loop", "surrogate_model_sha256", expected_surrogate),
+            ("gat_integrated_closed_loop", "gat_model_sha256", expected_gat),
+            ("policy_lock", "model_sha256", expected_surrogate),
+            ("policy_lock", "gat_model_sha256", expected_gat),
+        )
+        for stage, key, expected in checks:
+            path = output_root / EVIDENCE_RELATIVE_PATHS[stage]
+            payload = _read_json(path)
+            observed = str(payload.get(key, ""))
+            if observed != expected:
+                reasons.append(f"{stage}_{key}_does_not_match_training_evidence")
+    except Exception as exc:
+        reasons.append(f"cross_stage_lineage_unreadable:{type(exc).__name__}")
+    return reasons
 
 
 def audit_v42_mainline(output_root: str | Path) -> MainlineAudit:
@@ -263,6 +325,24 @@ def audit_v42_mainline(output_root: str | Path) -> MainlineAudit:
             False,
             tuple(final),
         )
+
+    lineage_reasons = _cross_stage_lineage_reasons(root)
+    if lineage_reasons:
+        final.append(
+            MainlineStageAudit(
+                "step4_closed_loop_and_blind",
+                False,
+                tuple(lineage_reasons),
+                str(root / "v42_paper"),
+            )
+        )
+        return MainlineAudit(
+            passed_through,
+            "step4_closed_loop_and_blind",
+            False,
+            tuple(final),
+        )
+
     final.append(
         MainlineStageAudit(
             "step4_closed_loop_and_blind", True, (), str(root / "v42_paper")
