@@ -111,6 +111,7 @@ def build_reusable_paper_pool(
     alignment_inventory: str | Path | None = None,
     include_source_domain: bool = True,
     include_consumed_development: bool = True,
+    require_finite_audit: bool = True,
 ) -> ReusablePoolResult:
     """Create masked task views without pretending that missing targets exist.
 
@@ -118,6 +119,10 @@ def build_reusable_paper_pool(
     when a numeric four-branch alignment audit proves a common hydraulic prefix
     and common future rainfall forcing.  Generic single-branch dynamics reuse
     does not require that four-reference proof.
+
+    By default the physical inventory must come from a ``--full-finite-check``
+    audit.  A fast metadata-only inventory is suitable for discovery/reporting,
+    but not for a training manifest.
     """
     physical_path = Path(physical_inventory)
     case_path = Path(case_inventory)
@@ -127,6 +132,18 @@ def build_reusable_paper_pool(
         raise ValueError("physical inventory is empty")
     if cases.empty:
         raise ValueError("case inventory is empty")
+    if require_finite_audit:
+        required_finite_cols = {"available_finite_checked", "available_finite_pass"}
+        if not required_finite_cols.issubset(physical.columns):
+            raise KeyError(
+                "physical inventory lacks finite-audit evidence; rerun "
+                "audit_v42_existing_swmm_pool.py --full-finite-check"
+            )
+        if not _bool_series(physical, "available_finite_checked").all():
+            raise RuntimeError(
+                "metadata-only inventory cannot authorize reusable training views; "
+                "run the full finite audit first"
+            )
 
     alignment_present = alignment_inventory is not None and Path(alignment_inventory).exists()
     if alignment_present:
@@ -158,8 +175,6 @@ def build_reusable_paper_pool(
         case_keep = case_keep[case_keep["source_role"] != "consumed_development"].copy()
     if "source_role" in case_keep.columns:
         case_keep = case_keep[case_keep["source_role"] != "reserved_evaluation"].copy()
-    # Frozen copies / repeated manifests may produce duplicate logical case rows.
-    # A sorted physical-branch identity set is the canonical case evidence key.
     if "branch_physical_ids" in case_keep.columns:
         case_keep = case_keep.sort_values(["branch_physical_ids", "source_role"]).drop_duplicates(
             "branch_physical_ids", keep="first"
@@ -183,6 +198,7 @@ def build_reusable_paper_pool(
     physical_view = physical.copy()
     for target, source in mask_sources.items():
         physical_view[target] = _bool_series(physical_view, source)
+    physical_view["mask_finite"] = _bool_series(physical_view, "available_finite_pass")
 
     anchor_counts: list[int] = []
     for row in physical_view.itertuples(index=False):
@@ -199,14 +215,18 @@ def build_reusable_paper_pool(
         & physical_view["mask_readback"]
         & physical_view["mask_rainfall"]
         & physical_view["windowable_13x12"]
+        & physical_view["mask_finite"]
     )
     physical_view["eligible_actuator_effect"] = (
         physical_view["mask_facility_flow"]
         & physical_view["mask_readback"]
         & physical_view["windowable_13x12"]
+        & physical_view["mask_finite"]
     )
-    physical_view["eligible_storage_supervision"] = physical_view["mask_storage"] & physical_view["windowable_13x12"]
-    physical_view["eligible_outfall_supervision"] = physical_view["mask_outfall_flow"]
+    physical_view["eligible_storage_supervision"] = (
+        physical_view["mask_storage"] & physical_view["windowable_13x12"] & physical_view["mask_finite"]
+    )
+    physical_view["eligible_outfall_supervision"] = physical_view["mask_outfall_flow"] & physical_view["mask_finite"]
     physical_view["formal_complete_branch"] = (
         physical_view["mask_history"]
         & physical_view["mask_horizon"]
@@ -279,6 +299,7 @@ def build_reusable_paper_pool(
         "case_inventory": str(case_path),
         "alignment_inventory": None if alignment_inventory is None else str(alignment_inventory),
         "alignment_audit_present": bool(alignment_present),
+        "finite_audit_required": bool(require_finite_audit),
         "missing_targets_are_imputed": False,
         "formal_strict_builder_preserved": True,
         "availability_mask_authority": "existing_pool_audit_only",
