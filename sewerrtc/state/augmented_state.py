@@ -5,7 +5,13 @@ import hashlib
 import json
 from pathlib import Path
 
-from .state_contract import FACILITY_STATE_FIELDS, NODE_STATE_FIELDS, PUMP_STATE_FIELDS, build_state_feature_contract
+from .state_contract import (
+    FACILITY_STATE_FIELDS,
+    NODE_STATE_FIELDS,
+    PUMP_STATE_FIELDS,
+    TEMPORAL_FRAME_OFFSETS_MIN,
+    build_state_feature_contract,
+)
 
 
 def sha256_file(path: Path) -> str | None:
@@ -49,6 +55,12 @@ def _gat_lock_status(project_root: Path) -> tuple[str, str]:
 
 
 def build_augmented_state_contract_outputs(config_path: Path, gat_compatibility_path: Path, out_dir: Path) -> dict[str, Path]:
+    """Write the V4.2 sparse-state contract and audit templates.
+
+    This function freezes schema only.  It deliberately does not claim that a
+    GAT inference run, uncertainty calibration, or controller integration has
+    completed.  Runtime materialisation is audited separately.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     network_path = _network_path_from_config(config_path)
     config_hash = sha256_file(config_path)
@@ -78,7 +90,9 @@ def build_augmented_state_contract_outputs(config_path: Path, gat_compatibility_
         "facility_state_fields": FACILITY_STATE_FIELDS,
         "pump_state_fields": PUMP_STATE_FIELDS,
         "state_tensor_shape": {
-            "temporal_frames": 7,
+            "temporal_frames": len(TEMPORAL_FRAME_OFFSETS_MIN),
+            "frame_offsets_min": TEMPORAL_FRAME_OFFSETS_MIN,
+            "frame_semantics": "chronological_t_minus_60_to_t_at_5min",
             "node_axis": "retrofit_inp_node_order",
             "facility_axis": 36,
             "selected_primary_gat": "sr0p15",
@@ -111,7 +125,7 @@ def build_augmented_state_contract_outputs(config_path: Path, gat_compatibility_
             ],
         )
         writer.writeheader()
-        for i, offset in enumerate([0, -10, -20, -30, -40, -50, -60]):
+        for i, offset in enumerate(TEMPORAL_FRAME_OFFSETS_MIN):
             writer.writerow(
                 {
                     "frame_index": i,
@@ -133,6 +147,8 @@ def build_augmented_state_contract_outputs(config_path: Path, gat_compatibility_
                 "future_data_violation_blocks_online_control": True,
                 "stale_data_flag_required": True,
                 "ood_score_required": True,
+                "gat_uncertainty_required": True,
+                "offline_truth_cannot_be_labelled_reconstructed": True,
                 "sentinel_threshold_unresolved": True,
             },
             indent=2,
