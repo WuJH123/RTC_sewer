@@ -1,9 +1,9 @@
-"""Trajectory losses: depth trajectory MSE/SmoothL1 for candidate and reference.
+"""Trajectory and KPI losses for the V4.2 multi-reference surrogate.
 
-Includes:
-  - Depth trajectory loss (candidate + reference)
-  - Delta trajectory loss
-  - Dead-zone-aware loss for PFV, TFV, Peak
+The shared dynamics model predicts Candidate, No-control, Dynamic Internal and
+Hold-Previous branches.  PFV is supervised against No-control; TFV and Peak are
+supervised against Dynamic Internal.  This module therefore keeps the branch
+roles explicit instead of silently reusing one generic reference.
 """
 from __future__ import annotations
 
@@ -12,13 +12,7 @@ from torch import nn
 
 
 class TrajectoryLosses(nn.Module):
-    """Compute trajectory-level losses for depth predictions.
-
-    Dead zones: below these thresholds, errors are not penalized.
-      PFV dead_zone  = 1.0 m³
-      TFV dead_zone  = 1.0 m³
-      Peak dead_zone = 0.001 m³/s
-    """
+    """Compute branch trajectory and dead-zone-aware KPI losses."""
 
     def __init__(
         self,
@@ -31,12 +25,16 @@ class TrajectoryLosses(nn.Module):
         norm_std: dict[str, float] | None = None,
     ):
         super().__init__()
-        # When targets are z-score normalized, scale dead zones by std
-        # so the threshold remains meaningful in normalized space
         if norm_std is not None:
-            self.pfv_dead_zone = float(pfv_dead_zone) / max(norm_std.get("pfv_delta", 1.0), 1e-8)
-            self.tfv_dead_zone = float(tfv_dead_zone) / max(norm_std.get("tfv_delta", 1.0), 1e-8)
-            self.peak_dead_zone = float(peak_dead_zone) / max(norm_std.get("peak_delta", 1.0), 1e-8)
+            self.pfv_dead_zone = float(pfv_dead_zone) / max(
+                norm_std.get("pfv_delta", 1.0), 1e-8
+            )
+            self.tfv_dead_zone = float(tfv_dead_zone) / max(
+                norm_std.get("tfv_delta", 1.0), 1e-8
+            )
+            self.peak_dead_zone = float(peak_dead_zone) / max(
+                norm_std.get("peak_delta", 1.0), 1e-8
+            )
         else:
             self.pfv_dead_zone = float(pfv_dead_zone)
             self.tfv_dead_zone = float(tfv_dead_zone)
@@ -45,82 +43,98 @@ class TrajectoryLosses(nn.Module):
         self.delta_weight = float(delta_weight)
         self.kpi_weight = float(kpi_weight)
 
+    @staticmethod
+    def _zero(pred: dict[str, torch.Tensor]) -> torch.Tensor:
+        return pred["y_candidate"].sum() * 0.0
+
     def forward(
         self,
         pred: dict[str, torch.Tensor],
         target: dict[str, torch.Tensor],
     ) -> dict[str, torch.Tensor]:
-        """
-        pred dict:
-            y_candidate : [B, H, N]
-            y_reference : [B, H, N]
-            delta       : [B, H, N]
-            pfv_delta   : [B]
-            tfv_delta   : [B]
-            peak_flood_rate : [B]
-
-        target dict:
-            depth_candidate : [B, H, N]
-            depth_reference : [B, H, N]
-            pfv_gt          : [B]
-            tfv_gt          : [B]
-            peak_gt         : [B]
-        """
         losses: dict[str, torch.Tensor] = {}
+        zero = self._zero(pred)
 
-        # Depth trajectory loss (candidate + reference)
+        # Supervise every branch that is part of the formal four-reference
+        # contract.  Missing DI/Hold predictions are a data/model contract error
+        # rather than a reason to fall back to NC.
+        branch_pairs = [
+            ("y_candidate", "depth_candidate"),
+            ("y_reference", "depth_reference"),
+            ("y_dynamic_internal", "depth_dynamic_internal"),
+            ("y_hold_previous", "depth_hold_previous"),
+        ]
+        branch_losses = []
+        for pred_key, target_key in branch_pairs:
+            if target_key in target:
+                if pred_key not in pred:
+                    raise KeyError(
+                        f"Target {target_key} is present but model did not produce {pred_key}"
+                    )
+                branch_losses.append(
+                    nn.functional.smooth_l1_loss(
+                        pred[pred_key], target[target_key], reduction="mean"
+                    )
+                )
+        losses["depth_trajectory"] = (
+            torch.stack(branch_losses).mean() if branch_losses else zero
+        )
+
+        # Counterfactual trajectory deltas for the two scientific references.
+        delta_losses = []
         if "depth_candidate" in target and "depth_reference" in target:
-            traj_c = nn.functional.smooth_l1_loss(
-                pred["y_candidate"], target["depth_candidate"], reduction="mean"
+            target_delta_nc = target["depth_candidate"] - target["depth_reference"]
+            delta_losses.append(
+                nn.functional.smooth_l1_loss(
+                    pred["delta"], target_delta_nc, reduction="mean"
+                )
             )
-            traj_r = nn.functional.smooth_l1_loss(
-                pred["y_reference"], target["depth_reference"], reduction="mean"
+        if "depth_dynamic_internal" in target:
+            if "delta_di" not in pred:
+                raise KeyError("DI target present but delta_di prediction is missing")
+            target_delta_di = (
+                target["depth_candidate"] - target["depth_dynamic_internal"]
             )
-            losses["depth_trajectory"] = (traj_c + traj_r) * 0.5
-        else:
-            losses["depth_trajectory"] = torch.zeros((), device=pred["y_candidate"].device)
+            delta_losses.append(
+                nn.functional.smooth_l1_loss(
+                    pred["delta_di"], target_delta_di, reduction="mean"
+                )
+            )
+        losses["delta_trajectory"] = (
+            torch.stack(delta_losses).mean() if delta_losses else zero
+        )
 
-        # Delta trajectory loss
-        if "depth_candidate" in target and "depth_reference" in target:
-            target_delta = target["depth_candidate"] - target["depth_reference"]
-            losses["delta_trajectory"] = nn.functional.smooth_l1_loss(
-                pred["delta"], target_delta, reduction="mean"
-            )
-        else:
-            losses["delta_trajectory"] = torch.zeros((), device=pred["y_candidate"].device)
-
-        # Dead-zone-aware KPI losses
-        # PFV — data key is "pfv_delta" (Candidate − Reference convention)
         if "pfv_delta" in target and "pfv_delta" in pred:
             pfv_err = pred["pfv_delta"] - target["pfv_delta"]
-            # Dead zone: no penalty if |error| < dead_zone
-            pfv_dz = torch.relu(pfv_err.abs() - self.pfv_dead_zone)
-            losses["pfv_kpi"] = pfv_dz.mean()
+            losses["pfv_kpi"] = torch.relu(
+                pfv_err.abs() - self.pfv_dead_zone
+            ).mean()
         else:
-            losses["pfv_kpi"] = torch.zeros((), device=pred["y_candidate"].device)
+            losses["pfv_kpi"] = zero
 
-        # TFV — data key is "tfv_delta"
         if "tfv_delta" in target and "tfv_delta" in pred:
             tfv_err = pred["tfv_delta"] - target["tfv_delta"]
-            tfv_dz = torch.relu(tfv_err.abs() - self.tfv_dead_zone)
-            losses["tfv_kpi"] = tfv_dz.mean()
+            losses["tfv_kpi"] = torch.relu(
+                tfv_err.abs() - self.tfv_dead_zone
+            ).mean()
         else:
-            losses["tfv_kpi"] = torch.zeros((), device=pred["y_candidate"].device)
+            losses["tfv_kpi"] = zero
 
-        # Peak — data key is "peak_delta"
-        if "peak_delta" in target and "peak_flood_rate" in pred:
-            peak_err = pred["peak_flood_rate"] - target["peak_delta"]
-            peak_dz = torch.relu(peak_err.abs() - self.peak_dead_zone)
-            losses["peak_kpi"] = peak_dz.mean()
+        # Unified key: Peak is a *delta* relative to Dynamic Internal.
+        if "peak_delta" in target and "peak_delta" in pred:
+            peak_err = pred["peak_delta"] - target["peak_delta"]
+            losses["peak_kpi"] = torch.relu(
+                peak_err.abs() - self.peak_dead_zone
+            ).mean()
         else:
-            losses["peak_kpi"] = torch.zeros((), device=pred["y_candidate"].device)
+            losses["peak_kpi"] = zero
 
         return losses
 
     def total(self, losses: dict[str, torch.Tensor]) -> torch.Tensor:
-        """Weighted sum of all trajectory losses."""
         return (
             self.trajectory_weight * losses["depth_trajectory"]
             + self.delta_weight * losses["delta_trajectory"]
-            + self.kpi_weight * (losses["pfv_kpi"] + losses["tfv_kpi"] + losses["peak_kpi"])
+            + self.kpi_weight
+            * (losses["pfv_kpi"] + losses["tfv_kpi"] + losses["peak_kpi"])
         )

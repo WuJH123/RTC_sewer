@@ -1,14 +1,17 @@
-"""Physics losses: 8 physics-guided loss terms, each recorded separately.
+"""Physically defensible regularisation terms for V4.2.
 
-Losses:
-  1. mass_balance       — |Σinflow - Σoutflow - Δstorage|
-  2. storage_continuity — storage change consistency
-  3. non_negative       — ReLU(-pred_depth) penalty
-  4. capacity_bounds    — ReLU(pred_depth - max_depth) penalty
-  5. flooding_consistency — flood occurs iff depth > capacity
-  6. shared_init_state  — candidate & reference start from same state
-  7. kpi_trajectory_consistency — predicted KPI matches trajectory-derived KPI
-  8. peak_consistency   — direct peak ≈ max(sequence)
+Important
+---------
+Older V4.2 code estimated link flow from depth differences, assumed a uniform
+100 m² ponded area, forced Candidate and Reference to be equal at t+10, and
+compared depth proxies (metres) with KPI targets expressed in m³ / z-score
+space.  Those terms were not SWMM mass-balance constraints and could actively
+suppress the control-effect signal.
+
+A second subtle issue is that ``node_feature_matrix`` standardises static node
+features.  A z-scored ``max_depth`` must never be used as a physical depth
+limit in metres.  Capacity loss is therefore fail-closed unless the caller
+explicitly declares that ``node_max_depth`` is in physical metres.
 """
 from __future__ import annotations
 
@@ -17,27 +20,43 @@ from torch import nn
 
 
 class PhysicsLosses(nn.Module):
-    """Compute 8 physics-guided loss terms from model predictions.
-
-    All losses are differentiable scalars. Each is returned in a dict
-    so they can be logged individually and weighted in the total loss.
-    """
+    """Compute only constraints supported by explicitly valid physical inputs."""
 
     def __init__(
         self,
         n_nodes: int,
         node_max_depth: torch.Tensor | None = None,
         dt_sec: float = 600.0,
-        ponded_area: float = 100.0,
+        ponded_area: float | None = None,
+        *,
+        node_max_depth_is_physical_m: bool = False,
     ):
         super().__init__()
         self.n_nodes = int(n_nodes)
         self.dt_sec = float(dt_sec)
-        self.ponded_area = float(ponded_area)
-        if node_max_depth is not None:
-            self.register_buffer("node_max_depth", node_max_depth)
+        self.ponded_area = None if ponded_area is None else float(ponded_area)
+        self.capacity_active = bool(
+            node_max_depth is not None and node_max_depth_is_physical_m
+        )
+        if self.capacity_active:
+            depth = node_max_depth.detach().float().clone()
+            if depth.ndim != 1 or depth.numel() != self.n_nodes:
+                raise ValueError(
+                    f"Physical node_max_depth must have shape [{self.n_nodes}], "
+                    f"got {tuple(depth.shape)}"
+                )
+            if not torch.isfinite(depth).all():
+                raise ValueError("Physical node_max_depth contains NaN/Inf")
+            # Zero/negative limits commonly denote outfalls or unknown limits;
+            # they are not valid capacity constraints.  Mark them unbounded.
+            depth = torch.where(depth > 0.0, depth, torch.full_like(depth, float("inf")))
+            self.register_buffer("node_max_depth", depth)
         else:
-            self.register_buffer("node_max_depth", torch.ones(n_nodes) * 5.0)
+            self.register_buffer("node_max_depth", torch.full((self.n_nodes,), float("inf")))
+
+    @staticmethod
+    def _zero_connected(x: torch.Tensor) -> torch.Tensor:
+        return x.sum() * 0.0
 
     def forward(
         self,
@@ -47,105 +66,81 @@ class PhysicsLosses(nn.Module):
         node_static: torch.Tensor | None = None,
         action_node_map: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
-        """
-        pred dict must contain:
-            y_candidate : [B, H, N]
-            y_reference : [B, H, N]
-            delta       : [B, H, N]
-            pfv_delta   : [B]  (from LocalPriorityDecoder)
-            tfv_delta   : [B]  (from GlobalSystemDecoder)
-            peak_flood_rate : [B]
-            tfv_rate_seq : [B, H]
+        if "y_candidate" not in pred or "y_reference" not in pred:
+            raise KeyError("PhysicsLosses requires y_candidate and y_reference")
 
-        target dict (optional) may contain:
-            pfv_gt : [B]
-            tfv_gt : [B]
-            peak_gt : [B]
-        """
-        losses: dict[str, torch.Tensor] = {}
         y_cand = pred["y_candidate"]
         y_ref = pred["y_reference"]
-        B, H, N = y_cand.shape
+        if y_cand.shape != y_ref.shape:
+            raise ValueError("Candidate and reference depth trajectories must align")
+        _, H, N = y_cand.shape
+        if N != self.n_nodes:
+            raise ValueError(f"Expected {self.n_nodes} nodes, got {N}")
 
-        # 1. Mass balance: |Σinflow - Σoutflow - Δstorage|
-        #    Approximate: volume change should be consistent with edge flows
-        if edge_index is not None and edge_index.numel() > 0:
-            vol = y_cand * self.ponded_area  # [B, H, N]
-            dV = vol[:, 1:, :] - vol[:, :-1, :]  # [B, H-1, N]
-            src, dst = edge_index[0], edge_index[1]
-            # Net flow at each node
-            q = torch.relu(y_cand[:, :-1, src] - y_cand[:, :-1, dst])  # [B, H-1, E]
-            flow_in = torch.zeros(B, H - 1, N, device=y_cand.device, dtype=y_cand.dtype)
-            flow_out = torch.zeros(B, H - 1, N, device=y_cand.device, dtype=y_cand.dtype)
-            flow_in.scatter_add_(2, dst[None, None, :].expand(B, H - 1, -1), q)
-            flow_out.scatter_add_(2, src[None, None, :].expand(B, H - 1, -1), q)
-            net_flow = (flow_in - flow_out) * self.dt_sec
-            mass_res = (dV - net_flow).abs().mean()
+        zero = self._zero_connected(y_cand)
+        losses: dict[str, torch.Tensor] = {}
+
+        # True mass balance is only available if the caller supplies a residual
+        # in physical volume units.  Never infer flow from node-depth differences.
+        if "mass_balance_residual_m3" in pred:
+            losses["mass_balance"] = pred["mass_balance_residual_m3"].abs().mean()
         else:
-            mass_res = torch.zeros((), device=y_cand.device, dtype=y_cand.dtype)
-        losses["mass_balance"] = mass_res
+            losses["mass_balance"] = zero
 
-        # 2. Storage continuity: temporal smoothness of depth
-        #    Penalize large second-order differences
+        # Mild temporal curvature regularisation; this is not labelled as exact
+        # SWMM storage continuity in scientific reporting.
         if H >= 3:
             d1 = y_cand[:, 1:, :] - y_cand[:, :-1, :]
             d2 = d1[:, 1:, :] - d1[:, :-1, :]
-            storage_cont = (d2 ** 2).mean()
+            losses["storage_continuity"] = (d2 ** 2).mean()
         else:
-            storage_cont = torch.zeros((), device=y_cand.device, dtype=y_cand.dtype)
-        losses["storage_continuity"] = storage_cont
+            losses["storage_continuity"] = zero
 
-        # 3. Non-negative depth: ReLU(-pred_depth) penalty
-        neg_penalty = torch.relu(-y_cand).mean() + torch.relu(-y_ref).mean()
-        losses["non_negative"] = neg_penalty
+        branch_depths = [y_cand, y_ref]
+        for key in ("y_dynamic_internal", "y_hold_previous"):
+            if key in pred:
+                branch_depths.append(pred[key])
+        losses["non_negative"] = sum(torch.relu(-x).mean() for x in branch_depths)
 
-        # 4. Capacity bounds: ReLU(pred_depth - max_depth) penalty
-        cap_viol_c = torch.relu(y_cand - self.node_max_depth[None, None, :]).mean()
-        cap_viol_r = torch.relu(y_ref - self.node_max_depth[None, None, :]).mean()
-        losses["capacity_bounds"] = cap_viol_c + cap_viol_r
+        # Capacity bounds are active only when raw INP max-depth values in metres
+        # have been explicitly supplied.  Standardised graph features are not
+        # accepted as physical limits.
+        if self.capacity_active:
+            max_depth = self.node_max_depth[None, None, :]
+            losses["capacity_bounds"] = sum(
+                torch.relu(x - max_depth).mean() for x in branch_depths
+            )
+        else:
+            losses["capacity_bounds"] = zero
 
-        # 5. Flooding consistency: flood occurs iff depth > capacity
-        #    Predicted flood volume from trajectory vs actual overflow
-        flood_from_depth_c = torch.relu(y_cand - self.node_max_depth[None, None, :])
-        flood_from_depth_r = torch.relu(y_ref - self.node_max_depth[None, None, :])
-        # The delta trajectory should be consistent with flooding change
-        delta_flood = flood_from_depth_c - flood_from_depth_r
-        flood_consistency = (delta_flood - pred["delta"]).abs().mean()
-        losses["flooding_consistency"] = flood_consistency
+        if "flooding_consistency_residual_m3s" in pred:
+            losses["flooding_consistency"] = pred[
+                "flooding_consistency_residual_m3s"
+            ].abs().mean()
+        else:
+            losses["flooding_consistency"] = zero
 
-        # 6. Shared initial state: candidate & reference start from same state
-        init_diff = (y_cand[:, 0, :] - y_ref[:, 0, :]).abs().mean()
-        losses["shared_init_state"] = init_diff
+        # Same-state equality belongs at the checkpoint in the data contract.
+        # The first predicted t+10 state is allowed to diverge after actions.
+        losses["shared_init_state"] = zero
 
-        # 7. KPI-trajectory consistency: predicted KPI delta matches trajectory-derived
-        #    KPI delta.  Both PFV and TFV are computed from the *overflow* depth
-        #    (max(depth - max_depth, 0)) so they are in depth units (m) and
-        #    commensurable with pred_pfv / pred_tfv.  Mean over horizon keeps the
-        #    scale in meters (matching the predicted delta) instead of m·steps.
-        priority_flood_c = torch.relu(
-            y_cand - self.node_max_depth[None, None, :]
-        )  # [B, H, N]
-        priority_flood_r = torch.relu(
-            y_ref - self.node_max_depth[None, None, :]
-        )  # [B, H, N]
-        traj_pfv_c = priority_flood_c.sum(dim=2).mean(dim=1)  # [B]  m
-        traj_pfv_r = priority_flood_r.sum(dim=2).mean(dim=1)  # [B]  m
-        pred_pfv = pred.get("pfv_delta", torch.zeros(B, device=y_cand.device))
-        kpi_pfv_consistency = ((traj_pfv_c - traj_pfv_r) - pred_pfv).abs().mean()
+        kpi_terms = []
+        if "pfv_from_trajectory_m3" in pred and "pfv_delta" in pred:
+            kpi_terms.append(
+                (pred["pfv_from_trajectory_m3"] - pred["pfv_delta"]).abs().mean()
+            )
+        if "tfv_from_trajectory_m3" in pred and "tfv_delta" in pred:
+            kpi_terms.append(
+                (pred["tfv_from_trajectory_m3"] - pred["tfv_delta"]).abs().mean()
+            )
+        losses["kpi_trajectory_consistency"] = sum(kpi_terms) if kpi_terms else zero
 
-        # TFV trajectory proxy: system-wide mean depth (sum/N) per step.
-        # Use the delta (Candidate − Reference) so it is commensurable with tfv_delta.
-        tfv_seq_c = y_cand.sum(dim=2) / max(self.n_nodes, 1)  # [B, H]
-        tfv_seq_r = y_ref.sum(dim=2) / max(self.n_nodes, 1)  # [B, H]
-        traj_tfv_c = tfv_seq_c.mean(dim=1)  # [B]  m
-        traj_tfv_r = tfv_seq_r.mean(dim=1)  # [B]  m
-        pred_tfv = pred.get("tfv_delta", torch.zeros(B, device=y_cand.device))
-        kpi_tfv_consistency = ((traj_tfv_c - traj_tfv_r) - pred_tfv).abs().mean()
-        losses["kpi_trajectory_consistency"] = kpi_pfv_consistency + kpi_tfv_consistency
-
-        # 8. Peak consistency: direct peak ≈ max(sequence)
-        peak_seq = pred.get("tfv_rate_seq", torch.zeros(B, H, device=y_cand.device)).max(dim=1).values
-        peak_direct = pred.get("peak_flood_rate", torch.zeros(B, device=y_cand.device))
-        losses["peak_consistency"] = (peak_seq - peak_direct).abs().mean()
+        if "peak_rate_sequence_m3s" in pred and "peak_delta" in pred:
+            peak_from_seq = pred["peak_rate_sequence_m3s"].max(dim=1).values
+            losses["peak_consistency"] = (
+                peak_from_seq - pred["peak_delta"]
+            ).abs().mean()
+        else:
+            losses["peak_consistency"] = zero
 
         return losses
