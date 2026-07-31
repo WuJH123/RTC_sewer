@@ -7,10 +7,8 @@ import sys
 from pathlib import Path
 
 from sewerrtc.v4.v42_r0_preflight import assert_r0_schema_preflight
-from sewerrtc.v4.v42_r0_strict import (
-    audit_existing_swmm_pool_strict,
-    write_existing_pool_audit,
-)
+from sewerrtc.v4.v42_r0_refresh import audit_existing_swmm_pool_refreshable
+from sewerrtc.v4.v42_r0_strict import write_existing_pool_audit
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -57,12 +55,21 @@ def _parser() -> argparse.ArgumentParser:
             "Default: <output-dir>/_r0_logical_detail_cache.parquet."
         ),
     )
-    p.add_argument(
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument(
         "--resume-scan-cache",
         action="store_true",
         help=(
-            "Skip the expensive CSV audit and resume post-processing from --scan-cache. "
-            "The cache is fail-closed against project/output/network/mode mismatches."
+            "Resume post-processing only when the cache fingerprint exactly covers "
+            "the current discovery population. Stale caches fail closed."
+        ),
+    )
+    mode.add_argument(
+        "--refresh-scan-cache",
+        action="store_true",
+        help=(
+            "Re-run discovery, reuse unchanged cached logical rows and full-audit "
+            "only new/changed rows before rebuilding the current cache."
         ),
     )
     return p
@@ -70,7 +77,6 @@ def _parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = _parser().parse_args()
-    # Catch serializer/classifier schema drift before opening any historical CSV.
     assert_r0_schema_preflight()
     print("[R0] schema preflight PASS", file=sys.stderr, flush=True)
 
@@ -81,13 +87,14 @@ def main() -> int:
         if args.scan_cache is not None
         else output_dir / "_r0_logical_detail_cache.parquet"
     )
-    result = audit_existing_swmm_pool_strict(
+    result = audit_existing_swmm_pool_refreshable(
         project_root=Path(args.project_root),
         outputs_root=Path(args.outputs_root),
+        cache_path=cache_path,
         full_finite_check=full_finite,
         max_workers=max(1, min(int(args.workers), 32)),
-        logical_cache_path=cache_path,
-        resume_from_logical_cache=bool(args.resume_scan_cache),
+        resume=bool(args.resume_scan_cache),
+        refresh=bool(args.refresh_scan_cache),
     )
     paths = write_existing_pool_audit(result, output_dir)
     payload = dict(result.summary)
