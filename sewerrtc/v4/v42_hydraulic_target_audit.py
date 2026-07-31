@@ -143,6 +143,13 @@ def audit_detail_pool(
                 outfall_node_ids=outfall_node_ids,
             ).as_dict()
         )
+    core_targets = [
+        "node_depth",
+        "node_flooding_rate",
+        "storage_volume",
+        "managed_facility_flow",
+    ]
+    extended_targets = ["outfall_flow"]
     core_count = sum(bool(row["core_trajectory_complete"]) for row in rows)
     formal_count = sum(bool(row["formal_complete"]) for row in rows)
     return {
@@ -152,13 +159,11 @@ def audit_detail_pool(
         "formal_complete_count": int(formal_count),
         "core_trajectory_complete": bool(rows) and core_count == len(rows),
         "formal_complete": bool(rows) and formal_count == len(rows),
-        "core_target_groups": [
-            "node_depth",
-            "node_flooding_rate",
-            "storage_volume",
-            "managed_facility_flow",
-        ],
-        "extended_target_groups": ["outfall_flow"],
+        "core_target_groups": core_targets,
+        "extended_target_groups": extended_targets,
+        # Backward-compatible key used by existing gates/tests.  The value still
+        # means all-target formal supervision, not core-only reuse eligibility.
+        "required_target_groups": core_targets + extended_targets,
         "rows": rows,
     }
 
