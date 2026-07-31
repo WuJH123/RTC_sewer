@@ -4,12 +4,17 @@ Hash equality is useful lineage evidence but is not sufficient for admission.
 This module reopens the real detail files and compares Candidate/NC/DI/Hold
 history numerically at the frozen 13 x 5-minute prefix and compares future
 rainfall forcing at the H120 timestamps.
+
+A case may contain duplicate physical lineage for one branch role.  Selection is
+therefore deterministic and prefers audited/complete physical rows; dictionary
+last-write order must never decide the alignment evidence.
 """
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -27,6 +32,18 @@ from sewerrtc.v4.v42_trajectory_builder import (
 
 FOUR_ROLES = ("candidate", "no_control", "dynamic_internal", "hold_previous")
 TIME_ATOL_MIN = 1.0e-6
+_ROLE_SELECTION_FLAGS = (
+    "available_finite_pass",
+    "formal_all_target_complete",
+    "core_trajectory_complete",
+    "available_history_complete",
+    "available_horizon_complete",
+    "available_node_depth",
+    "available_storage_volume",
+    "available_managed_facility_flow",
+    "available_readback_setting",
+    "available_rainfall",
+)
 
 
 @dataclass(frozen=True)
@@ -41,6 +58,7 @@ class CaseAlignmentResult:
     max_facility_flow_prefix_diff_m3s: float | None
     max_setting_prefix_diff: float | None
     max_future_rainfall_diff_mm_h: float | None
+    selected_branch_physical_ids: str
     error: str
 
     def as_dict(self) -> dict:
@@ -54,6 +72,44 @@ def _read_json_list(value) -> list[str]:
         return []
     parsed = json.loads(str(value))
     return [str(x) for x in parsed]
+
+
+def _bool_value(value: Any) -> bool:
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return False
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        return bool(float(value) != 0.0)
+    text = str(value).strip().casefold()
+    if text in {"true", "1", "yes", "y", "t"}:
+        return True
+    if text in {"false", "0", "no", "n", "f", "", "none", "nan"}:
+        return False
+    raise ValueError(f"unsupported boolean value {value!r}")
+
+
+def _role_selection_key(row: Any) -> tuple:
+    # Negative flags mean better audited rows sort first.  Missing legacy flags
+    # are neutral, preserving compatibility with small diagnostic fixtures.
+    flags = tuple(
+        -int(_bool_value(getattr(row, name, False)))
+        for name in _ROLE_SELECTION_FLAGS
+    )
+    return flags + (str(getattr(row, "physical_identity_sha256", "")), str(getattr(row, "detail_path", "")))
+
+
+def _select_role_rows(branch_rows: list[Any]) -> dict[str, Any]:
+    grouped: dict[str, list[Any]] = {role: [] for role in FOUR_ROLES}
+    for row in branch_rows:
+        role = str(getattr(row, "branch_role", ""))
+        if role in grouped:
+            grouped[role].append(row)
+    selected: dict[str, Any] = {}
+    for role in FOUR_ROLES:
+        if grouped[role]:
+            selected[role] = sorted(grouped[role], key=_role_selection_key)[0]
+    return selected
 
 
 def _select_times(df: pd.DataFrame, targets: list[float]) -> pd.DataFrame:
@@ -103,7 +159,12 @@ def _read_detail_for_alignment(detail_path: Path, cache: dict) -> pd.DataFrame:
     needed = ["elapsed_min", "rainfall_mm_h"]
     for col in header_cols:
         cs = str(col)
-        if cs.startswith("h:") or cs.startswith("storage_volume:") or cs.startswith("flow:") or cs.startswith("setting:"):
+        if (
+            cs.startswith("h:")
+            or cs.startswith("storage_volume:")
+            or cs.startswith("flow:")
+            or cs.startswith("setting:")
+        ):
             needed.append(cs)
     df = pd.read_csv(detail_path, usecols=needed, engine="c")
     cache[key] = df
@@ -125,13 +186,26 @@ def audit_case_alignment(
     project_root = Path(project_root)
     physical_path = Path(physical_inventory)
     case_path = Path(case_inventory)
-    physical = pd.read_parquet(physical_path) if physical_path.suffix.lower() == ".parquet" else pd.read_csv(physical_path)
-    cases = pd.read_parquet(case_path) if case_path.suffix.lower() == ".parquet" else pd.read_csv(case_path)
+    physical = (
+        pd.read_parquet(physical_path)
+        if physical_path.suffix.lower() == ".parquet"
+        else pd.read_csv(physical_path)
+    )
+    cases = (
+        pd.read_parquet(case_path)
+        if case_path.suffix.lower() == ".parquet"
+        else pd.read_csv(case_path)
+    )
     graph = _load_graph_topology(project_root)
     node_ids = list(graph["node_ids"])
     facility_ids = _load_engineering36_ids(project_root)
-    nodes, _ = _parse_inp_topology(project_root / "data" / "wuhan_v8_storage_retrofit.inp")
-    storage_ids = [str(x) for x in nodes.loc[nodes["node_type"] == "storage", "node_id"].tolist()]
+    nodes, _ = _parse_inp_topology(
+        project_root / "data" / "wuhan_v8_storage_retrofit.inp"
+    )
+    storage_ids = [
+        str(x)
+        for x in nodes.loc[nodes["node_type"] == "storage", "node_id"].tolist()
+    ]
     by_physical_id = {
         str(row.physical_identity_sha256): row
         for row in physical.itertuples(index=False)
@@ -143,14 +217,24 @@ def audit_case_alignment(
     for case_idx, case in enumerate(cases.itertuples(index=False)):
         if case_idx % 50 == 0 and case_idx > 0:
             import sys as _sys
+
             _sys.stderr.write(f"[R0.3] {case_idx}/{total_cases} cases processed\n")
             _sys.stderr.flush()
         case_uid = str(getattr(case, "case_uid"))
         checkpoint_raw = getattr(case, "checkpoint_min", None)
-        checkpoint = None if checkpoint_raw is None or pd.isna(checkpoint_raw) else float(checkpoint_raw)
+        checkpoint = (
+            None
+            if checkpoint_raw is None or pd.isna(checkpoint_raw)
+            else float(checkpoint_raw)
+        )
         ids = _read_json_list(getattr(case, "branch_physical_ids", "[]"))
         branch_rows = [by_physical_id[x] for x in ids if x in by_physical_id]
-        role_map = {str(row.branch_role): row for row in branch_rows}
+        role_map = _select_role_rows(branch_rows)
+        selected_ids = {
+            role: str(getattr(row, "physical_identity_sha256", ""))
+            for role, row in role_map.items()
+        }
+        selected_ids_json = json.dumps(selected_ids, sort_keys=True)
         try:
             if checkpoint is None:
                 raise ValueError("checkpoint is unknown")
@@ -173,22 +257,41 @@ def audit_case_alignment(
                 future = _select_times(detail, future_times)
                 if "rainfall_mm_h" not in future.columns:
                     raise KeyError("detail missing rainfall_mm_h")
-                rainfall = pd.to_numeric(future["rainfall_mm_h"], errors="coerce").to_numpy(float)
+                rainfall = pd.to_numeric(
+                    future["rainfall_mm_h"], errors="coerce"
+                ).to_numpy(float)
                 if not np.isfinite(rainfall).all():
                     raise ValueError("future rainfall contains non-finite values")
                 arrays[role] = {
                     "depth": _columns_by_ids(history, "h:", node_ids),
-                    "storage": _columns_by_ids(history, "storage_volume:", storage_ids),
+                    "storage": _columns_by_ids(
+                        history, "storage_volume:", storage_ids
+                    ),
                     "flow": _columns_by_ids(history, "flow:", facility_ids),
                     "setting": _columns_by_ids(history, "setting:", facility_ids),
                     "rainfall": rainfall,
                 }
             cand = arrays["candidate"]
-            depth_diff = max(_max_abs(cand["depth"], arrays[role]["depth"]) for role in FOUR_ROLES[1:])
-            storage_diff = max(_max_abs(cand["storage"], arrays[role]["storage"]) for role in FOUR_ROLES[1:])
-            flow_diff = max(_max_abs(cand["flow"], arrays[role]["flow"]) for role in FOUR_ROLES[1:])
-            setting_diff = max(_max_abs(cand["setting"], arrays[role]["setting"]) for role in FOUR_ROLES[1:])
-            rain_diff = max(_max_abs(cand["rainfall"], arrays[role]["rainfall"]) for role in FOUR_ROLES[1:])
+            depth_diff = max(
+                _max_abs(cand["depth"], arrays[role]["depth"])
+                for role in FOUR_ROLES[1:]
+            )
+            storage_diff = max(
+                _max_abs(cand["storage"], arrays[role]["storage"])
+                for role in FOUR_ROLES[1:]
+            )
+            flow_diff = max(
+                _max_abs(cand["flow"], arrays[role]["flow"])
+                for role in FOUR_ROLES[1:]
+            )
+            setting_diff = max(
+                _max_abs(cand["setting"], arrays[role]["setting"])
+                for role in FOUR_ROLES[1:]
+            )
+            rain_diff = max(
+                _max_abs(cand["rainfall"], arrays[role]["rainfall"])
+                for role in FOUR_ROLES[1:]
+            )
             same_state = bool(
                 depth_diff <= depth_atol_m
                 and storage_diff <= storage_atol_m3
@@ -207,6 +310,7 @@ def audit_case_alignment(
                 max_facility_flow_prefix_diff_m3s=flow_diff,
                 max_setting_prefix_diff=setting_diff,
                 max_future_rainfall_diff_mm_h=rain_diff,
+                selected_branch_physical_ids=selected_ids_json,
                 error="",
             )
         except Exception as exc:
@@ -221,6 +325,7 @@ def audit_case_alignment(
                 max_facility_flow_prefix_diff_m3s=None,
                 max_setting_prefix_diff=None,
                 max_future_rainfall_diff_mm_h=None,
+                selected_branch_physical_ids=selected_ids_json,
                 error=f"{type(exc).__name__}: {exc}",
             )
         results.append(result)
