@@ -18,9 +18,7 @@ from sewerrtc.control.pfvfirst_mpc_v42 import (
 )
 from sewerrtc.state.state_contract import TEMPORAL_FRAME_OFFSETS_MIN
 from sewerrtc.state.v42_sparse_state import build_sparse_state_estimate
-from sewerrtc.v4.models_v42.hydraulic_multi_reference import (
-    MultiReferenceHydraulicSurrogate,
-)
+from sewerrtc.v4.models_v42.hydraulic_multi_reference import MultiReferenceHydraulicSurrogate
 from sewerrtc.v4.paper_workflow_v42 import (
     CONTRACT_ID,
     MODEL_LINE,
@@ -80,6 +78,7 @@ def test_sparse_state_adapter_uses_physical_head_and_actions():
     assert out.storage_volume is None
     assert not out.storage_volume_available.any()
     assert out.metadata["role"] == "state_estimation_only_not_policy"
+    assert out.metadata["reconstructor_contract"] == "legacy_single_snapshot"
 
 
 def test_sparse_state_rejects_legacy_7frame_input():
@@ -140,12 +139,7 @@ def test_multireference_surrogate_rolls_four_branches_and_derives_kpis():
         storage_node_indices=torch.tensor([2]),
         outfall_node_indices=torch.tensor([5]),
     )
-    assert set(out["branches"]) == {
-        "candidate",
-        "no_control",
-        "dynamic_internal",
-        "hold_previous",
-    }
+    assert set(out["branches"]) == {"candidate", "no_control", "dynamic_internal", "hold_previous"}
     for branch in out["branches"].values():
         assert branch["node_depth"].shape == (B, H, N)
         assert branch["node_flooding_rate"].shape == (B, H, N)
@@ -157,12 +151,8 @@ def test_multireference_surrogate_rolls_four_branches_and_derives_kpis():
     cand = out["branches"]["candidate"]["node_flooding_rate"]
     nc = out["branches"]["no_control"]["node_flooding_rate"]
     di = out["branches"]["dynamic_internal"]["node_flooding_rate"]
-    expected_pfv = (
-        cand[:, :, [1, 4]] - nc[:, :, [1, 4]]
-    ).sum(dim=(1, 2)) * 600.0
-    expected_tfv = (
-        cand.sum(dim=2) - di.sum(dim=2)
-    ).sum(dim=1) * 600.0
+    expected_pfv = (cand[:, :, [1, 4]] - nc[:, :, [1, 4]]).sum(dim=(1, 2)) * 600.0
+    expected_tfv = (cand.sum(dim=2) - di.sum(dim=2)).sum(dim=1) * 600.0
     expected_peak = cand.sum(dim=2).max(dim=1).values - di.sum(dim=2).max(dim=1).values
     assert torch.allclose(out["pfv_delta"], expected_pfv)
     assert torch.allclose(out["tfv_delta"], expected_tfv)
@@ -283,11 +273,13 @@ def _stage_payload(stage: str) -> dict:
     elif stage == "gat_integrated_closed_loop":
         base.update(
             state_source="gat_sparse_reconstruction",
+            reconstructor_contract="formal_temporal_v42",
             gat_uncertainty_used=True,
             ood_gate_used=True,
             uncertainty_calibrated=True,
             ood_calibrated=True,
             gat_model_sha256="g",
+            surrogate_model_sha256="m",
         )
     elif stage == "policy_lock":
         base.update(
@@ -303,6 +295,7 @@ def _stage_payload(stage: str) -> dict:
             used_for_retraining=False,
             policy_sha256="p",
             model_sha256="m",
+            gat_model_sha256="g",
             fallback_contract_sha256="f",
         )
     elif stage == "formal_blind":
@@ -316,6 +309,7 @@ def _stage_payload(stage: str) -> dict:
             revealed_rainfall_overlap_count=0,
             policy_sha256="p",
             model_sha256="m",
+            gat_model_sha256="g",
             fallback_contract_sha256="f",
         )
     return base
@@ -346,6 +340,20 @@ def test_paper_workflow_rejects_legacy_evidence_and_enforces_order(tmp_path: Pat
     final = audit_paper_workflow(tmp_path)
     assert final.complete is True
     assert final.passed_through == "formal_blind"
+
+
+def test_gat_integrated_evidence_rejects_legacy_reconstructor(tmp_path: Path):
+    for stage in PAPER_STAGE_ORDER[:3]:
+        write_stage_evidence(stage=stage, output_root=tmp_path, payload=_stage_payload(stage))
+    payload = _stage_payload("gat_integrated_closed_loop")
+    payload["reconstructor_contract"] = "legacy_single_snapshot"
+    write_stage_evidence(
+        stage="gat_integrated_closed_loop", output_root=tmp_path, payload=payload
+    )
+    audit = audit_paper_workflow(tmp_path)
+    assert not audit.complete
+    assert audit.next_stage == "gat_integrated_closed_loop"
+    assert "gat_integrated_loop_requires_formal_temporal_reconstructor" in audit.stage_audits[-1].reasons
 
 
 def test_paper_contract_ids_are_explicit():
