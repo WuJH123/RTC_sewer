@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
+from sewerrtc.v4.v42_r0_preflight import assert_r0_schema_preflight
 from sewerrtc.v4.v42_r0_strict import (
     audit_existing_swmm_pool_strict,
     write_existing_pool_audit,
@@ -68,6 +70,10 @@ def _parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = _parser().parse_args()
+    # Catch serializer/classifier schema drift before opening any historical CSV.
+    assert_r0_schema_preflight()
+    print("[R0] schema preflight PASS", file=sys.stderr, flush=True)
+
     full_finite = not bool(args.metadata_only)
     output_dir = Path(args.output_dir)
     cache_path = (
