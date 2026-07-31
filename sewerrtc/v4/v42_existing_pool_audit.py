@@ -271,6 +271,9 @@ def _normalise_role(raw: str) -> str:
 def _infer_role_from_filename(path: Path) -> str:
     name = path.name.lower()
     ordered = (
+        # Multi-token pfvfirst filenames must precede single-token matches.
+        ("candidate_then_internal", "dynamic_internal"),
+        ("candidate_then_passive", "hold_previous"),
         ("dynamic_internal_rules", "dynamic_internal"),
         ("dynamic_internal", "dynamic_internal"),
         ("hold_previous", "hold_previous"),
@@ -651,6 +654,14 @@ _SKIP_DIR_NAMES = frozenset({
     "locked_validation_b_timeseries", "calibration_a_timeseries",
 })
 
+# PFV-first dryrun_runtime detail filenames that are valid SWMM outputs but
+# don't follow the standard ``detail.csv`` / ``*_detail.csv`` naming convention.
+_PFVFIRST_DETAIL_FILENAMES = frozenset({
+    "candidate.csv",
+    "candidate_then_internal.csv",
+    "candidate_then_passive.csv",
+})
+
 
 def _walk_skip_dir(dirpath: str) -> bool:
     """Return True if this directory should be pruned from discovery."""
@@ -718,28 +729,38 @@ def _discover_orphan_details(outputs_root: Path, referenced: set[Path]) -> list[
             and not _walk_skip_dir(os.path.join(dirpath, d))
         ]
         for fn in filenames:
-            if fn == "detail.csv" or fn.endswith("_detail.csv"):
-                detail = Path(dirpath) / fn
-                path = detail.resolve()
-                if path in seen or path in referenced:
-                    continue
-                seen.add(path)
-                role = _infer_role_from_filename(path)
-                rows.append(
-                    {
-                        "completion_path": None,
-                        "detail_path": path,
-                        "case_id": path.parent.name,
-                        "event_id": path.parent.name,
-                        "checkpoint_min": None,
-                        "network_sha256": "",
-                        "rainfall_sha256": "",
-                        "branch_role": role,
-                        "completion_status": "legacy_detail_only",
-                        "prefix_hash_match": None,
-                        "checkpoint_hash_match": None,
-                    }
-                )
+            is_standard_detail = fn == "detail.csv" or fn.endswith("_detail.csv")
+            is_pfvfirst_detail = fn in _PFVFIRST_DETAIL_FILENAMES
+            if not is_standard_detail and not is_pfvfirst_detail:
+                continue
+            detail = Path(dirpath) / fn
+            path = detail.resolve()
+            if path in seen or path in referenced:
+                continue
+            seen.add(path)
+            role = _infer_role_from_filename(path)
+            # For pfvfirst layouts the parent is ``details/`` and the
+            # grandparent is the run hash.  Use both for a meaningful case_id.
+            if is_pfvfirst_detail and path.parent.name.lower() == "details":
+                grandparent = path.parent.parent.name
+                case_id = f"pfvfirst__{grandparent}"
+            else:
+                case_id = path.parent.name
+            rows.append(
+                {
+                    "completion_path": None,
+                    "detail_path": path,
+                    "case_id": case_id,
+                    "event_id": case_id,
+                    "checkpoint_min": None,
+                    "network_sha256": "",
+                    "rainfall_sha256": "",
+                    "branch_role": role,
+                    "completion_status": "legacy_detail_only",
+                    "prefix_hash_match": None,
+                    "checkpoint_hash_match": None,
+                }
+            )
     return rows
 
 

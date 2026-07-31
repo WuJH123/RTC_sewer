@@ -130,6 +130,27 @@ def test_discovery_includes_orphan_detail_without_completion(tmp_path: Path):
     assert found.iloc[0]["completion_path"] is None
 
 
+def test_discovery_includes_pfvfirst_three_branch_files(tmp_path: Path):
+    """PFV-first dryrun_runtime details use non-standard filenames."""
+    details_dir = tmp_path / "pfvfirst" / "round0" / "dryrun_runtime" / "abc123" / "details"
+    details_dir.mkdir(parents=True)
+    for name in ("candidate.csv", "candidate_then_internal.csv", "candidate_then_passive.csv"):
+        (details_dir / name).write_text("elapsed_min\n0\n", encoding="utf-8")
+    found = discover_existing_details(tmp_path)
+    assert len(found) == 3
+    roles = set(found["branch_role"])
+    assert roles == {"candidate", "dynamic_internal", "hold_previous"}
+    # All should share the same case_id derived from the hash directory.
+    assert len(set(found["case_id"])) == 1
+    assert "abc123" in found.iloc[0]["case_id"]
+
+
+def test_infer_role_pfvfirst_filenames():
+    assert _infer_role_from_filename(Path("candidate.csv")) == "candidate"
+    assert _infer_role_from_filename(Path("candidate_then_internal.csv")) == "dynamic_internal"
+    assert _infer_role_from_filename(Path("candidate_then_passive.csv")) == "hold_previous"
+
+
 def _write_minimal_inp(path: Path) -> None:
     path.write_text(
         """[JUNCTIONS]\nJ1 0 5\n[OUTFALLS]\nO1 0 FREE\n[CONDUITS]\nC1 J1 O1 10 0.01 0 0 0 0\n""",
