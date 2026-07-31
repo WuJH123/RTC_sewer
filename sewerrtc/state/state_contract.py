@@ -4,7 +4,21 @@ import json
 from pathlib import Path
 
 
-TEMPORAL_FRAME_OFFSETS_MIN = [0, -10, -20, -30, -40, -50, -60]
+# Final V4.2 paper contract: 60 min of causal history sampled every 5 min,
+# including the decision-time frame. Keep this chronological so every
+# downstream tensor has the same t-60,...,t semantics as the trajectory builder.
+TEMPORAL_FRAME_OFFSETS_MIN = list(range(-60, 1, 5))
+
+
+STATE_RECONSTRUCTION_INPUTS = [
+    "sparse_sensor_observations",
+    "sensor_mask",
+    "rainfall_history",
+    "network_topology",
+    "historical_actions",
+    "node_static_attributes",
+    "link_static_attributes",
+]
 
 
 NODE_STATE_FIELDS = [
@@ -104,12 +118,42 @@ STORAGE_STATE_FIELDS = [
 ]
 
 
-def build_state_feature_contract(config_sha256: str | None, network_sha256: str | None) -> dict:
+STATE_RECONSTRUCTION_OUTPUTS = {
+    "node": [
+        "reconstructed_depth",
+        "hydraulic_head",
+        "filling_degree",
+        "uncertainty",
+    ],
+    "storage": STORAGE_STATE_FIELDS,
+    "facility": FACILITY_STATE_FIELDS,
+    "pump": PUMP_STATE_FIELDS,
+    "summaries": [
+        "priority_depth_max",
+        "priority_depth_mean",
+        "priority_filling_degree_max",
+        "priority_flooding_rate_sum",
+        "priority_active_node_count",
+        "priority_trend",
+        "priority_uncertainty",
+    ],
+}
+
+
+def build_state_feature_contract(
+    config_sha256: str | None, network_sha256: str | None
+) -> dict:
     return {
-        "contract_name": "project6_v3_augmented_state_contract",
+        "contract_name": "project6_v42_sparse_state_contract",
         "control_interval_min": 10,
+        "state_record_interval_min": 5,
         "history_window_min": 60,
+        "history_frame_count": len(TEMPORAL_FRAME_OFFSETS_MIN),
         "temporal_frame_offsets_min": TEMPORAL_FRAME_OFFSETS_MIN,
+        "temporal_frame_semantics": "t-60,t-55,...,t inclusive",
+        "role": "state_estimation_only_not_policy",
+        "required_inputs": STATE_RECONSTRUCTION_INPUTS,
+        "required_outputs": STATE_RECONSTRUCTION_OUTPUTS,
         "strict_causality": {
             "decision_after_observation_required": True,
             "future_observations_forbidden": True,
@@ -118,11 +162,17 @@ def build_state_feature_contract(config_sha256: str | None, network_sha256: str 
             "forecast_valid_time_is_not_observation_time": True,
         },
         "gat_selection": {
-            "selected_primary_gat": "sr0p15",
-            "selection_decision_status": "user_confirmed",
-            "selection_lock_status": "pending_manual_execution",
-            "gat_robustness_status": "pending",
-            "compatible_strict_required_for_formal": True,
+            "historical_selected_depth_gat": "sr0p15",
+            "historical_selection_status": "user_confirmed",
+            "historical_role": "legacy_single_snapshot_depth_validation_only",
+            "historical_can_authorize_formal_step1": False,
+            "formal_reconstructor": (
+                "sewerrtc.models.temporal_sparse_gat_v42."
+                "TemporalSparseGATReconstructorV42"
+            ),
+            "formal_reconstructor_training_status": "pending",
+            "formal_uncertainty_calibration_status": "pending",
+            "formal_compatibility_audit_status": "pending",
         },
         "sentinel": {
             "candidate_nodes": ["MH0200770", "HS1355904"],
@@ -132,20 +182,25 @@ def build_state_feature_contract(config_sha256: str | None, network_sha256: str 
         "node_state_fields": NODE_STATE_FIELDS,
         "facility_state_fields": FACILITY_STATE_FIELDS,
         "pump_state_fields": PUMP_STATE_FIELDS,
-        "priority_summary_fields": [
-            "priority_depth_max",
-            "priority_depth_mean",
-            "priority_filling_degree_max",
-            "priority_flooding_rate_sum",
-            "priority_active_node_count",
-            "priority_trend",
-            "priority_uncertainty",
-        ],
+        "priority_summary_fields": STATE_RECONSTRUCTION_OUTPUTS["summaries"],
         "storage_state_fields": STORAGE_STATE_FIELDS,
         "flow_feature_policy": {
             "missing_flow_is_not_zero": True,
             "future_truth_flow_forbidden": True,
             "availability_mask_required": True,
+        },
+        "truth_vs_reconstruction_policy": {
+            "offline_swmm_truth_must_not_be_labelled_reconstructed": True,
+            "reconstructed_depth_requires_gat_inference": True,
+            "uncertainty_requires_model_or_calibrated_residual_evidence": True,
+        },
+        "formal_admission": {
+            "requires_13x5min_history": True,
+            "requires_historical_actions": True,
+            "requires_link_static_attributes": True,
+            "requires_gat_uncertainty": True,
+            "requires_ood_score": True,
+            "legacy_sr0p15_alone_is_insufficient": True,
         },
         "provenance": {
             "config_sha256": config_sha256,

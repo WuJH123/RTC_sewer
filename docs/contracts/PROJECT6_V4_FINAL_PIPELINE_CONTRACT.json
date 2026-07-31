@@ -1,7 +1,11 @@
 {
-  "contract_id": "project6_v4_final_pipeline_v2",
+  "contract_id": "project6_v4_final_pipeline_v3",
   "created_at": "2026-07-31",
-  "supersedes": "project6_v4_final_pipeline_v1",
+  "supersedes": "project6_v4_final_pipeline_v2",
+  "paper_workflow_contract": "docs/contracts/PROJECT6_V42_PAPER_WORKFLOW_CONTRACT.json",
+  "paper_workflow_contract_id": "PROJECT6_V42_PAPER_WORKFLOW_V1",
+  "formal_model_line": "v42_trajectory_first_multi_reference",
+  "legacy_v41_gate_can_authorize_formal": false,
   "project_root": "E:/RTC_sewer/Project6",
   "network_path": "data/wuhan_v8_storage_retrofit.inp",
   "network_variant": "rainfall_only_no_dwf",
@@ -44,7 +48,8 @@
     "necessity": "hold_previous"
   },
   "diagnostic_only_references": [
-    "hold_snapshot"
+    "hold_snapshot",
+    "passive"
   ],
   "excluded_supervision_references": [
     "passive"
@@ -54,6 +59,16 @@
     "TFV": "m3",
     "Peak": "m3/s"
   },
+  "kpi_authority": "derived_from_predicted_flooding_rate_trajectories",
+  "independent_kpi_regression_heads_formal_authority": false,
+  "formal_hydraulic_targets": [
+    "node_depth",
+    "node_flooding_rate",
+    "storage_volume",
+    "managed_facility_flow",
+    "outfall_flow",
+    "system_flooding_rate_sequence"
+  ],
   "h120_window": "checkpoint_min < elapsed_min <= checkpoint_min + 120",
   "full_label_policy": "NaN_unless_full_event_eligible_true",
   "state_key": [
@@ -89,6 +104,35 @@
     "rainfall_sha256"
   ],
   "normalization_policy": "fit_train_fold_only",
+  "mpc": {
+    "selector": "sewerrtc.control.pfvfirst_mpc_v42.decide_pfvfirst_mpc",
+    "hard_constraints": [
+      "PFV_vs_no_control",
+      "Peak_vs_dynamic_internal",
+      "K",
+      "bounds",
+      "rate",
+      "ramp",
+      "dwell",
+      "interlock",
+      "uncertainty",
+      "OOD",
+      "executability"
+    ],
+    "objective": "delta_TFV_DI + lambda_action*J_action + lambda_terminal*J_terminal + lambda_uncertainty*J_uncertainty",
+    "tfv_is_hard_safety_constraint": false,
+    "safe_set_empty_policy": "frozen_fallback",
+    "solver_failure_policy": "frozen_fallback"
+  },
+  "closed_loop_order": [
+    "true_state_offline_validation",
+    "exact_swmm_closed_loop",
+    "surrogate_closed_loop",
+    "gat_integrated_closed_loop",
+    "policy_lock",
+    "challenge",
+    "formal_blind"
+  ],
   "exit_codes": {
     "pass": 0,
     "blocked": 2,

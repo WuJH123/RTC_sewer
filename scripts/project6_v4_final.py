@@ -23,12 +23,29 @@ from sewerrtc.v4.runtime import (
 )
 
 
+PAPER_CONTRACT_ID = "PROJECT6_V42_PAPER_WORKFLOW_V1"
+# These legacy registry stages were designed around the V4.1/old V4.2 model
+# line.  They remain reproducible development tools, but the final paper config
+# must not execute them accidentally as Formal evidence.
+LEGACY_FORMAL_STAGE_TOKENS = (
+    "TrainV42",
+    "EvaluateV42",
+    "ExactClosedLoop",
+    "SurrogateClosedLoop",
+    "GATClosedLoop",
+    "PolicyLock",
+    "Challenge",
+    "FormalBlind",
+)
+
+
 def _declared_input_hashes(config: dict, root: Path) -> dict[str, str]:
     project = config.get("project", {})
     result: dict[str, str] = {}
     for key in (
         "network",
         "contract",
+        "paper_workflow_contract",
         "canonical_ids",
         "facility_semantics",
         "priority_nodes",
@@ -57,13 +74,31 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--retry-failed", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--list-stages", action="store_true")
+    parser.add_argument(
+        "--allow-legacy-development",
+        action="store_true",
+        help=(
+            "Allow a superseded V4.1/old-V4.2 stage for reproducibility only. "
+            "It still cannot create PROJECT6_V42_PAPER_WORKFLOW_V1 Formal evidence."
+        ),
+    )
     return parser.parse_args()
+
+
+def _legacy_formal_stage(stage: str) -> bool:
+    text = str(stage)
+    return any(token.casefold() in text.casefold() for token in LEGACY_FORMAL_STAGE_TOKENS)
 
 
 def main() -> int:
     args = parse_args()
     if args.list_stages:
         print("\n".join(ALL_STAGES))
+        print(
+            "\nNOTE: final paper stages are gated by scripts/project6_v42_paper.py; "
+            "legacy registry stages cannot authorize Formal V4.2 evidence.",
+            file=sys.stderr,
+        )
         return 0
     if not args.stage:
         print("--stage is required unless --list-stages is used", file=sys.stderr)
@@ -73,6 +108,25 @@ def main() -> int:
         print(f"Config not found: {config_path}", file=sys.stderr)
         return 2
     config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+
+    paper_contract = str(
+        config.get("paper_workflow", {}).get("contract_id", "")
+    )
+    if (
+        paper_contract == PAPER_CONTRACT_ID
+        and _legacy_formal_stage(args.stage)
+        and not args.allow_legacy_development
+    ):
+        print(
+            f"Blocked legacy stage {args.stage!r}: the active config is governed by "
+            f"{PAPER_CONTRACT_ID}. Use scripts/project6_v42_paper.py and the new "
+            "trajectory-first/GAT-integrated paper components. If you only need "
+            "historical reproducibility, rerun with --allow-legacy-development; "
+            "that output is development evidence and cannot become Formal Blind.",
+            file=sys.stderr,
+        )
+        return 2
+
     project_root = Path(config.get("project", {}).get("root", PROJECT_ROOT))
     output_root = project_root / config.get("project", {}).get(
         "output_root", "outputs/project6_dual_reference_v4/final_v4"
@@ -108,6 +162,9 @@ def main() -> int:
                     "resume": options.resume,
                     "retry_failed": options.retry_failed,
                     "dry_run": options.dry_run,
+                    "allow_legacy_development": bool(
+                        args.allow_legacy_development
+                    ),
                 },
             }
         ),
