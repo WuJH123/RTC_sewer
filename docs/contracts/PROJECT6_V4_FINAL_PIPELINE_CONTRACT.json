@@ -1,6 +1,7 @@
 {
-  "contract_id": "project6_v4_final_pipeline_v1",
-  "created_at": "2026-07-27",
+  "contract_id": "project6_v4_final_pipeline_v2",
+  "created_at": "2026-07-31",
+  "supersedes": "project6_v4_final_pipeline_v1",
   "project_root": "E:/RTC_sewer/Project6",
   "network_path": "data/wuhan_v8_storage_retrofit.inp",
   "network_variant": "rainfall_only_no_dwf",
@@ -25,13 +26,17 @@
   "state_record_step_sec": 300,
   "control_interval_sec": 600,
   "history_min": 60,
-  "history_frames": 7,
+  "history_frames": 13,
+  "history_frame_semantics": "t-60,t-55,...,t inclusive",
   "horizon_min": 120,
   "horizon_steps": 12,
+  "horizon_step_semantics": "t+10,t+20,...,t+120",
   "max_active_changes": 8,
   "use_hotstart": false,
   "authoritative_swmm": true,
   "delta_direction": "candidate_minus_reference",
+  "priority_contract_id": "PFV_CORE8_V1",
+  "sentinel_role": "monitoring_feature_only",
   "references": {
     "PFV": "no_control",
     "TFV": "dynamic_internal_rules",
@@ -67,6 +72,9 @@
     "dynamic_internal_rules",
     "hold_previous"
   ],
+  "missing_reference_policy": "fail_closed_no_substitution",
+  "action_alignment_policy": "canonical_facility_id_order",
+  "node_alignment_policy": "graph_node_id_order",
   "action_fields": [
     "requested",
     "projected",
@@ -75,10 +83,12 @@
     "current",
     "readback"
   ],
+  "training_action_authority": "actual_or_readback",
   "split_isolation_keys": [
     "event_id",
     "rainfall_sha256"
   ],
+  "normalization_policy": "fit_train_fold_only",
   "exit_codes": {
     "pass": 0,
     "blocked": 2,
