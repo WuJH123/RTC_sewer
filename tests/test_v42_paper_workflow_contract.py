@@ -158,11 +158,16 @@ def test_multireference_surrogate_rolls_four_branches_and_derives_kpis():
     cand = out["branches"]["candidate"]["node_flooding_rate"]
     nc = out["branches"]["no_control"]["node_flooding_rate"]
     di = out["branches"]["dynamic_internal"]["node_flooding_rate"]
+    # Integrate counterfactual rate differences directly.  This is
+    # mathematically equivalent to subtracting two absolute volumes but avoids
+    # float32 cancellation when both branches have large common flooding.
     expected_pfv = (
-        cand[:, :, [1, 4]].sum(dim=(1, 2))
-        - nc[:, :, [1, 4]].sum(dim=(1, 2))
-    ) * 600.0
-    expected_tfv = (cand.sum(dim=(1, 2)) - di.sum(dim=(1, 2))) * 600.0
+        cand[:, :, [1, 4]] - nc[:, :, [1, 4]]
+    ).sum(dim=(1, 2)) * 600.0
+    expected_tfv = (
+        cand.sum(dim=2) - di.sum(dim=2)
+    ).sum(dim=1) * 600.0
+    # Peak is intentionally max(C) - max(DI), not max(C-DI).
     expected_peak = cand.sum(dim=2).max(dim=1).values - di.sum(dim=2).max(dim=1).values
     assert torch.allclose(out["pfv_delta"], expected_pfv)
     assert torch.allclose(out["tfv_delta"], expected_tfv)
