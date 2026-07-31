@@ -17,15 +17,30 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--audit-dir", type=Path, default=default_root)
     p.add_argument("--exclude-source-domain", action="store_true")
     p.add_argument("--exclude-consumed-development", action="store_true")
+    p.add_argument(
+        "--allow-missing-alignment-audit",
+        action="store_true",
+        help=(
+            "Build generic branch-level pretraining views even when the case alignment audit "
+            "is absent. Counterfactual case eligibility remains false."
+        ),
+    )
     return p
 
 
 def main() -> int:
     args = _parser().parse_args()
     root = args.audit_dir
+    alignment = root / "case_alignment_audit.csv"
+    if not alignment.exists() and not args.allow_missing_alignment_audit:
+        raise FileNotFoundError(
+            f"missing {alignment}; run scripts/audit_v42_case_alignment.py first, "
+            "or explicitly use --allow-missing-alignment-audit for generic pretraining only"
+        )
     result = build_reusable_paper_pool(
         physical_inventory=root / "physical_run_inventory.parquet",
         case_inventory=root / "target_coverage_by_case.csv",
+        alignment_inventory=alignment if alignment.exists() else None,
         output_physical_manifest=root / "reusable_pool_manifest.parquet",
         output_case_manifest=root / "reusable_case_manifest.parquet",
         audit_output=root / "reusable_pool_summary.json",
