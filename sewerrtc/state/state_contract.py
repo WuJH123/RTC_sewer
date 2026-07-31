@@ -4,7 +4,21 @@ import json
 from pathlib import Path
 
 
-TEMPORAL_FRAME_OFFSETS_MIN = [0, -10, -20, -30, -40, -50, -60]
+# Final V4.2 paper contract: 60 min of causal history sampled every 5 min,
+# including the decision-time frame.  Keep this chronological so every
+# downstream tensor has the same t-60,...,t semantics as the trajectory builder.
+TEMPORAL_FRAME_OFFSETS_MIN = list(range(-60, 1, 5))
+
+
+STATE_RECONSTRUCTION_INPUTS = [
+    "sparse_sensor_observations",
+    "sensor_mask",
+    "rainfall_history",
+    "network_topology",
+    "historical_actions",
+    "node_static_attributes",
+    "link_static_attributes",
+]
 
 
 NODE_STATE_FIELDS = [
@@ -104,12 +118,40 @@ STORAGE_STATE_FIELDS = [
 ]
 
 
+STATE_RECONSTRUCTION_OUTPUTS = {
+    "node": [
+        "reconstructed_depth",
+        "hydraulic_head",
+        "filling_degree",
+        "uncertainty",
+    ],
+    "storage": STORAGE_STATE_FIELDS,
+    "facility": FACILITY_STATE_FIELDS,
+    "pump": PUMP_STATE_FIELDS,
+    "summaries": [
+        "priority_depth_max",
+        "priority_depth_mean",
+        "priority_filling_degree_max",
+        "priority_flooding_rate_sum",
+        "priority_active_node_count",
+        "priority_trend",
+        "priority_uncertainty",
+    ],
+}
+
+
 def build_state_feature_contract(config_sha256: str | None, network_sha256: str | None) -> dict:
     return {
-        "contract_name": "project6_v3_augmented_state_contract",
+        "contract_name": "project6_v42_sparse_state_contract",
         "control_interval_min": 10,
+        "state_record_interval_min": 5,
         "history_window_min": 60,
+        "history_frame_count": len(TEMPORAL_FRAME_OFFSETS_MIN),
         "temporal_frame_offsets_min": TEMPORAL_FRAME_OFFSETS_MIN,
+        "temporal_frame_semantics": "t-60,t-55,...,t inclusive",
+        "role": "state_estimation_only_not_policy",
+        "required_inputs": STATE_RECONSTRUCTION_INPUTS,
+        "required_outputs": STATE_RECONSTRUCTION_OUTPUTS,
         "strict_causality": {
             "decision_after_observation_required": True,
             "future_observations_forbidden": True,
@@ -132,20 +174,17 @@ def build_state_feature_contract(config_sha256: str | None, network_sha256: str 
         "node_state_fields": NODE_STATE_FIELDS,
         "facility_state_fields": FACILITY_STATE_FIELDS,
         "pump_state_fields": PUMP_STATE_FIELDS,
-        "priority_summary_fields": [
-            "priority_depth_max",
-            "priority_depth_mean",
-            "priority_filling_degree_max",
-            "priority_flooding_rate_sum",
-            "priority_active_node_count",
-            "priority_trend",
-            "priority_uncertainty",
-        ],
+        "priority_summary_fields": STATE_RECONSTRUCTION_OUTPUTS["summaries"],
         "storage_state_fields": STORAGE_STATE_FIELDS,
         "flow_feature_policy": {
             "missing_flow_is_not_zero": True,
             "future_truth_flow_forbidden": True,
             "availability_mask_required": True,
+        },
+        "truth_vs_reconstruction_policy": {
+            "offline_swmm_truth_must_not_be_labelled_reconstructed": True,
+            "reconstructed_depth_requires_gat_inference": True,
+            "uncertainty_requires_model_or_calibrated_residual_evidence": True,
         },
         "provenance": {
             "config_sha256": config_sha256,
