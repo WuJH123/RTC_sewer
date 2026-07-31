@@ -35,11 +35,16 @@
       "gat_uncertainty",
       "ood_score"
     ],
+    "formal_reconstructor": "sewerrtc.models.temporal_sparse_gat_v42.TemporalSparseGATReconstructorV42",
     "formal_adapter": "sewerrtc.state.v42_sparse_state.build_sparse_state_estimate",
+    "legacy_sr0p15_status": "historical_single_snapshot_depth_reconstructor_not_full_step1_contract",
+    "legacy_sr0p15_can_authorize_formal_gat_integrated_loop": false,
+    "formal_reconstructor_requires_new_training_and_compatibility_audit": true,
     "future_hydraulic_truth_forbidden": true,
     "offline_truth_must_not_be_labelled_reconstructed": true,
     "missing_flow_must_not_be_zero_filled": true,
-    "missing_ood_blocks_formal_online_control": true
+    "missing_ood_blocks_formal_online_control": true,
+    "physical_head_and_filling_are_derived_from_inp_metadata": true
   },
   "step2_multi_reference_hydraulic_surrogate": {
     "role": "hydraulic_surrogate_not_policy",
@@ -52,6 +57,9 @@
       "hold_previous"
     ],
     "formal_model": "sewerrtc.v4.models_v42.hydraulic_multi_reference.MultiReferenceHydraulicSurrogate",
+    "formal_loss": "sewerrtc.v4.models_v42.hydraulic_trajectory_losses.HydraulicTrajectoryLoss",
+    "formal_training_admission": "sewerrtc.v4.v42_paper_training_admission.audit_training_admission",
+    "legacy_direct_kpi_trainer_status": "development_only_not_formal_authority",
     "trajectory_targets": [
       "node_depth",
       "node_flooding_rate",
@@ -61,8 +69,8 @@
       "system_flooding_rate_sequence"
     ],
     "kpi_derivation": {
-      "PFV": "integral of candidate minus no_control priority-node flooding-rate trajectories",
-      "TFV": "integral of candidate minus dynamic_internal system flooding-rate trajectories",
+      "PFV": "integral of candidate-minus-no_control priority-node flooding-rate sequence",
+      "TFV": "integral of candidate-minus-dynamic_internal system flooding-rate sequence",
       "Peak": "max(candidate system flooding-rate) minus max(dynamic_internal system flooding-rate)"
     },
     "independent_free_standing_kpi_head_authoritative": false,
@@ -76,9 +84,10 @@
       "outfall_flow": "required",
       "system_flooding_rate_sequence": "derived_from_node_flooding_rate"
     },
+    "authoritative_raw_recorder": "sewerrtc.simulation.v42_hydraulic_recorder.record_v42_hydraulic_targets",
     "current_known_data_gap": {
-      "outfall_flow_detail_column": "not_yet_demonstrated_in_existing_detail_csv",
-      "formal_training_before_gap_is_closed": false
+      "legacy_detail_outfall_flow": "absent_in_existing_generic_detail_writer",
+      "formal_training_before_new_target_coverage_audit_passes": false
     }
   },
   "step3_pfv_first_rolling_mpc": {
@@ -125,7 +134,8 @@
     }
   },
   "scientific_stop_conditions": [
-    "do_not_train_formal_trajectory_surrogate_until all required hydraulic target groups have audited coverage",
+    "do_not_train formal Step1 temporal GAT until independent sparse-sensor training/validation data and uncertainty calibration are available",
+    "do_not_train formal trajectory surrogate until raw Independent Oracle passes and all required hydraulic target groups have audited coverage",
     "do_not_run closed loop until true-state offline validation passes",
     "do_not lock policy until exact, surrogate, and GAT-integrated closed loops pass",
     "do not use Challenge or Formal events for development or retraining",
