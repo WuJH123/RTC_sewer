@@ -1,0 +1,43 @@
+base_config: configs/wuhan_project6_v4_final.yaml
+
+fasttrack:
+  contract_id: PROJECT6_V42_FASTTRACK_POC_V1
+  development_only: true
+  formal_authorization: false
+  max_events: 16
+  cases_per_event: 3
+  seed: 42
+  preserve_formal_architecture: true
+  preserve_history_frames: 13
+  preserve_horizon_steps: 12
+  preserve_engineering36: true
+  preserve_k_max: 8
+  recommended_learning_curve_train_groups: [4, 8, 12]
+  recommended_step1_max_epochs: 20
+  recommended_step2_max_epochs: 30
+  recommended_early_stop_patience: 5
+  micro_closed_loop_events: 3
+
+thresholds:
+  core_pool:
+    independent_rainfall_groups: 8
+    aligned_cases: 12
+    finite_pass_fraction: 0.95
+  step1_gat:
+    val_nse_median: 0.65
+    priority_nse_median: 0.55
+  step2_surrogate:
+    pfv_direction_accuracy: 0.70
+    tfv_direction_accuracy: 0.60
+    peak_direction_accuracy: 0.60
+    safe_candidate_recall: 0.70
+    false_safe_rate_max: 0.15
+  step3_mpc:
+    states_evaluated: 12
+    safe_selection_precision: 0.80
+    good_candidate_recall: 0.60
+  step4_micro_closed_loop:
+    event_count: 3
+    pfv_noninferior_rate: 0.6666666667
+    peak_noninferior_rate: 0.6666666667
+    tfv_improved_rate: 0.50
