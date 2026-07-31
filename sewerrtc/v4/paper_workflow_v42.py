@@ -1,9 +1,9 @@
 """Fail-closed stage gate for the final V4.2 paper workflow.
 
-The gate owns the formal evidence sequence.  It additionally verifies that the
-Step-1/Step-2/Step-3 prerequisites represented in each stage payload are real,
-and that Challenge/Formal-Blind reuse exactly the policy/model/fallback hashes
-frozen at Policy Lock.
+The gate owns the formal evidence sequence. It verifies that the formal
+closed-loop stages are executed in order and that Challenge/Formal-Blind reuse
+exactly the policy, surrogate, temporal-GAT and fallback hashes frozen at Policy
+Lock.
 """
 from __future__ import annotations
 
@@ -37,7 +37,15 @@ EVIDENCE_RELATIVE_PATHS = {
     "formal_blind": "v42_paper/formal_blind/evidence.json",
 }
 
-LOCK_HASH_KEYS = ("policy_sha256", "model_sha256", "fallback_contract_sha256")
+# Every model/policy component that can change closed-loop behaviour is locked.
+# GAT used to be required at Policy Lock but was not compared for Challenge or
+# Formal Blind, which allowed a changed state reconstructor to pass lineage.
+LOCK_HASH_KEYS = (
+    "policy_sha256",
+    "model_sha256",
+    "gat_model_sha256",
+    "fallback_contract_sha256",
+)
 
 
 @dataclass(frozen=True)
@@ -143,6 +151,8 @@ def _stage_specific_reasons(stage: str, payload: Mapping[str, Any]) -> list[str]
     elif stage == "gat_integrated_closed_loop":
         if payload.get("state_source") != "gat_sparse_reconstruction":
             reasons.append("gat_integrated_loop_requires_sparse_gat_state")
+        if payload.get("reconstructor_contract") != "formal_temporal_v42":
+            reasons.append("gat_integrated_loop_requires_formal_temporal_reconstructor")
         if payload.get("gat_uncertainty_used") is not True:
             reasons.append("gat_uncertainty_not_used")
         if payload.get("ood_gate_used") is not True:
@@ -152,10 +162,10 @@ def _stage_specific_reasons(stage: str, payload: Mapping[str, Any]) -> list[str]
         if payload.get("ood_calibrated") is not True:
             reasons.append("gat_ood_not_calibrated")
         _require_hash(payload, "gat_model_sha256", reasons)
+        _require_hash(payload, "surrogate_model_sha256", reasons)
     elif stage == "policy_lock":
         for key in LOCK_HASH_KEYS:
             _require_hash(payload, key, reasons)
-        _require_hash(payload, "gat_model_sha256", reasons)
         if payload.get("post_lock_parameter_updates_allowed") is not False:
             reasons.append("policy_lock_allows_post_lock_updates")
     elif stage == "challenge":
