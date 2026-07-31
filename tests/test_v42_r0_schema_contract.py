@@ -12,6 +12,7 @@ from sewerrtc.v4.v42_existing_pool_audit import (
     ReuseClassification,
     TargetAvailability,
 )
+from sewerrtc.v4.v42_r0_preflight import assert_r0_schema_preflight
 from sewerrtc.v4.v42_r0_strict import (
     AVAILABILITY_COLUMNS,
     _classify_case_schema_safe,
@@ -89,6 +90,10 @@ def _group(*, source_experiment: str = "expA") -> pd.DataFrame:
             [_record(role, source_experiment=source_experiment) for role in FOUR_ROLES]
         )
     )
+
+
+def test_zero_io_preflight_exercises_real_serializer_and_classifier():
+    assert_r0_schema_preflight()
 
 
 def test_physical_record_serialization_and_classifier_share_prefixed_schema():
