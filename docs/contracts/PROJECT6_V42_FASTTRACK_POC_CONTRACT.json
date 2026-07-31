@@ -1,0 +1,63 @@
+{
+  "contract_id": "PROJECT6_V42_FASTTRACK_POC_V1",
+  "status": "DEVELOPMENT_ONLY",
+  "formal_contract_id": "PROJECT6_V42_PAPER_WORKFLOW_V1",
+  "formal_authorization": false,
+  "purpose": "prove end-to-end learnability and controlability before exhaustive Phase R0",
+  "principles": [
+    "do not change the formal model architecture",
+    "do not change 13x5-min history or 12x10-min H120 horizon",
+    "do not change Engineering36 or K<=8",
+    "do not use reserved Challenge/Formal Blind evidence",
+    "audit the selected core at full finite-value fidelity",
+    "require numeric same-state and same-future-rainfall four-reference alignment",
+    "use learning curves to decide whether more evidence is likely to help",
+    "failure caused by model/target bias must not trigger blind bulk data expansion"
+  ],
+  "stages": [
+    "core_pool",
+    "step1_gat",
+    "step2_surrogate",
+    "step3_mpc",
+    "step4_micro_closed_loop"
+  ],
+  "default_core": {
+    "max_independent_rainfall_groups": 16,
+    "cases_per_group": 3,
+    "expected_case_scale": 48,
+    "expected_branch_trajectory_scale": 192,
+    "split": "rainfall-group isolated train/validation/holdout"
+  },
+  "step1": {
+    "model": "TemporalSparseGATReconstructorV42",
+    "same_architecture_as_formal": true,
+    "pilot_goal": "demonstrate held-out rainfall-group state reconstruction learnability",
+    "learning_curve_required": true
+  },
+  "step2": {
+    "model": "MultiReferenceHydraulicSurrogate",
+    "same_architecture_as_formal": true,
+    "pilot_goal": "demonstrate hydraulic trajectory and PFV/TFV/Peak directional/ranking learnability",
+    "learning_curve_required": true,
+    "partial_target_masks_allowed_for_development": true,
+    "partial_targets_do_not_authorize_formal_training": true
+  },
+  "step3": {
+    "controller": "pfvfirst_mpc_v42",
+    "pilot_goal": "verify candidate opportunity exists and safe candidates can be ranked/selected",
+    "formal_safety_semantics_preserved": true
+  },
+  "step4": {
+    "mode": "micro_closed_loop_development",
+    "default_event_count": 3,
+    "sequence": [
+      "exact_swmm_micro_loop",
+      "surrogate_micro_loop",
+      "gat_integrated_micro_loop"
+    ],
+    "policy_lock_authorization": false,
+    "challenge_authorization": false,
+    "formal_blind_authorization": false
+  },
+  "completion_meaning": "technical feasibility demonstrated; expand only the evidence dimensions shown necessary before returning to the formal paper workflow"
+}
