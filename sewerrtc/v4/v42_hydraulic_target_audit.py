@@ -1,8 +1,19 @@
 """Audit raw SWMM detail files for the trajectory-first V4.2 target contract.
 
-The audit is intentionally strict: a target group that is absent is reported as
-missing rather than reconstructed from another variable.  In particular,
-outfall flow is not inferred from flooding, node depth, or total inflow.
+The audit distinguishes **core hydraulic trajectory supervision** from the
+extended explicit-outfall target.  Missing targets are reported as missing;
+they are never reconstructed from another variable in this module.
+
+Core trajectory targets:
+
+* node depth;
+* node flooding rate;
+* Storage volume;
+* managed-facility flow.
+
+Extended formal supervision additionally requires explicit
+``outfall_flow:<outfall_id>``.  A historical row can therefore remain useful for
+masked auxiliary/dynamics training even when it is not all-target complete.
 """
 from __future__ import annotations
 
@@ -27,14 +38,17 @@ class TargetCoverage:
     missing_columns: dict[str, list[str]]
 
     @property
-    def formal_complete(self) -> bool:
+    def core_trajectory_complete(self) -> bool:
         return bool(
             self.node_depth
             and self.node_flooding_rate
             and self.storage_volume
             and self.managed_facility_flow
-            and self.outfall_flow
         )
+
+    @property
+    def formal_complete(self) -> bool:
+        return bool(self.core_trajectory_complete and self.outfall_flow)
 
     def as_dict(self) -> dict:
         return {
@@ -44,6 +58,7 @@ class TargetCoverage:
             "storage_volume": self.storage_volume,
             "managed_facility_flow": self.managed_facility_flow,
             "outfall_flow": self.outfall_flow,
+            "core_trajectory_complete": self.core_trajectory_complete,
             "formal_complete": self.formal_complete,
             "finite_fraction": self.finite_fraction,
             "missing_columns": self.missing_columns,
@@ -84,8 +99,8 @@ def audit_detail_targets(
         "node_flooding_rate": _expected("flood:", node_ids),
         "storage_volume": _expected("storage_volume:", storage_node_ids),
         "managed_facility_flow": _expected("flow:", facility_ids),
-        # New formal recorder contract.  Do not silently treat node total inflow
-        # or flooding as an outfall-flow target.
+        # New formal recorder contract.  Do not silently treat node total inflow,
+        # flooding, or a neighbouring link as an explicit outfall-flow label.
         "outfall_flow": _expected("outfall_flow:", outfall_node_ids),
     }
     result: dict[str, bool] = {}
@@ -128,19 +143,27 @@ def audit_detail_pool(
                 outfall_node_ids=outfall_node_ids,
             ).as_dict()
         )
-    complete_count = sum(bool(row["formal_complete"]) for row in rows)
+    core_targets = [
+        "node_depth",
+        "node_flooding_rate",
+        "storage_volume",
+        "managed_facility_flow",
+    ]
+    extended_targets = ["outfall_flow"]
+    core_count = sum(bool(row["core_trajectory_complete"]) for row in rows)
+    formal_count = sum(bool(row["formal_complete"]) for row in rows)
     return {
         "contract": "PROJECT6_V42_PAPER_WORKFLOW_V1",
         "detail_count": len(rows),
-        "formal_complete_count": int(complete_count),
-        "formal_complete": bool(rows) and complete_count == len(rows),
-        "required_target_groups": [
-            "node_depth",
-            "node_flooding_rate",
-            "storage_volume",
-            "managed_facility_flow",
-            "outfall_flow",
-        ],
+        "core_trajectory_complete_count": int(core_count),
+        "formal_complete_count": int(formal_count),
+        "core_trajectory_complete": bool(rows) and core_count == len(rows),
+        "formal_complete": bool(rows) and formal_count == len(rows),
+        "core_target_groups": core_targets,
+        "extended_target_groups": extended_targets,
+        # Backward-compatible key used by existing gates/tests.  The value still
+        # means all-target formal supervision, not core-only reuse eligibility.
+        "required_target_groups": core_targets + extended_targets,
         "rows": rows,
     }
 
