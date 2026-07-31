@@ -5,22 +5,13 @@ Important
 Older V4.2 code estimated link flow from depth differences, assumed a uniform
 100 m² ponded area, forced Candidate and Reference to be equal at t+10, and
 compared depth proxies (metres) with KPI targets expressed in m³ / z-score
-space.  Those terms were not SWMM mass balance constraints and could actively
+space.  Those terms were not SWMM mass-balance constraints and could actively
 suppress the control-effect signal.
 
-This module therefore follows a fail-safe rule:
-
-* keep only constraints that are valid for the variables the current model
-  actually predicts (non-negative depth, configured depth capacity and a mild
-  temporal smoothness regulariser);
-* return graph-connected zeros for unsupported physics terms so existing
-  logging schemas remain stable;
-* only activate mass/KPI/peak consistency when the caller supplies explicit,
-  unit-compatible residuals/quantities.
-
-When the model is extended to predict link flow, storage volume, external
-inflow, outfall flow and node flooding rate, true continuity constraints can be
-added without changing these public loss keys.
+A second subtle issue is that ``node_feature_matrix`` standardises static node
+features.  A z-scored ``max_depth`` must never be used as a physical depth
+limit in metres.  Capacity loss is therefore fail-closed unless the caller
+explicitly declares that ``node_max_depth`` is in physical metres.
 """
 from __future__ import annotations
 
@@ -29,7 +20,7 @@ from torch import nn
 
 
 class PhysicsLosses(nn.Module):
-    """Compute physics/constraint losses without inventing hydraulic variables."""
+    """Compute only constraints supported by explicitly valid physical inputs."""
 
     def __init__(
         self,
@@ -37,21 +28,34 @@ class PhysicsLosses(nn.Module):
         node_max_depth: torch.Tensor | None = None,
         dt_sec: float = 600.0,
         ponded_area: float | None = None,
+        *,
+        node_max_depth_is_physical_m: bool = False,
     ):
         super().__init__()
         self.n_nodes = int(n_nodes)
         self.dt_sec = float(dt_sec)
-        # ``ponded_area`` is retained only for API compatibility.  It is not
-        # used to fabricate storage volume from depth.
         self.ponded_area = None if ponded_area is None else float(ponded_area)
-        if node_max_depth is not None:
-            self.register_buffer("node_max_depth", node_max_depth.float())
+        self.capacity_active = bool(
+            node_max_depth is not None and node_max_depth_is_physical_m
+        )
+        if self.capacity_active:
+            depth = node_max_depth.detach().float().clone()
+            if depth.ndim != 1 or depth.numel() != self.n_nodes:
+                raise ValueError(
+                    f"Physical node_max_depth must have shape [{self.n_nodes}], "
+                    f"got {tuple(depth.shape)}"
+                )
+            if not torch.isfinite(depth).all():
+                raise ValueError("Physical node_max_depth contains NaN/Inf")
+            # Zero/negative limits commonly denote outfalls or unknown limits;
+            # they are not valid capacity constraints.  Mark them unbounded.
+            depth = torch.where(depth > 0.0, depth, torch.full_like(depth, float("inf")))
+            self.register_buffer("node_max_depth", depth)
         else:
-            self.register_buffer("node_max_depth", torch.ones(n_nodes) * 5.0)
+            self.register_buffer("node_max_depth", torch.full((self.n_nodes,), float("inf")))
 
     @staticmethod
     def _zero_connected(x: torch.Tensor) -> torch.Tensor:
-        """Return a differentiable zero connected to the prediction graph."""
         return x.sum() * 0.0
 
     def forward(
@@ -76,16 +80,15 @@ class PhysicsLosses(nn.Module):
         zero = self._zero_connected(y_cand)
         losses: dict[str, torch.Tensor] = {}
 
-        # 1. True mass balance is only available if the model/caller supplies an
-        # explicit residual in volume units.  Never infer flow from depth
-        # differences.
+        # True mass balance is only available if the caller supplies a residual
+        # in physical volume units.  Never infer flow from node-depth differences.
         if "mass_balance_residual_m3" in pred:
             losses["mass_balance"] = pred["mass_balance_residual_m3"].abs().mean()
         else:
             losses["mass_balance"] = zero
 
-        # 2. A mild temporal smoothness term.  This is a regulariser rather than
-        # a claim of exact SWMM storage continuity, but is unit-consistent.
+        # Mild temporal curvature regularisation; this is not labelled as exact
+        # SWMM storage continuity in scientific reporting.
         if H >= 3:
             d1 = y_cand[:, 1:, :] - y_cand[:, :-1, :]
             d2 = d1[:, 1:, :] - d1[:, :-1, :]
@@ -93,22 +96,23 @@ class PhysicsLosses(nn.Module):
         else:
             losses["storage_continuity"] = zero
 
-        # 3. Non-negative depths for every predicted branch that exists.
         branch_depths = [y_cand, y_ref]
         for key in ("y_dynamic_internal", "y_hold_previous"):
             if key in pred:
                 branch_depths.append(pred[key])
         losses["non_negative"] = sum(torch.relu(-x).mean() for x in branch_depths)
 
-        # 4. Configured depth-capacity bound.  Outfalls/unknown zero depths are
-        # sanitised by the data loader before reaching this module.
-        max_depth = self.node_max_depth[None, None, :]
-        losses["capacity_bounds"] = sum(
-            torch.relu(x - max_depth).mean() for x in branch_depths
-        )
+        # Capacity bounds are active only when raw INP max-depth values in metres
+        # have been explicitly supplied.  Standardised graph features are not
+        # accepted as physical limits.
+        if self.capacity_active:
+            max_depth = self.node_max_depth[None, None, :]
+            losses["capacity_bounds"] = sum(
+                torch.relu(x - max_depth).mean() for x in branch_depths
+            )
+        else:
+            losses["capacity_bounds"] = zero
 
-        # 5. Flooding consistency cannot be inferred from depth exceedance alone
-        # in SWMM.  It is activated only when an explicit residual is provided.
         if "flooding_consistency_residual_m3s" in pred:
             losses["flooding_consistency"] = pred[
                 "flooding_consistency_residual_m3s"
@@ -116,14 +120,10 @@ class PhysicsLosses(nn.Module):
         else:
             losses["flooding_consistency"] = zero
 
-        # 6. Candidate and references share the *checkpoint* state by data
-        # construction.  They are allowed to diverge immediately after actions
-        # are applied, so no t+10 equality penalty is imposed here.
+        # Same-state equality belongs at the checkpoint in the data contract.
+        # The first predicted t+10 state is allowed to diverge after actions.
         losses["shared_init_state"] = zero
 
-        # 7. KPI/trajectory consistency is valid only when both sides are given
-        # in matching physical units.  The old depth-proxy-vs-m³ comparison is
-        # deliberately disabled.
         kpi_terms = []
         if "pfv_from_trajectory_m3" in pred and "pfv_delta" in pred:
             kpi_terms.append(
@@ -135,8 +135,6 @@ class PhysicsLosses(nn.Module):
             )
         losses["kpi_trajectory_consistency"] = sum(kpi_terms) if kpi_terms else zero
 
-        # 8. Peak consistency requires a true total-flooding-rate sequence in
-        # m³/s.  A sequence of mean node depths is not an acceptable proxy.
         if "peak_rate_sequence_m3s" in pred and "peak_delta" in pred:
             peak_from_seq = pred["peak_rate_sequence_m3s"].max(dim=1).values
             losses["peak_consistency"] = (
