@@ -192,9 +192,15 @@ def build_reusable_paper_pool_strict(
     )
     cases["four_reference_finite_pass"] = four_branch_finite
     cases["four_reference_formal_branch_pass"] = four_branch_formal
-    aligned = _bool(cases, "same_state_numeric_pass") & _bool(
-        cases, "same_forcing_pass"
+    # ``build_reusable_paper_pool`` can preserve both the inventory and
+    # alignment copies of this field; pandas names them *_x/*_y on merge.
+    # Prefer the alignment copy and fall back to the canonical/left copy.
+    forcing = (
+        _bool(cases, "same_forcing_pass_y")
+        if "same_forcing_pass_y" in cases.columns
+        else _bool(cases, "same_forcing_pass")
     )
+    aligned = _bool(cases, "same_state_numeric_pass") & forcing
     four = _bool(cases, "four_reference_complete")
     core = _bool(cases, "core_trajectory_targets")
     full = _bool(cases, "full_reuse_targets")
