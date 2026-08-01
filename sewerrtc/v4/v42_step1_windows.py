@@ -1,10 +1,17 @@
-"""Build the formal Step-1 temporal-window manifest from strict Phase R0.
+"""Build the Step-1 temporal-window manifest from strict Phase R0.
+
+Step 1 is state reconstruction, so hydraulically valid source-domain runs may be
+used as *auxiliary pretraining* evidence.  They must never be mixed silently
+with the formal Wuhan target-domain validation/calibration population.
+
+The manifest therefore keeps both populations and labels every window as either
+``target_formal`` or ``auxiliary_pretrain``.  Downstream formal training must
+validate/calibrate only on ``target_formal`` rainfall groups.
 
 The manifest references authoritative raw detail files and exact 13x5-minute
-history anchors.  A downstream trainer must read ``h:<node>`` truth to create
-sparse sensor inputs/targets and must read **only** ``setting:<Engineering36>``
-for historical actions.  Requested ``a:<facility>`` columns are never an
-acceptable fallback in this formal path.
+history anchors.  Historical actions are read only from
+``setting:<Engineering36>`` readback columns.  Requested ``a:<facility>``
+columns are never an acceptable fallback.
 """
 from __future__ import annotations
 
@@ -19,7 +26,6 @@ import pandas as pd
 from .v42_trajectory_builder import (
     HISTORY_INTERVAL_MIN,
     N_HISTORY_FRAMES,
-    TIME_ATOL_MIN,
     _load_graph_topology,
 )
 
@@ -35,6 +41,26 @@ class Step1WindowResult:
 def _read(path: str | Path) -> pd.DataFrame:
     p = Path(path)
     return pd.read_parquet(p) if p.suffix.lower() == ".parquet" else pd.read_csv(p)
+
+
+def _bool_series(frame: pd.DataFrame, column: str) -> pd.Series:
+    """Parse persisted booleans fail-closed; string ``False`` is not truthy."""
+    if column not in frame.columns:
+        return pd.Series(False, index=frame.index, dtype=bool)
+    series = frame[column]
+    if pd.api.types.is_bool_dtype(series.dtype):
+        return series.fillna(False).astype(bool)
+    if pd.api.types.is_numeric_dtype(series.dtype):
+        return series.fillna(0).astype(float).ne(0.0)
+    text = series.fillna("").astype(str).str.strip().str.casefold()
+    true_values = {"true", "1", "yes", "y", "t"}
+    false_values = {"false", "0", "no", "n", "f", "", "none", "nan"}
+    unknown = sorted(set(text.unique()) - true_values - false_values)
+    if unknown:
+        raise ValueError(
+            f"boolean column {column!r} has unsupported values: {unknown[:10]}"
+        )
+    return text.isin(true_values)
 
 
 def _sha_ids(values: list[str]) -> str:
@@ -95,18 +121,21 @@ def build_step1_window_manifest(
         for r in split.itertuples(index=False)
     }
     eligible = physical[
-        physical["eligible_dynamics_pretrain"].fillna(False).astype(bool)
-        & physical["mask_readback"].fillna(False).astype(bool)
-        & physical["mask_finite"].fillna(False).astype(bool)
+        _bool_series(physical, "eligible_dynamics_pretrain")
+        & _bool_series(physical, "mask_readback")
+        & _bool_series(physical, "mask_finite")
     ].copy()
-    eligible = eligible[eligible["source_role"].astype(str) != "reserved_evaluation"]
-    # NOTE: domain_id filter deliberately removed for Step1.
-    # Step1 is temporal sparse-sensor state reconstruction (h truth → full
-    # network depth).  It does NOT perform counterfactual comparison and
-    # therefore does not require target_no_dwf domain membership.
-    # The domain_id gate belongs to Step2 counterfactual admission only.
-    # domain_id is preserved in the manifest for provenance tracking.
-    domain_filter_applied = False
+    eligible = eligible[
+        eligible["source_role"].astype(str) != "reserved_evaluation"
+    ].copy()
+
+    domain = eligible["domain_id"].fillna("").astype(str)
+    eligible["formal_target_domain"] = domain.str.startswith("target_no_dwf")
+    eligible["step1_domain_role"] = np.where(
+        eligible["formal_target_domain"],
+        "target_formal",
+        "auxiliary_pretrain",
+    )
 
     graph = _load_graph_topology(project_root)
     node_ids = [str(x) for x in graph["node_ids"]]
@@ -121,7 +150,9 @@ def build_step1_window_manifest(
         path = Path(str(item.detail_path))
         group = split_by_id.get(pid, "")
         if not group:
-            blocked.append({"physical_identity_sha256": pid, "reason": "missing_split_group"})
+            blocked.append(
+                {"physical_identity_sha256": pid, "reason": "missing_split_group"}
+            )
             continue
         try:
             anchors = _anchors(path)
@@ -154,6 +185,12 @@ def build_step1_window_manifest(
                     "future_hydraulic_truth_in_input": False,
                     "source_role": str(getattr(item, "source_role", "")),
                     "domain_id": str(getattr(item, "domain_id", "")),
+                    "formal_target_domain": bool(
+                        getattr(item, "formal_target_domain", False)
+                    ),
+                    "step1_domain_role": str(
+                        getattr(item, "step1_domain_role", "auxiliary_pretrain")
+                    ),
                 }
             )
 
@@ -164,23 +201,42 @@ def build_step1_window_manifest(
         frame.to_parquet(out, index=False)
     else:
         frame.to_csv(out, index=False)
+
     groups = int(frame["split_group_key"].nunique()) if not frame.empty else 0
+    if frame.empty:
+        target_windows = target_groups = aux_windows = aux_groups = 0
+    else:
+        target = frame[frame["step1_domain_role"] == "target_formal"]
+        aux = frame[frame["step1_domain_role"] == "auxiliary_pretrain"]
+        target_windows = int(len(target))
+        target_groups = int(target["split_group_key"].nunique())
+        aux_windows = int(len(aux))
+        aux_groups = int(aux["split_group_key"].nunique())
+
     audit = {
         "contract_id": "PROJECT6_V42_PAPER_WORKFLOW_V1",
         "stage": "step1_window_materialization",
         "eligible_physical_runs": int(len(eligible)),
         "window_count": int(len(frame)),
         "rainfall_group_count": groups,
+        "target_formal_window_count": target_windows,
+        "target_formal_rainfall_group_count": target_groups,
+        "auxiliary_pretrain_window_count": aux_windows,
+        "auxiliary_pretrain_rainfall_group_count": aux_groups,
         "blocked_physical_runs": int(len(blocked)),
         "action_authority": "actual_readback_setting",
         "requested_action_fallback_allowed": False,
         "history_contract": "13x5min_causal",
         "reserved_evaluation_excluded": True,
-        "domain_filter_applied": domain_filter_applied,
-        "domain_filter_rationale": "step1_state_reconstruction_does_not_require_target_domain",
+        "domain_policy": (
+            "target_no_dwf authorizes formal validation/calibration; other "
+            "hydraulically valid domains are auxiliary pretraining only"
+        ),
         "blocked_examples": blocked[:100],
     }
     audit_path = Path(audit_output)
     audit_path.parent.mkdir(parents=True, exist_ok=True)
-    audit_path.write_text(json.dumps(audit, indent=2, allow_nan=False), encoding="utf-8")
+    audit_path.write_text(
+        json.dumps(audit, indent=2, allow_nan=False), encoding="utf-8"
+    )
     return Step1WindowResult(out, audit_path, int(len(frame)), groups)
