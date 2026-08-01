@@ -4,6 +4,10 @@ The generic materializer already enforces four-reference finite/aligned target
 coverage. This wrapper adds the formal Wuhan target-domain invariant so historical
 DWF/unknown-domain evidence can never be promoted into the formal Step-2
 population by a stale or hand-edited case manifest.
+
+Formal manifests are required to be Parquet so persisted boolean dtypes remain
+unambiguous end-to-end. CSV remains acceptable for human-readable audit exports,
+but not as a formal training-admission transport.
 """
 from __future__ import annotations
 
@@ -38,6 +42,16 @@ def _bool_series(frame: pd.DataFrame, column: str) -> pd.Series:
     return text.isin(true_values)
 
 
+def _require_typed_parquet(name: str, value: str | Path) -> Path:
+    path = Path(value)
+    if path.suffix.lower() != ".parquet":
+        raise ValueError(
+            f"formal Step-2 {name} must be a typed Parquet manifest, got {path}; "
+            "CSV audit exports cannot authorize formal training"
+        )
+    return path
+
+
 def build_r0_paper_dataset_strict(
     *,
     project_root: str | Path,
@@ -47,6 +61,9 @@ def build_r0_paper_dataset_strict(
     output_manifest: str | Path,
     audit_output: str | Path,
 ) -> R0PaperDatasetResult:
+    physical_manifest = _require_typed_parquet("physical_manifest", physical_manifest)
+    case_manifest = _require_typed_parquet("case_manifest", case_manifest)
+    split_manifest = _require_typed_parquet("split_manifest", split_manifest)
     cases = _read(case_manifest)
     required = {"eligible_formal_all_target", "domain_id", "source_role"}
     missing = required - set(cases.columns)
