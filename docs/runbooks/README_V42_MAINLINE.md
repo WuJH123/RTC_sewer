@@ -53,8 +53,14 @@ assets remain reproducibility/baseline code and cannot authorize a later stage.
    - selector: `sewerrtc/control/pfvfirst_mpc_v42.py`
    - authoritative execution adapter:
      `sewerrtc/control/pfvfirst_mpc_v42_authoritative.py`
+   - formal candidate builder:
+     `build_calibrated_authoritative_mpc_candidate`.
    - PFV hard safety: Candidate vs No-control.
    - Peak hard safety: Candidate vs Dynamic Internal.
+   - PFV/Peak UCBs are computed as calibrated prediction mean + frozen `z*std`;
+     uncertainty/OOD pass is derived from calibrated scores and thresholds.
+     Caller-supplied UCB/pass flags are development-only and cannot authorize
+     formal safety evidence.
    - TFV: minimize vs Dynamic Internal only inside the safe set.
    - H=12, Engineering36, K<=8, bounds/rate/ramp/dwell/interlock,
      uncertainty/OOD/executability, frozen hashed fallback.
