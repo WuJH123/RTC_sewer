@@ -20,6 +20,7 @@ from sewerrtc.state.state_contract import TEMPORAL_FRAME_OFFSETS_MIN
 from sewerrtc.state.v42_sparse_state import build_sparse_state_estimate
 from sewerrtc.v4.models_v42.hydraulic_multi_reference import MultiReferenceHydraulicSurrogate
 from sewerrtc.v4.paper_workflow_v42 import (
+    CAUSAL_HISTORY_CONTRACT,
     CONTRACT_ID,
     MODEL_LINE,
     PAPER_STAGE_ORDER,
@@ -274,6 +275,10 @@ def _stage_payload(stage: str) -> dict:
         base.update(
             state_source="gat_sparse_reconstruction",
             reconstructor_contract="formal_temporal_v42",
+            reconstructed_history_contract=CAUSAL_HISTORY_CONTRACT,
+            reconstructed_history_ready_before_mpc=True,
+            authoritative_swmm_history_used_as_online_input=False,
+            current_frame_repetition_used=False,
             gat_uncertainty_used=True,
             ood_gate_used=True,
             uncertainty_calibrated=True,
@@ -293,6 +298,7 @@ def _stage_payload(stage: str) -> dict:
         base.update(
             policy_locked_before_reveal=True,
             used_for_retraining=False,
+            rainfall_sha256s=["challenge-rain"],
             policy_sha256="p",
             model_sha256="m",
             gat_model_sha256="g",
@@ -306,6 +312,7 @@ def _stage_payload(stage: str) -> dict:
             post_reveal_exclusion_used=False,
             used_for_retraining=False,
             rainfall_sha256s=[f"rain-{i}" for i in range(24)],
+            revealed_rainfall_sha256s=["train-a", "train-b", "challenge-rain"],
             revealed_rainfall_overlap_count=0,
             policy_sha256="p",
             model_sha256="m",
@@ -354,6 +361,31 @@ def test_gat_integrated_evidence_rejects_legacy_reconstructor(tmp_path: Path):
     assert not audit.complete
     assert audit.next_stage == "gat_integrated_closed_loop"
     assert "gat_integrated_loop_requires_formal_temporal_reconstructor" in audit.stage_audits[-1].reasons
+
+
+def test_gat_integrated_rejects_noncausal_reconstructed_history(tmp_path: Path):
+    for stage in PAPER_STAGE_ORDER[:3]:
+        write_stage_evidence(stage=stage, output_root=tmp_path, payload=_stage_payload(stage))
+    payload = _stage_payload("gat_integrated_closed_loop")
+    payload["current_frame_repetition_used"] = True
+    write_stage_evidence(
+        stage="gat_integrated_closed_loop", output_root=tmp_path, payload=payload
+    )
+    audit = audit_paper_workflow(tmp_path)
+    assert not audit.complete
+    assert "current_reconstructed_frame_repeated_as_history" in audit.stage_audits[-1].reasons
+
+
+def test_formal_blind_computes_rainfall_overlap_from_explicit_sets(tmp_path: Path):
+    for stage in PAPER_STAGE_ORDER[:-1]:
+        write_stage_evidence(stage=stage, output_root=tmp_path, payload=_stage_payload(stage))
+    bad = _stage_payload("formal_blind")
+    bad["revealed_rainfall_sha256s"] = ["rain-3"]
+    bad["revealed_rainfall_overlap_count"] = 1
+    write_stage_evidence(stage="formal_blind", output_root=tmp_path, payload=bad)
+    audit = audit_paper_workflow(tmp_path)
+    assert not audit.complete
+    assert "formal_rainfall_overlaps_revealed_development" in audit.stage_audits[-1].reasons
 
 
 def test_paper_contract_ids_are_explicit():
