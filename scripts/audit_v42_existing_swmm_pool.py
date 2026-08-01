@@ -6,6 +6,7 @@ import json
 import sys
 from pathlib import Path
 
+from sewerrtc.v4 import v42_existing_pool_audit as _base_audit
 from sewerrtc.v4.v42_r0_preflight import assert_r0_schema_preflight
 from sewerrtc.v4.v42_r0_refresh import audit_existing_swmm_pool_refreshable
 from sewerrtc.v4.v42_r0_strict import write_existing_pool_audit
@@ -87,19 +88,31 @@ def main() -> int:
         if args.scan_cache is not None
         else output_dir / "_r0_logical_detail_cache.parquet"
     )
-    result = audit_existing_swmm_pool_refreshable(
-        project_root=Path(args.project_root),
-        outputs_root=Path(args.outputs_root),
-        cache_path=cache_path,
-        full_finite_check=full_finite,
-        max_workers=max(1, min(int(args.workers), 32)),
-        resume=bool(args.resume_scan_cache),
-        refresh=bool(args.refresh_scan_cache),
-    )
+
+    # Formal R0 uses one discovery population for fingerprinting and scanning:
+    # discover all evidence first, then tag fresh V4.2 Challenge/Formal as
+    # reserved_evaluation and exclude it downstream.  Do not prune a directory
+    # for the fingerprint and then include it in the strict scan (or vice versa).
+    old_skip = _base_audit._SKIP_DIR_NAMES
+    _base_audit._SKIP_DIR_NAMES = frozenset()
+    try:
+        result = audit_existing_swmm_pool_refreshable(
+            project_root=Path(args.project_root),
+            outputs_root=Path(args.outputs_root),
+            cache_path=cache_path,
+            full_finite_check=full_finite,
+            max_workers=max(1, min(int(args.workers), 32)),
+            resume=bool(args.resume_scan_cache),
+            refresh=bool(args.refresh_scan_cache),
+        )
+    finally:
+        _base_audit._SKIP_DIR_NAMES = old_skip
+
     paths = write_existing_pool_audit(result, output_dir)
     payload = dict(result.summary)
     payload["outputs"] = {k: str(v) for k, v in paths.items()}
     payload["scan_cache"] = str(cache_path)
+    payload["formal_discovery_policy"] = "discover_all_then_tag_reserved"
     print(json.dumps(payload, indent=2, allow_nan=False))
     return 0
 
