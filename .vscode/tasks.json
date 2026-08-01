@@ -2,30 +2,55 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "RTC: Fast E2E Smoke",
+      "label": "RTC: Fast Core Smoke",
       "type": "process",
       "command": "${workspaceFolder}/.venv/Scripts/python.exe",
-      "args": ["-u", "${workspaceFolder}/scripts/run_v42_fast_e2e_64plus.py", "--target-rainfall-groups", "8", "--min-rainfall-groups", "8", "--candidates-per-state", "3", "--min-checkpoint-min", "120", "--step1-epochs", "1", "--step2-epochs", "1", "--seed", "42"],
-      "options": {"env": {"PYTHONUNBUFFERED": "1", "PYTHONPATH": "${workspaceFolder}"}},
-      "presentation": {"reveal": "always", "panel": "dedicated", "clear": true, "focus": false},
+      "args": [
+        "-u",
+        "${workspaceFolder}/scripts/run_v42_fast_core_pipeline.py",
+        "--mode",
+        "smoke",
+        "--seed",
+        "42"
+      ],
+      "options": {
+        "env": {
+          "PYTHONUNBUFFERED": "1",
+          "PYTHONPATH": "${workspaceFolder}"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true,
+        "focus": false
+      },
       "problemMatcher": []
     },
     {
-      "label": "RTC: Fast E2E Potential",
+      "label": "RTC: Fast Core Potential",
       "type": "process",
       "command": "${workspaceFolder}/.venv/Scripts/python.exe",
-      "args": ["-u", "${workspaceFolder}/scripts/run_v42_fast_e2e_64plus.py", "--target-rainfall-groups", "88", "--min-rainfall-groups", "64", "--candidates-per-state", "3", "--min-checkpoint-min", "120", "--step1-epochs", "3", "--step2-epochs", "4", "--seed", "42"],
-      "options": {"env": {"PYTHONUNBUFFERED": "1", "PYTHONPATH": "${workspaceFolder}"}},
-      "presentation": {"reveal": "always", "panel": "dedicated", "clear": true, "focus": false},
-      "problemMatcher": []
-    },
-    {
-      "label": "RTC: SWMM Micro Closed Loop",
-      "type": "process",
-      "command": "${workspaceFolder}/.venv/Scripts/python.exe",
-      "args": ["-u", "${workspaceFolder}/scripts/run_v42_fast_core_micro_closed_loop.py"],
-      "options": {"env": {"PYTHONUNBUFFERED": "1", "PYTHONPATH": "${workspaceFolder}"}},
-      "presentation": {"reveal": "always", "panel": "dedicated", "clear": true, "focus": false},
+      "args": [
+        "-u",
+        "${workspaceFolder}/scripts/run_v42_fast_core_pipeline.py",
+        "--mode",
+        "potential",
+        "--seed",
+        "42"
+      ],
+      "options": {
+        "env": {
+          "PYTHONUNBUFFERED": "1",
+          "PYTHONPATH": "${workspaceFolder}"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true,
+        "focus": false
+      },
       "problemMatcher": []
     }
   ]
