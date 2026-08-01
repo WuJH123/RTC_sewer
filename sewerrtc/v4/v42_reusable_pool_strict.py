@@ -33,6 +33,22 @@ def _write(frame: pd.DataFrame, path: str | Path) -> None:
         frame.to_csv(p, index=False)
 
 
+def _scalar_bool(value: Any, *, name: str) -> bool:
+    """Parse a persisted boolean scalar without Python truthiness surprises."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return float(value) != 0.0
+    text = str(value).strip().casefold()
+    if text in {"true", "1", "yes", "y", "t"}:
+        return True
+    if text in {"false", "0", "no", "n", "f", "", "none", "nan"}:
+        return False
+    raise ValueError(f"boolean scalar {name!r} has unsupported value: {value!r}")
+
+
 def _bool(frame: pd.DataFrame, col: str) -> pd.Series:
     if col not in frame.columns:
         return pd.Series(False, index=frame.index, dtype=bool)
@@ -87,15 +103,24 @@ def _strict_case_finite(
             finite_rows = [
                 r
                 for r in rows
-                if bool(getattr(r, "available_finite_checked", False))
-                and bool(getattr(r, "available_finite_pass", False))
+                if _scalar_bool(
+                    getattr(r, "available_finite_checked", False),
+                    name="available_finite_checked",
+                )
+                and _scalar_bool(
+                    getattr(r, "available_finite_pass", False),
+                    name="available_finite_pass",
+                )
             ]
             if not finite_rows:
                 all_roles_finite = False
                 all_roles_formal = False
                 continue
             if not any(
-                bool(getattr(r, "formal_all_target_complete", False))
+                _scalar_bool(
+                    getattr(r, "formal_all_target_complete", False),
+                    name="formal_all_target_complete",
+                )
                 for r in finite_rows
             ):
                 all_roles_formal = False
@@ -199,6 +224,7 @@ def build_reusable_paper_pool_strict(
     audit["task_labels_require_common_causal_context"] = True
     audit["formal_counterfactual_requires_target_no_dwf"] = True
     audit["source_domain_formal_admission_forbidden"] = True
+    audit["persisted_boolean_parsing_fail_closed"] = True
     audit["task_counts"] = {
         "physical_rows": int(len(physical)),
         "case_rows": int(len(cases)),
