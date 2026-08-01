@@ -6,8 +6,7 @@ from pathlib import Path
 import pandas as pd
 
 from sewerrtc.v4.paper_workflow_v42 import (
-    CONTRACT_ID,
-    MODEL_LINE,
+    CAUSAL_HISTORY_CONTRACT,
     PAPER_STAGE_ORDER,
     audit_paper_workflow,
     write_stage_evidence,
@@ -68,11 +67,17 @@ def _payload(stage: str) -> dict:
     elif stage == "gat_integrated_closed_loop":
         p.update(
             state_source="gat_sparse_reconstruction",
+            reconstructor_contract="formal_temporal_v42",
+            reconstructed_history_contract=CAUSAL_HISTORY_CONTRACT,
+            reconstructed_history_ready_before_mpc=True,
+            authoritative_swmm_history_used_as_online_input=False,
+            current_frame_repetition_used=False,
             gat_uncertainty_used=True,
             ood_gate_used=True,
             uncertainty_calibrated=True,
             ood_calibrated=True,
             gat_model_sha256="gat",
+            surrogate_model_sha256="surrogate",
         )
     elif stage == "policy_lock":
         p.update(
@@ -86,8 +91,10 @@ def _payload(stage: str) -> dict:
         p.update(
             policy_locked_before_reveal=True,
             used_for_retraining=False,
+            rainfall_sha256s=["challenge-rain"],
             policy_sha256="policy",
             model_sha256="surrogate",
+            gat_model_sha256="gat",
             fallback_contract_sha256="fallback",
         )
     elif stage == "formal_blind":
@@ -98,9 +105,11 @@ def _payload(stage: str) -> dict:
             post_reveal_exclusion_used=False,
             used_for_retraining=False,
             rainfall_sha256s=[f"rain-{i:02d}" for i in range(24)],
+            revealed_rainfall_sha256s=["train-a", "train-b", "challenge-rain"],
             revealed_rainfall_overlap_count=0,
             policy_sha256="policy",
             model_sha256="surrogate",
+            gat_model_sha256="gat",
             fallback_contract_sha256="fallback",
         )
     return p
@@ -119,6 +128,19 @@ def test_policy_lock_lineage_is_enforced_for_challenge_and_formal(tmp_path: Path
     assert not audit.complete
     assert audit.next_stage == "challenge"
     assert "policy_sha256_does_not_match_policy_lock" in audit.stage_audits[-1].reasons
+
+
+def test_changed_gat_cannot_pass_challenge_lineage(tmp_path: Path):
+    for stage in PAPER_STAGE_ORDER:
+        write_stage_evidence(stage=stage, output_root=tmp_path, payload=_payload(stage))
+    challenge = tmp_path / "v42_paper/challenge/evidence.json"
+    p = json.loads(challenge.read_text(encoding="utf-8"))
+    p["gat_model_sha256"] = "different-gat"
+    challenge.write_text(json.dumps(p), encoding="utf-8")
+    audit = audit_paper_workflow(tmp_path)
+    assert not audit.complete
+    assert audit.next_stage == "challenge"
+    assert "gat_model_sha256_does_not_match_policy_lock" in audit.stage_audits[-1].reasons
 
 
 def test_formal_blind_requires_explicit_unique_rainfall_sha_list(tmp_path: Path):

@@ -1,10 +1,9 @@
-"""Strict post-processing for the V4.2 reusable evidence pool.
+"""Build strict target-masked reusable V4.2 task manifests.
 
-The generic reuse builder intentionally supports partial supervision, but formal
-counterfactual eligibility must additionally prove that each required reference
-role resolves to a finite physical trajectory.  Task-specific labels also need
-the same causal model context (depth/flood/readback/rainfall/window) rather than
-being counted as trainable merely because an isolated target column exists.
+Formal counterfactual admission is target-domain only. Historical source-domain
+(DWF/unknown-domain) trajectories may still contribute auxiliary dynamics or
+representation learning, but they cannot silently become the formal Wuhan
+rainfall-only four-reference population.
 """
 from __future__ import annotations
 
@@ -34,10 +33,37 @@ def _write(frame: pd.DataFrame, path: str | Path) -> None:
         frame.to_csv(p, index=False)
 
 
+def _scalar_bool(value: Any, *, name: str) -> bool:
+    """Parse a persisted boolean scalar without Python truthiness surprises."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return float(value) != 0.0
+    text = str(value).strip().casefold()
+    if text in {"true", "1", "yes", "y", "t"}:
+        return True
+    if text in {"false", "0", "no", "n", "f", "", "none", "nan"}:
+        return False
+    raise ValueError(f"boolean scalar {name!r} has unsupported value: {value!r}")
+
+
 def _bool(frame: pd.DataFrame, col: str) -> pd.Series:
     if col not in frame.columns:
         return pd.Series(False, index=frame.index, dtype=bool)
-    return frame[col].fillna(False).astype(bool)
+    series = frame[col]
+    if pd.api.types.is_bool_dtype(series.dtype):
+        return series.fillna(False).astype(bool)
+    if pd.api.types.is_numeric_dtype(series.dtype):
+        return series.fillna(0).astype(float).ne(0.0)
+    text = series.fillna("").astype(str).str.strip().str.casefold()
+    true_values = {"true", "1", "yes", "y", "t"}
+    false_values = {"false", "0", "no", "n", "f", "", "none", "nan"}
+    unknown = sorted(set(text.unique()) - true_values - false_values)
+    if unknown:
+        raise ValueError(f"boolean column {col!r} has unsupported values: {unknown[:10]}")
+    return text.isin(true_values)
 
 
 def _ids(value: Any) -> list[str]:
@@ -77,14 +103,26 @@ def _strict_case_finite(
             finite_rows = [
                 r
                 for r in rows
-                if bool(getattr(r, "available_finite_checked", False))
-                and bool(getattr(r, "available_finite_pass", False))
+                if _scalar_bool(
+                    getattr(r, "available_finite_checked", False),
+                    name="available_finite_checked",
+                )
+                and _scalar_bool(
+                    getattr(r, "available_finite_pass", False),
+                    name="available_finite_pass",
+                )
             ]
             if not finite_rows:
                 all_roles_finite = False
                 all_roles_formal = False
                 continue
-            if not any(bool(getattr(r, "formal_all_target_complete", False)) for r in finite_rows):
+            if not any(
+                _scalar_bool(
+                    getattr(r, "formal_all_target_complete", False),
+                    name="formal_all_target_complete",
+                )
+                for r in finite_rows
+            ):
                 all_roles_formal = False
         finite_ok.append(all_roles_finite)
         formal_branch_ok.append(all_roles_formal)
@@ -106,7 +144,7 @@ def build_reusable_paper_pool_strict(
     include_consumed_development: bool = True,
     require_finite_audit: bool = True,
 ) -> ReusablePoolResult:
-    """Build reusable views and then enforce finite, causal task admission."""
+    """Build reusable views and enforce finite, causal, domain-safe admission."""
     original_physical = _read(physical_inventory)
     result = build_reusable_paper_pool(
         physical_inventory=physical_inventory,
@@ -122,7 +160,6 @@ def build_reusable_paper_pool_strict(
     physical = _read(output_physical_manifest)
     cases = _read(output_case_manifest)
 
-    # One common causal-context gate feeds all trajectory-supervision tasks.
     causal_context = (
         _bool(physical, "mask_depth")
         & _bool(physical, "mask_flood")
@@ -161,12 +198,21 @@ def build_reusable_paper_pool_strict(
     four = _bool(cases, "four_reference_complete")
     core = _bool(cases, "core_trajectory_targets")
     full = _bool(cases, "full_reuse_targets")
+    domain = cases.get("domain_id", pd.Series("", index=cases.index)).fillna("").astype(str)
+    target_no_dwf = domain.str.startswith("target_no_dwf")
+    source_domain = domain.str.startswith("source_")
+
+    formal_cf_base = four & aligned & four_branch_finite
     cases["eligible_counterfactual_flood"] = (
-        four & core & aligned & four_branch_finite
+        formal_cf_base & core & target_no_dwf
     )
     cases["eligible_formal_all_target"] = (
-        four & full & aligned & four_branch_finite & four_branch_formal
+        formal_cf_base & full & four_branch_formal & target_no_dwf
     )
+    cases["eligible_source_domain_counterfactual_aux"] = (
+        formal_cf_base & core & source_domain
+    )
+    cases["formal_target_domain"] = target_no_dwf
 
     _write(physical, output_physical_manifest)
     _write(cases, output_case_manifest)
@@ -176,6 +222,9 @@ def build_reusable_paper_pool_strict(
     audit["strict_scientific_admission"] = True
     audit["counterfactual_requires_all_four_roles_finite"] = True
     audit["task_labels_require_common_causal_context"] = True
+    audit["formal_counterfactual_requires_target_no_dwf"] = True
+    audit["source_domain_formal_admission_forbidden"] = True
+    audit["persisted_boolean_parsing_fail_closed"] = True
     audit["task_counts"] = {
         "physical_rows": int(len(physical)),
         "case_rows": int(len(cases)),
@@ -185,8 +234,11 @@ def build_reusable_paper_pool_strict(
         "explicit_outfall_supervision_physical_runs": int(physical["eligible_outfall_supervision"].sum()),
         "counterfactual_flood_cases": int(cases["eligible_counterfactual_flood"].sum()),
         "formal_all_target_cases": int(cases["eligible_formal_all_target"].sum()),
+        "source_domain_counterfactual_aux_cases": int(cases["eligible_source_domain_counterfactual_aux"].sum()),
     }
-    audit_path.write_text(json.dumps(audit, indent=2, allow_nan=False), encoding="utf-8")
+    audit_path.write_text(
+        json.dumps(audit, indent=2, allow_nan=False), encoding="utf-8"
+    )
 
     return ReusablePoolResult(
         physical_manifest_path=Path(output_physical_manifest),

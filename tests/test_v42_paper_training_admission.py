@@ -10,7 +10,13 @@ def _write(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-def _oracle(*, raw: bool = True, all_pass: bool = True, count: int = 137) -> dict:
+def _oracle(
+    *,
+    raw: bool = True,
+    all_pass: bool = True,
+    count: int = 137,
+    lineage: str = "population-sha",
+) -> dict:
     return {
         "audit_mode": "raw" if raw else "stored",
         "row_count": count,
@@ -18,15 +24,22 @@ def _oracle(*, raw: bool = True, all_pass: bool = True, count: int = 137) -> dic
         "fail_count": 0 if all_pass else 1,
         "all_pass": all_pass,
         "expected_count": count,
+        "sample_lineage_sha256": lineage,
     }
 
 
-def _targets(*, complete: bool = True, count: int = 548) -> dict:
+def _targets(
+    *,
+    complete: bool = True,
+    count: int = 548,
+    lineage: str = "population-sha",
+) -> dict:
     return {
         "contract": "PROJECT6_V42_PAPER_WORKFLOW_V1",
         "detail_count": count,
         "formal_complete_count": count if complete else count - 1,
         "formal_complete": complete,
+        "sample_lineage_sha256": lineage,
         "required_target_groups": [
             "node_depth",
             "node_flooding_rate",
@@ -67,8 +80,6 @@ def test_formal_training_has_no_fixed_1200_quota(tmp_path: Path):
     oracle = tmp_path / "oracle.json"
     targets = tmp_path / "targets.json"
     _write(oracle, _oracle(count=137))
-    # Target audit may count four raw branch details per case; it is an
-    # independent coverage population and must be complete, not equal 1200.
     _write(targets, _targets(count=548))
     admission = audit_training_admission(
         independent_oracle_summary=oracle,
@@ -78,6 +89,33 @@ def test_formal_training_has_no_fixed_1200_quota(tmp_path: Path):
     assert admission.reasons == ()
     assert admission.expected_sample_count is None
     assert admission.admitted_sample_count == 137
+
+
+def test_formal_training_requires_matching_population_lineage(tmp_path: Path):
+    oracle = tmp_path / "oracle.json"
+    targets = tmp_path / "targets.json"
+    _write(oracle, _oracle(lineage="population-a"))
+    _write(targets, _targets(lineage="population-b"))
+    admission = audit_training_admission(
+        independent_oracle_summary=oracle,
+        hydraulic_target_audit=targets,
+    )
+    assert not admission.authorized
+    assert "oracle_target_population_lineage_mismatch" in admission.reasons
+
+
+def test_formal_training_rejects_missing_population_lineage(tmp_path: Path):
+    oracle = tmp_path / "oracle.json"
+    targets = tmp_path / "targets.json"
+    _write(oracle, _oracle(lineage=""))
+    _write(targets, _targets(lineage=""))
+    admission = audit_training_admission(
+        independent_oracle_summary=oracle,
+        hydraulic_target_audit=targets,
+    )
+    assert not admission.authorized
+    assert "oracle_population_lineage_missing" in admission.reasons
+    assert "target_population_lineage_missing" in admission.reasons
 
 
 def test_explicit_frozen_experiment_count_is_still_enforced(tmp_path: Path):

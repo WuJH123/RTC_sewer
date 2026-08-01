@@ -1,19 +1,8 @@
 """Audit raw SWMM detail files for the trajectory-first V4.2 target contract.
 
-The audit distinguishes **core hydraulic trajectory supervision** from the
-extended explicit-outfall target.  Missing targets are reported as missing;
-they are never reconstructed from another variable in this module.
-
-Core trajectory targets:
-
-* node depth;
-* node flooding rate;
-* Storage volume;
-* managed-facility flow.
-
-Extended formal supervision additionally requires explicit
-``outfall_flow:<outfall_id>``.  A historical row can therefore remain useful for
-masked auxiliary/dynamics training even when it is not all-target complete.
+The audit distinguishes core hydraulic trajectory supervision from the extended
+explicit-outfall target. Missing targets are reported as missing and are never
+reconstructed from another variable here.
 """
 from __future__ import annotations
 
@@ -99,8 +88,6 @@ def audit_detail_targets(
         "node_flooding_rate": _expected("flood:", node_ids),
         "storage_volume": _expected("storage_volume:", storage_node_ids),
         "managed_facility_flow": _expected("flow:", facility_ids),
-        # New formal recorder contract.  Do not silently treat node total inflow,
-        # flooding, or a neighbouring link as an explicit outfall-flow label.
         "outfall_flow": _expected("outfall_flow:", outfall_node_ids),
     }
     result: dict[str, bool] = {}
@@ -131,6 +118,7 @@ def audit_detail_pool(
     storage_node_ids: Iterable[str],
     facility_ids: Iterable[str],
     outfall_node_ids: Iterable[str],
+    sample_lineage_sha256: str | None = None,
 ) -> dict:
     rows: list[dict] = []
     for path in detail_paths:
@@ -161,9 +149,9 @@ def audit_detail_pool(
         "formal_complete": bool(rows) and formal_count == len(rows),
         "core_target_groups": core_targets,
         "extended_target_groups": extended_targets,
-        # Backward-compatible key used by existing gates/tests.  The value still
-        # means all-target formal supervision, not core-only reuse eligibility.
         "required_target_groups": core_targets + extended_targets,
+        "sample_lineage_sha256": str(sample_lineage_sha256 or ""),
+        "population_lineage_required_for_formal_admission": True,
         "rows": rows,
     }
 

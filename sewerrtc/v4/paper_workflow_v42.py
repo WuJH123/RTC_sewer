@@ -1,9 +1,10 @@
 """Fail-closed stage gate for the final V4.2 paper workflow.
 
-The gate owns the formal evidence sequence.  It additionally verifies that the
-Step-1/Step-2/Step-3 prerequisites represented in each stage payload are real,
-and that Challenge/Formal-Blind reuse exactly the policy/model/fallback hashes
-frozen at Policy Lock.
+The gate owns the formal evidence sequence. It verifies that the formal
+closed-loop stages are executed in order and that Challenge/Formal-Blind reuse
+exactly the policy, surrogate, temporal-GAT and fallback hashes frozen at Policy
+Lock.  GAT-integrated evaluation must also prove a causal 13x5 reconstructed
+history, not repeated current state or authoritative SWMM history.
 """
 from __future__ import annotations
 
@@ -16,6 +17,7 @@ from typing import Any, Mapping
 
 CONTRACT_ID = "PROJECT6_V42_PAPER_WORKFLOW_V1"
 MODEL_LINE = "v42_trajectory_first_multi_reference"
+CAUSAL_HISTORY_CONTRACT = "PROJECT6_V42_CAUSAL_RECONSTRUCTED_HISTORY_V1"
 
 PAPER_STAGE_ORDER = (
     "true_state_offline_validation",
@@ -37,7 +39,12 @@ EVIDENCE_RELATIVE_PATHS = {
     "formal_blind": "v42_paper/formal_blind/evidence.json",
 }
 
-LOCK_HASH_KEYS = ("policy_sha256", "model_sha256", "fallback_contract_sha256")
+LOCK_HASH_KEYS = (
+    "policy_sha256",
+    "model_sha256",
+    "gat_model_sha256",
+    "fallback_contract_sha256",
+)
 
 
 @dataclass(frozen=True)
@@ -109,6 +116,13 @@ def _require_hash(payload: Mapping[str, Any], key: str, reasons: list[str]) -> N
         reasons.append(f"missing_{key}")
 
 
+def _nonempty_sha_set(value: Any) -> set[str] | None:
+    if not isinstance(value, list):
+        return None
+    result = {str(x).strip() for x in value if str(x).strip()}
+    return result
+
+
 def _stage_specific_reasons(stage: str, payload: Mapping[str, Any]) -> list[str]:
     reasons: list[str] = []
     if stage == "true_state_offline_validation":
@@ -143,6 +157,16 @@ def _stage_specific_reasons(stage: str, payload: Mapping[str, Any]) -> list[str]
     elif stage == "gat_integrated_closed_loop":
         if payload.get("state_source") != "gat_sparse_reconstruction":
             reasons.append("gat_integrated_loop_requires_sparse_gat_state")
+        if payload.get("reconstructor_contract") != "formal_temporal_v42":
+            reasons.append("gat_integrated_loop_requires_formal_temporal_reconstructor")
+        if payload.get("reconstructed_history_contract") != CAUSAL_HISTORY_CONTRACT:
+            reasons.append("gat_integrated_loop_requires_causal_reconstructed_history")
+        if payload.get("reconstructed_history_ready_before_mpc") is not True:
+            reasons.append("gat_integrated_mpc_started_before_13_reconstructed_frames")
+        if payload.get("authoritative_swmm_history_used_as_online_input") is not False:
+            reasons.append("swmm_truth_history_used_in_gat_integrated_loop")
+        if payload.get("current_frame_repetition_used") is not False:
+            reasons.append("current_reconstructed_frame_repeated_as_history")
         if payload.get("gat_uncertainty_used") is not True:
             reasons.append("gat_uncertainty_not_used")
         if payload.get("ood_gate_used") is not True:
@@ -152,10 +176,10 @@ def _stage_specific_reasons(stage: str, payload: Mapping[str, Any]) -> list[str]
         if payload.get("ood_calibrated") is not True:
             reasons.append("gat_ood_not_calibrated")
         _require_hash(payload, "gat_model_sha256", reasons)
+        _require_hash(payload, "surrogate_model_sha256", reasons)
     elif stage == "policy_lock":
         for key in LOCK_HASH_KEYS:
             _require_hash(payload, key, reasons)
-        _require_hash(payload, "gat_model_sha256", reasons)
         if payload.get("post_lock_parameter_updates_allowed") is not False:
             reasons.append("policy_lock_allows_post_lock_updates")
     elif stage == "challenge":
@@ -180,13 +204,31 @@ def _stage_specific_reasons(stage: str, payload: Mapping[str, Any]) -> list[str]
             reasons.append("formal_post_reveal_exclusion_forbidden")
         if payload.get("used_for_retraining") is True:
             reasons.append("formal_used_for_retraining")
-        rainfall_shas = payload.get("rainfall_sha256s")
-        if not isinstance(rainfall_shas, list) or len(rainfall_shas) != event_count:
+
+        rainfall_list = payload.get("rainfall_sha256s")
+        formal_shas = _nonempty_sha_set(rainfall_list)
+        if formal_shas is None or not isinstance(rainfall_list, list) or len(rainfall_list) != event_count:
             reasons.append("formal_rainfall_sha_list_missing_or_count_mismatch")
-        elif len({str(x) for x in rainfall_shas if str(x).strip()}) != event_count:
+            formal_shas = set()
+        elif len(formal_shas) != event_count:
             reasons.append("formal_rainfall_sha_not_unique")
-        if payload.get("revealed_rainfall_overlap_count") not in (0, "0"):
+
+        revealed_list = payload.get("revealed_rainfall_sha256s")
+        revealed_shas = _nonempty_sha_set(revealed_list)
+        if revealed_shas is None:
+            reasons.append("formal_revealed_rainfall_sha_list_missing")
+            revealed_shas = set()
+        overlap = formal_shas & revealed_shas
+        if overlap:
             reasons.append("formal_rainfall_overlaps_revealed_development")
+        try:
+            reported_overlap = int(payload.get("revealed_rainfall_overlap_count", -1))
+        except (TypeError, ValueError):
+            reported_overlap = -1
+        if reported_overlap != len(overlap):
+            reasons.append("formal_reported_rainfall_overlap_count_mismatch")
+        if reported_overlap != 0:
+            reasons.append("formal_reported_rainfall_overlap_not_zero")
         for key in LOCK_HASH_KEYS:
             _require_hash(payload, key, reasons)
     return reasons
@@ -213,6 +255,17 @@ def _policy_lineage_reasons(
         observed = str(payload.get(key, ""))
         if not expected or observed != expected:
             reasons.append(f"{key}_does_not_match_policy_lock")
+    if stage == "formal_blind":
+        challenge_path = output_root / EVIDENCE_RELATIVE_PATHS["challenge"]
+        if challenge_path.exists():
+            try:
+                challenge = _read_json(challenge_path)
+                formal = _nonempty_sha_set(payload.get("rainfall_sha256s")) or set()
+                challenge_shas = _nonempty_sha_set(challenge.get("rainfall_sha256s"))
+                if challenge_shas is not None and formal & challenge_shas:
+                    reasons.append("formal_rainfall_overlaps_challenge")
+            except Exception:
+                reasons.append("challenge_rainfall_lineage_unreadable")
     return reasons
 
 
