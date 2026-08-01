@@ -235,6 +235,7 @@ def build_reusable_paper_pool_strict(
         "counterfactual_flood_cases": int(cases["eligible_counterfactual_flood"].sum()),
         "formal_all_target_cases": int(cases["eligible_formal_all_target"].sum()),
         "source_domain_counterfactual_aux_cases": int(cases["eligible_source_domain_counterfactual_aux"].sum()),
+        "formal_target_domain_cases": int(target_no_dwf.sum()),
     }
     audit_path.write_text(
         json.dumps(audit, indent=2, allow_nan=False), encoding="utf-8"
