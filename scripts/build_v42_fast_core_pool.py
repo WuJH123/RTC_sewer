@@ -48,6 +48,13 @@ def main() -> int:
         state = hashlib.sha256("|".join(str(case.get(c, "")) for c in ("rainfall_sha256", "checkpoint_min", "network_sha256", "case_id", "event_id")).encode()).hexdigest()
         for _, cand in candidates.iterrows():
             rows.append({"rainfall_group_key": str(case.get("rainfall_sha256", "")), "counterfactual_state_key": state, "checkpoint_min": case.get("checkpoint_min"), "candidate_trajectory_key": str(cand.name), "no_control_trajectory_key": str(role_rows["no_control"].index[0]), "dynamic_internal_trajectory_key": str(role_rows["dynamic_internal"].index[0]), "hold_previous_trajectory_key": str(role_rows["hold_previous"].index[0]), "candidate_action_signature": str(cand.get("action_readback_sha256", "")), "fast_e2e_admission_tier": tier, "domain_id": str(case.get("domain_id", "")), "source_role": str(case.get("source_role", "")), "development_only": True})
+    unified = args.data_dir.parent.parent.parent.parent / ".." / ".." / ".." / "data" / "v42_final_unified" / "sample_lineage.parquet"
+    unified = (ROOT / "data/v42_final_unified/sample_lineage.parquet").resolve()
+    if unified.exists():
+        lineage = pd.read_parquet(unified)
+        for _, item in lineage.iterrows():
+            checkpoint = pd.to_numeric(str(item.get("checkpoint_id", "")).rsplit("__", 1)[-1], errors="coerce")
+            rows.append({"rainfall_group_key": str(item.get("rainfall_fingerprint", "")), "counterfactual_state_key": str(item.get("prefix_state_hash", item.get("state_key", ""))), "checkpoint_min": checkpoint, "candidate_trajectory_key": str(item.get("candidate_trajectory_sha", item.get("candidate_id", ""))), "no_control_trajectory_key": str(item.get("trajectory_no_control_sha", item.get("ref_nc_action_sha", ""))), "dynamic_internal_trajectory_key": str(item.get("trajectory_dynamic_internal_sha", item.get("ref_di_action_sha", ""))), "hold_previous_trajectory_key": str(item.get("trajectory_hold_previous_sha", item.get("ref_hold_action_sha", ""))), "candidate_action_signature": str(item.get("candidate_action_sha", "")), "fast_e2e_admission_tier": "fast_core_compatible", "domain_id": "unified_development", "source_role": "development", "development_only": True})
     manifest = pd.DataFrame(rows)
     if manifest.empty:
         manifest = pd.DataFrame(columns=["rainfall_group_key", "counterfactual_state_key", "checkpoint_min", "candidate_action_signature"])
