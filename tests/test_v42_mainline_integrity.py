@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 
 from sewerrtc.v4.paper_workflow_v42 import (
+    CAUSAL_HISTORY_CONTRACT,
     PAPER_STAGE_ORDER,
     audit_paper_workflow,
     write_stage_evidence,
@@ -67,6 +68,10 @@ def _payload(stage: str) -> dict:
         p.update(
             state_source="gat_sparse_reconstruction",
             reconstructor_contract="formal_temporal_v42",
+            reconstructed_history_contract=CAUSAL_HISTORY_CONTRACT,
+            reconstructed_history_ready_before_mpc=True,
+            authoritative_swmm_history_used_as_online_input=False,
+            current_frame_repetition_used=False,
             gat_uncertainty_used=True,
             ood_gate_used=True,
             uncertainty_calibrated=True,
@@ -86,6 +91,7 @@ def _payload(stage: str) -> dict:
         p.update(
             policy_locked_before_reveal=True,
             used_for_retraining=False,
+            rainfall_sha256s=["challenge-rain"],
             policy_sha256="policy",
             model_sha256="surrogate",
             gat_model_sha256="gat",
@@ -99,6 +105,7 @@ def _payload(stage: str) -> dict:
             post_reveal_exclusion_used=False,
             used_for_retraining=False,
             rainfall_sha256s=[f"rain-{i:02d}" for i in range(24)],
+            revealed_rainfall_sha256s=["train-a", "train-b", "challenge-rain"],
             revealed_rainfall_overlap_count=0,
             policy_sha256="policy",
             model_sha256="surrogate",
