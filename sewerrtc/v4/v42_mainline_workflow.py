@@ -25,7 +25,7 @@ from .paper_workflow_v42 import (
 )
 
 
-MAINLINE_ID = "PROJECT6_V42_MAINLINE_V1"
+MAINLINE_ID = "PROJECT6_V42_MAINLINE_V2"
 MAINLINE_STAGES = (
     "phase_r0",
     "step1_sparse_state",
@@ -114,6 +114,21 @@ def _require_hash(payload: Mapping[str, Any], key: str, reasons: list[str]) -> N
 
 
 def audit_phase_r0(output_root: Path) -> MainlineStageAudit:
+    """R0_STATE_READY: gate for Step 1 entry.
+
+    This checks only the conditions required for temporal sparse GAT training:
+    - full finite audit complete
+    - strict semantics proven
+    - discovery population current
+    - dynamics_pretrain data available
+    - rainfall split groups > 1
+    - no reserved evaluation contamination
+    - target_no_dwf data exists
+    - same-state + same-forcing alignment exists
+
+    counterfactual_flood is NOT checked here; it belongs to the Step 2
+    counterfactual gate (_audit_r0_counterfactual_gate).
+    """
     root = output_root / "v42_paper" / "data_reuse"
     summary_path = root / "data_reuse_audit.json"
     reusable_path = root / "reusable_pool_summary.json"
@@ -145,8 +160,11 @@ def audit_phase_r0(output_root: Path) -> MainlineStageAudit:
         if reusable.get("source_domain_formal_admission_forbidden") is not True:
             reasons.append("r0_source_domain_formal_exclusion_missing")
         counts = reusable.get("task_counts", {})
-        if int(counts.get("counterfactual_flood_cases", 0)) <= 0:
-            reasons.append("r0_no_aligned_counterfactual_cases")
+        if int(counts.get("dynamics_pretrain_physical_runs", 0)) <= 0:
+            reasons.append("r0_no_dynamics_pretrain_data")
+        formal_target = int(counts.get("formal_target_domain_cases", 0))
+        if formal_target <= 0:
+            reasons.append("r0_no_target_no_dwf_data")
     except Exception as exc:
         reasons.append(f"r0_reusable_summary_unreadable:{type(exc).__name__}")
     try:
@@ -174,6 +192,29 @@ def audit_phase_r0(output_root: Path) -> MainlineStageAudit:
     except Exception as exc:
         reasons.append(f"r0_split_unreadable:{type(exc).__name__}")
     return MainlineStageAudit("phase_r0", not reasons, tuple(reasons), str(root))
+
+
+def _audit_r0_counterfactual_gate(output_root: Path) -> MainlineStageAudit:
+    """R0_COUNTERFACTUAL_READY: gate for Step 2 entry.
+
+    This checks the four-reference counterfactual data admission required
+    before training the hydraulic surrogate.  It is deliberately placed
+    AFTER Step 1 so that missing counterfactual data does not block
+    temporal sparse GAT state reconstruction.
+    """
+    root = output_root / "v42_paper" / "data_reuse"
+    reusable_path = root / "reusable_pool_summary.json"
+    reasons: list[str] = []
+    try:
+        reusable = _read_json(reusable_path)
+        counts = reusable.get("task_counts", {})
+        if int(counts.get("counterfactual_flood_cases", 0)) <= 0:
+            reasons.append("step2_no_aligned_counterfactual_cases")
+    except Exception as exc:
+        reasons.append(f"step2_counterfactual_gate_unreadable:{type(exc).__name__}")
+    return MainlineStageAudit(
+        "step2_data_admission", not reasons, tuple(reasons), str(root)
+    )
 
 
 def _audit_step1(output_root: Path) -> MainlineStageAudit:
@@ -302,7 +343,13 @@ def _cross_stage_lineage_reasons(output_root: Path) -> list[str]:
 
 def audit_v42_mainline(output_root: str | Path) -> MainlineAudit:
     root = Path(output_root)
-    audits = [audit_phase_r0(root), _audit_step1(root), _audit_step2(root), _audit_step3(root)]
+    audits = [
+        audit_phase_r0(root),
+        _audit_step1(root),
+        _audit_r0_counterfactual_gate(root),
+        _audit_step2(root),
+        _audit_step3(root),
+    ]
     passed_through: str | None = None
     final: list[MainlineStageAudit] = []
     for audit in audits:
