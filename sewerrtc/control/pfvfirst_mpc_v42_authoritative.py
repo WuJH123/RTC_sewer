@@ -1,9 +1,9 @@
 """Authoritative adapters around the V4.2 PFV-first selector.
 
 Formal V4.2 use must derive K/engineering status from the projected action,
-retain post-write readback evidence, and enforce the frozen H12 x Engineering36
-shape. Arbitrary caller booleans or differently shaped action arrays cannot
-stand in for the engineering contract.
+retain post-write readback evidence, enforce the frozen H12 x Engineering36
+shape, and derive PFV/Peak UCB + uncertainty/OOD admission from calibrated
+prediction evidence rather than caller-supplied pass flags.
 """
 from __future__ import annotations
 
@@ -41,6 +41,96 @@ class ProjectionGuardEvidence:
             dwell=bool(self.checks["dwell"]),
             interlock=bool(self.checks["interlock"]),
         )
+
+
+@dataclass(frozen=True)
+class CalibratedSafetyPrediction:
+    """Calibrated model evidence used to deterministically build hard-safety UCBs."""
+
+    pfv_delta_mean_m3: float
+    pfv_delta_std_m3: float
+    peak_delta_mean_m3s: float
+    peak_delta_std_m3s: float
+    confidence_z: float
+    uncertainty_score: float
+    uncertainty_limit: float
+    ood_score: float
+    ood_limit: float
+    gat_model_sha256: str
+    surrogate_model_sha256: str
+    uncertainty_calibration_sha256: str
+    ood_calibration_sha256: str
+
+    def _validate(self) -> None:
+        numeric = np.asarray(
+            [
+                self.pfv_delta_mean_m3,
+                self.pfv_delta_std_m3,
+                self.peak_delta_mean_m3s,
+                self.peak_delta_std_m3s,
+                self.confidence_z,
+                self.uncertainty_score,
+                self.uncertainty_limit,
+                self.ood_score,
+                self.ood_limit,
+            ],
+            dtype=float,
+        )
+        if not np.isfinite(numeric).all():
+            raise ValueError("calibrated safety prediction contains NaN/Inf")
+        if self.pfv_delta_std_m3 < 0 or self.peak_delta_std_m3s < 0:
+            raise ValueError("calibrated standard deviations cannot be negative")
+        if self.confidence_z < 0:
+            raise ValueError("confidence_z cannot be negative")
+        if self.uncertainty_limit < 0 or self.ood_limit < 0:
+            raise ValueError("uncertainty/OOD limits cannot be negative")
+        for name, value in (
+            ("gat_model_sha256", self.gat_model_sha256),
+            ("surrogate_model_sha256", self.surrogate_model_sha256),
+            ("uncertainty_calibration_sha256", self.uncertainty_calibration_sha256),
+            ("ood_calibration_sha256", self.ood_calibration_sha256),
+        ):
+            if not str(value).strip():
+                raise ValueError(f"{name} missing")
+
+    @property
+    def pfv_delta_ucb_m3(self) -> float:
+        self._validate()
+        return float(self.pfv_delta_mean_m3 + self.confidence_z * self.pfv_delta_std_m3)
+
+    @property
+    def peak_delta_ucb_m3s(self) -> float:
+        self._validate()
+        return float(self.peak_delta_mean_m3s + self.confidence_z * self.peak_delta_std_m3s)
+
+    @property
+    def uncertainty_pass(self) -> bool:
+        self._validate()
+        return bool(self.uncertainty_score <= self.uncertainty_limit)
+
+    @property
+    def ood_pass(self) -> bool:
+        self._validate()
+        return bool(self.ood_score <= self.ood_limit)
+
+    def metadata(self) -> dict[str, object]:
+        self._validate()
+        return {
+            "safety_ucb_authority": "calibrated_prediction_mean_plus_z_std",
+            "pfv_delta_mean_m3": float(self.pfv_delta_mean_m3),
+            "pfv_delta_std_m3": float(self.pfv_delta_std_m3),
+            "peak_delta_mean_m3s": float(self.peak_delta_mean_m3s),
+            "peak_delta_std_m3s": float(self.peak_delta_std_m3s),
+            "confidence_z": float(self.confidence_z),
+            "uncertainty_score": float(self.uncertainty_score),
+            "uncertainty_limit": float(self.uncertainty_limit),
+            "ood_score": float(self.ood_score),
+            "ood_limit": float(self.ood_limit),
+            "gat_model_sha256": str(self.gat_model_sha256),
+            "surrogate_model_sha256": str(self.surrogate_model_sha256),
+            "uncertainty_calibration_sha256": str(self.uncertainty_calibration_sha256),
+            "ood_calibration_sha256": str(self.ood_calibration_sha256),
+        }
 
 
 @dataclass(frozen=True)
@@ -118,7 +208,7 @@ def build_authoritative_mpc_candidate(
     changed_atol: float = 1.0e-9,
     metadata: Mapping[str, object] | None = None,
 ) -> MPCandidate:
-    """Build a formal H12 x Engineering36 candidate from guard evidence."""
+    """Compatibility builder; formal paper runs should use calibrated builder below."""
     sequence = _sequence(projected_action_sequence)
     anchor = _vector("anchor_action", anchor_action, FORMAL_FACILITY_COUNT)
     changed = _changed(sequence[0], anchor, changed_atol)
@@ -132,6 +222,7 @@ def build_authoritative_mpc_candidate(
             "anchor_action": anchor.tolist(),
             "formal_horizon_steps": FORMAL_HORIZON_STEPS,
             "formal_facility_count": FORMAL_FACILITY_COUNT,
+            "safety_ucb_authority": meta.get("safety_ucb_authority", "caller_supplied_development_only"),
         }
     )
     return MPCandidate(
@@ -148,6 +239,44 @@ def build_authoritative_mpc_candidate(
         uncertainty_pass=bool(uncertainty_pass),
         ood_pass=bool(ood_pass),
         executable=bool(executable),
+        metadata=meta,
+    )
+
+
+def build_calibrated_authoritative_mpc_candidate(
+    *,
+    candidate_id: str,
+    projected_action_sequence: np.ndarray,
+    anchor_action: np.ndarray,
+    guard_evidence: ProjectionGuardEvidence,
+    safety_prediction: CalibratedSafetyPrediction,
+    tfv_delta_di_m3: float,
+    action_cost: float,
+    terminal_cost: float,
+    uncertainty_cost: float,
+    executable: bool,
+    changed_atol: float = 1.0e-9,
+    metadata: Mapping[str, object] | None = None,
+) -> MPCandidate:
+    """Formal builder: derive hard-safety quantities from calibrated evidence."""
+    meta = dict(metadata or {})
+    meta.update(safety_prediction.metadata())
+    meta["formal_candidate_builder"] = "build_calibrated_authoritative_mpc_candidate"
+    return build_authoritative_mpc_candidate(
+        candidate_id=candidate_id,
+        projected_action_sequence=projected_action_sequence,
+        anchor_action=anchor_action,
+        guard_evidence=guard_evidence,
+        pfv_delta_ucb_m3=safety_prediction.pfv_delta_ucb_m3,
+        peak_delta_ucb_m3s=safety_prediction.peak_delta_ucb_m3s,
+        tfv_delta_di_m3=tfv_delta_di_m3,
+        action_cost=action_cost,
+        terminal_cost=terminal_cost,
+        uncertainty_cost=uncertainty_cost,
+        uncertainty_pass=safety_prediction.uncertainty_pass,
+        ood_pass=safety_prediction.ood_pass,
+        executable=executable,
+        changed_atol=changed_atol,
         metadata=meta,
     )
 
