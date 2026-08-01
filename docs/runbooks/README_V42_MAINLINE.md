@@ -21,8 +21,13 @@ assets remain reproducibility/baseline code and cannot authorize a later stage.
    - architecture: `sewerrtc/models/temporal_sparse_gat_v42.py`
    - R0 temporal windows: `scripts/build_v42_step1_windows.py`
    - online adapter: `sewerrtc/state/v42_sparse_state.py`
+   - causal Step1->Step2 history bridge:
+     `sewerrtc/state/v42_reconstructed_history.py`
    - formal contract: 13 x 5-min causal history, sparse depth/mask, rainfall,
      actual Engineering36 readback actions, topology, node/link static features.
+   - each 5-min online Step-1 reconstruction is appended to the causal history
+     buffer. Step 2 is enabled only after 13 real reconstructed frames exist.
+     Current-frame repetition and SWMM-truth history substitution are forbidden.
    - formal evidence must prove new temporal-GAT training, rainfall-group
      isolation, uncertainty calibration, OOD calibration and model SHA.
    - historical single-snapshot GAT scores are background only.
@@ -84,9 +89,9 @@ is the only authorized next task. Do not skip forward by reusing legacy evidence
 ## Current implementation boundary
 
 The formal temporal GAT architecture, formal four-reference surrogate/loss,
-strict R0 bridge, MPC selector/adapters and evidence gates exist. This does **not**
-mean formal training/closed-loop evidence has been executed. In particular, the
-new temporal GAT still needs a formal trainer/calibration run, and the final
-Step-2 trainer must be wired to the R0-derived dataset using
-`MultiReferenceHydraulicSurrogate + HydraulicTrajectoryLoss` rather than the
-historical `v42_trainer.py` line.
+strict R0 bridge, causal reconstructed-history bridge, MPC selector/adapters and
+evidence gates exist. This does **not** mean formal training/closed-loop evidence
+has been executed. In particular, the new temporal GAT still needs a formal
+trainer/calibration run, and the final Step-2 trainer must be wired to the
+R0-derived dataset using `MultiReferenceHydraulicSurrogate + HydraulicTrajectoryLoss`
+rather than the historical `v42_trainer.py` line.
