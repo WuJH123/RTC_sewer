@@ -19,6 +19,25 @@ def _read(path: str | Path) -> pd.DataFrame:
     return pd.read_parquet(p) if p.suffix.lower() == ".parquet" else pd.read_csv(p)
 
 
+def _bool_series(frame: pd.DataFrame, column: str) -> pd.Series:
+    if column not in frame.columns:
+        raise KeyError(column)
+    series = frame[column]
+    if pd.api.types.is_bool_dtype(series.dtype):
+        return series.fillna(False).astype(bool)
+    if pd.api.types.is_numeric_dtype(series.dtype):
+        return series.fillna(0).astype(float).ne(0.0)
+    text = series.fillna("").astype(str).str.strip().str.casefold()
+    true_values = {"true", "1", "yes", "y", "t"}
+    false_values = {"false", "0", "no", "n", "f", "", "none", "nan"}
+    unknown = sorted(set(text.unique()) - true_values - false_values)
+    if unknown:
+        raise ValueError(
+            f"formal Step-2 boolean column {column!r} has unsupported values: {unknown[:10]}"
+        )
+    return text.isin(true_values)
+
+
 def build_r0_paper_dataset_strict(
     *,
     project_root: str | Path,
@@ -34,7 +53,7 @@ def build_r0_paper_dataset_strict(
     if missing:
         raise KeyError(f"strict Step-2 case manifest missing fields: {sorted(missing)}")
 
-    eligible = cases["eligible_formal_all_target"].fillna(False).astype(bool)
+    eligible = _bool_series(cases, "eligible_formal_all_target")
     admitted = cases[eligible].copy()
     if admitted.empty:
         raise ValueError("strict R0 has no formal Step-2 cases")
@@ -49,7 +68,7 @@ def build_r0_paper_dataset_strict(
     if bool(reserved.any()):
         raise RuntimeError("formal Step-2 admission contains reserved evaluation cases")
     if "formal_target_domain" in admitted.columns and not bool(
-        admitted["formal_target_domain"].fillna(False).astype(bool).all()
+        _bool_series(admitted, "formal_target_domain").all()
     ):
         raise RuntimeError("formal_target_domain evidence contradicts domain_id")
 
