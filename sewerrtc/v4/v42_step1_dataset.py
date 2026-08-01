@@ -364,6 +364,10 @@ def build_step1_dataset(
     usecols = _build_usecols(graph.node_ids, graph.facility_ids)
     usecols_set = frozenset(usecols)
     detail_cache: dict[str, pd.DataFrame] = {}
+    # Per-file column index cache: different experiments may have different
+    # column layouts, so we resolve indices from each file's own header.
+    _file_col_indices: dict[str, list[int]] = {}
+    _header_columns: list[str] | None = None
 
     for row in manifest.itertuples(index=False):
         if max_samples is not None and len(samples) >= max_samples:
@@ -376,11 +380,23 @@ def build_step1_dataset(
 
         if detail_path not in detail_cache:
             try:
+                # Read header to resolve column positions for this file.
+                hdr = pd.read_csv(detail_path, nrows=0)
+                col_to_idx = {c: i for i, c in enumerate(hdr.columns)}
+                matched = [c for c in usecols if c in col_to_idx]
+                indices = [col_to_idx[c] for c in matched]
+                _file_col_indices[detail_path] = indices
+                if _header_columns is None:
+                    _header_columns = hdr.columns.tolist()
+
                 detail = pd.read_csv(
                     detail_path,
-                    usecols=lambda c, _s=usecols_set: c in _s,
+                    usecols=indices,
                     low_memory=False,
+                    header=None,
+                    skiprows=1,
                 )
+                detail.columns = matched
                 missing = [col for col in usecols if col not in detail.columns]
                 if missing:
                     raise KeyError(
