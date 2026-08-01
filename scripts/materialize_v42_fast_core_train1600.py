@@ -36,7 +36,9 @@ ROLE_ALIASES = {
     "candidate": ("candidate",),
     "no_control": ("no_control",),
     "dynamic_internal": ("dynamic_internal", "dynamic_internal_rules"),
-    "hold_previous": ("hold_previous", "passive_anchor"),
+    # Do not silently treat passive_anchor as Hold-Previous.  Historical
+    # passive anchors can converge to a different future action sequence.
+    "hold_previous": ("hold_previous",),
 }
 
 
