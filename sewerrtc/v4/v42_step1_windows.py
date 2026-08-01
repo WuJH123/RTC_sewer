@@ -100,7 +100,13 @@ def build_step1_window_manifest(
         & physical["mask_finite"].fillna(False).astype(bool)
     ].copy()
     eligible = eligible[eligible["source_role"].astype(str) != "reserved_evaluation"]
-    eligible = eligible[eligible["domain_id"].astype(str).str.startswith("target_no_dwf")]
+    # NOTE: domain_id filter deliberately removed for Step1.
+    # Step1 is temporal sparse-sensor state reconstruction (h truth → full
+    # network depth).  It does NOT perform counterfactual comparison and
+    # therefore does not require target_no_dwf domain membership.
+    # The domain_id gate belongs to Step2 counterfactual admission only.
+    # domain_id is preserved in the manifest for provenance tracking.
+    domain_filter_applied = False
 
     graph = _load_graph_topology(project_root)
     node_ids = [str(x) for x in graph["node_ids"]]
@@ -170,6 +176,8 @@ def build_step1_window_manifest(
         "requested_action_fallback_allowed": False,
         "history_contract": "13x5min_causal",
         "reserved_evaluation_excluded": True,
+        "domain_filter_applied": domain_filter_applied,
+        "domain_filter_rationale": "step1_state_reconstruction_does_not_require_target_domain",
         "blocked_examples": blocked[:100],
     }
     audit_path = Path(audit_output)
