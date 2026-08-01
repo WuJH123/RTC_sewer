@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import numpy as np
@@ -94,6 +93,9 @@ def test_development_efd_rbc_share_k8_and_binary_contract() -> None:
     for i in range(n_facilities):
         action_map[i, i % n_nodes] = 1.0
     anchor = np.full(n_facilities, 0.5, dtype=np.float32)
+    # ADD301.2 / ADD301.3 analogues must start from legal readback states.
+    anchor[0] = 0.0
+    anchor[1] = 1.0
     binary = (0, 1)
     schedules = build_development_baseline_actions(
         current_depth=current,
@@ -126,8 +128,6 @@ def test_nearest_recorded_action_proxy_scores_only_h3() -> None:
 
 
 def test_warm_wrapper_has_explicit_120min_contract() -> None:
-    # This is a lightweight regression check for the causal requirement itself;
-    # full physical/case materialisation is covered by existing fast-pilot tests.
     import inspect
 
     signature = inspect.signature(build_warm_fast_step2_dataset_64plus)
