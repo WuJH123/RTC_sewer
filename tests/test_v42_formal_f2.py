@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
+from scripts.materialize_v42_formal_step2_f2 import _engineering, _physical, _resolve, _same_state, _state_sha
 from scripts.prepare_v42_formal_f2 import _historical_contamination, _reserved
 from sewerrtc.v4.formal_f2 import (
     ACCEPTANCE_GATE_COLUMNS,
@@ -160,3 +163,111 @@ def test_reserved_event_ids_are_mapped_to_rainfall_groups_via_event_inventory(tm
     assert events == {"blind-1"}
     assert groups == {"reserved-rain-sha"}
     assert audit["reserved_rainfall_group_count"] == 1
+
+
+def test_reserved_event_ids_use_adapter_source_rainfall_sha(tmp_path) -> None:
+    root = tmp_path
+    rain_dir = root / "outputs/rainfall_library_v8_storage_variablepump"
+    source_dir = root / "formal_evaluation"
+    rain_dir.mkdir(parents=True)
+    source_dir.mkdir(parents=True)
+    source = source_dir / "evaluation_event_splits.csv"
+    pd.DataFrame([{"event_id": "blind-1", "rainfall_sha256": "reserved-rain-sha"}]).to_csv(source, index=False)
+    (rain_dir / "rainfall_event_table.formal_adapter.json").write_text(
+        json.dumps({"split": "formal_blind_v33", "event_ids": ["blind-1"], "source": str(source)}),
+        encoding="utf-8",
+    )
+    pd.DataFrame([{"event_id": "blind-1", "duration_min": 300}]).to_csv(
+        rain_dir / "rainfall_event_table.csv", index=False
+    )
+
+    events, groups, audit = _reserved(root, pd.DataFrame(), pd.DataFrame())
+    assert events == {"blind-1"}
+    assert groups == {"reserved-rain-sha"}
+    assert audit["reserved_rainfall_group_count"] == 1
+
+
+def _four_details(*, mismatched_prefix: bool = False) -> dict[str, pd.DataFrame]:
+    elapsed = np.arange(40.0, 225.0, 5.0)
+    depth = np.linspace(0.1, 0.4, len(elapsed))
+    flood = np.zeros(len(elapsed))
+    out = {}
+    for role in ("candidate", "no_control", "dynamic_internal", "hold_previous"):
+        h = depth.copy()
+        if mismatched_prefix and role == "hold_previous":
+            h[11] += 1.0
+        setting = np.zeros(len(elapsed))
+        if role == "candidate":
+            setting[12:] = 1.0
+        out[role] = pd.DataFrame(
+            {
+                "elapsed_min": elapsed,
+                "h:n1": h,
+                "flood:n1": flood,
+                "setting:ADD301.2": setting,
+            }
+        )
+    return out
+
+
+def test_formal_same_state_ignores_post_transition_setting_at_checkpoint() -> None:
+    details = _four_details()
+    assert _same_state(details, 100.0, ["n1"], ["ADD301.2"])
+    assert _state_sha(details["candidate"], 100.0, ["n1"], ["ADD301.2"])
+    assert not _same_state(_four_details(mismatched_prefix=True), 100.0, ["n1"], ["ADD301.2"])
+
+
+def test_raw_formal_engineering_accepts_manifest_flag_names() -> None:
+    payload = {
+        "bounds_ok": True,
+        "rate_limit_ok": True,
+        "ramp_ok": True,
+        "dwell_ok": True,
+        "interlock_ok": True,
+    }
+    assert _engineering(payload, {}, True)
+
+
+def test_raw_formal_engineering_accepts_peak_boundary_contract_flags() -> None:
+    payload = {
+        "binary_semantics_ok": True,
+        "rate_limit_ok": True,
+        "dwell_ok": True,
+        "interlock_ok": True,
+    }
+    assert _engineering(payload, {}, True)
+
+
+def test_formal_resolver_links_separate_peak_branch_completions(tmp_path: Path) -> None:
+    runs = tmp_path / "runs"
+    base = "peak__event__120__001"
+    paths = {}
+    for role in ("candidate", "no_control", "dynamic_internal_rules", "hold_previous"):
+        case = runs / f"{base}__{role}"
+        case.mkdir(parents=True)
+        detail = case / "detail.csv"
+        detail.write_text("elapsed_min\n0\n", encoding="utf-8")
+        payload = {"case_id": f"{base}__{role}", "detail_path": str(detail)}
+        completion = case / "completion.json"
+        completion.write_text(json.dumps(payload), encoding="utf-8")
+        paths[role] = (completion, payload)
+    completion, payload = paths["candidate"]
+    assert _resolve(completion, payload, "candidate") == paths["candidate"][0].parent / "detail.csv"
+    assert _resolve(completion, payload, "no_control") == paths["no_control"][0].parent / "detail.csv"
+    assert _resolve(completion, payload, "dynamic_internal") == paths["dynamic_internal_rules"][0].parent / "detail.csv"
+    assert _resolve(completion, payload, "hold_previous") == paths["hold_previous"][0].parent / "detail.csv"
+
+
+def test_raw_formal_physical_identity_uses_contract_network_and_physical_sha(tmp_path: Path) -> None:
+    inp = tmp_path / "network.inp"
+    inp.write_text("[TITLE]\n", encoding="utf-8")
+    assert _physical(
+        {"network_sha256": "network-sha"},
+        {},
+        "file-sha",
+        True,
+        physical_sha="physical-sha",
+        expected_network="network-sha",
+        expected_physical="physical-sha",
+        network_path=inp,
+    )

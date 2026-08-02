@@ -37,6 +37,7 @@ from sewerrtc.v4.formal_f2 import (
     build_event_ledger,
     canonical_rain_group,
     explicit_step1_roles,
+    event_id_of,
     formal_step2_metadata_pool,
     load_registry,
     manifest_source_rows,
@@ -136,13 +137,48 @@ def _reserved(
             events.update(str(x) for x in payload.get("event_ids", []) if text(x))
         audit.update({"adapter_split": payload.get("split"), "reserved_event_count": len(events)})
 
-    if table.exists() and events:
-        groups.update(_groups_for_events(pd.read_csv(table, low_memory=False), events))
-    groups.update(_groups_for_events(inventory, events))
-    groups.update(_groups_for_events(source_all, events))
+    mapping_paths: list[Path] = []
+    if adapter.exists():
+        payload = json.loads(adapter.read_text(encoding="utf-8"))
+        for key in ("source", "rainfall_event_table"):
+            raw = text(payload.get(key, ""))
+            if raw:
+                candidate = Path(raw)
+                if not candidate.is_absolute():
+                    candidate = root / candidate
+                if candidate.is_file():
+                    mapping_paths.append(candidate)
+    if table.exists():
+        mapping_paths.append(table)
+
+    mapped_events: set[str] = set()
+    mapping_sources: list[str] = []
+
+    def add_mapping(frame: pd.DataFrame, source: str) -> None:
+        nonlocal mapped_events
+        groups.update(_groups_for_events(frame, events))
+        for row in frame.to_dict("records"):
+            event = event_id_of(row)
+            if event in events and canonical_rain_group(row):
+                mapped_events.add(event)
+        mapping_sources.append(source)
+
+    seen_paths: set[str] = set()
+    for path in mapping_paths:
+        key = str(path.resolve()).casefold()
+        if key in seen_paths:
+            continue
+        seen_paths.add(key)
+        try:
+            add_mapping(read_table(path), str(path))
+        except Exception:
+            continue
+    add_mapping(inventory, "event_inventory")
+    add_mapping(source_all, "formal_source_rows")
 
     audit["reserved_rainfall_group_count"] = len(groups)
-    audit["reserved_event_ids_without_rainfall_group"] = max(0, len(events) - len(groups))
+    audit["reserved_event_ids_without_rainfall_group"] = len(events - mapped_events)
+    audit["reserved_mapping_sources"] = mapping_sources
     return events, groups, audit
 
 
