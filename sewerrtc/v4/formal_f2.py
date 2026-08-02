@@ -169,19 +169,19 @@ def source_acceptance_mask(frame: pd.DataFrame, source_id: str, spec: Mapping[st
     if policy in {"acceptance_14", "current_14_gate"}:
         if not set(ACCEPTANCE_GATE_COLUMNS).issubset(frame.columns):
             return np.zeros(len(frame), dtype=bool)
-        mask = compute_acceptance(frame)
+        mask = np.asarray(compute_acceptance(frame), dtype=bool).copy()
     elif policy == "pilot_v3_training":
         if "eligible_for_training" not in frame.columns:
             return np.zeros(len(frame), dtype=bool)
-        mask = frame["eligible_for_training"].map(yes).to_numpy()
+        mask = frame["eligible_for_training"].map(yes).to_numpy(dtype=bool, copy=True)
         if set(ACCEPTANCE_GATE_COLUMNS).issubset(frame.columns):
-            mask &= compute_acceptance(frame)
+            mask = np.logical_and(mask, np.asarray(compute_acceptance(frame), dtype=bool))
     elif policy in {"raw_readmission_required", "none", ""}:
         return np.zeros(len(frame), dtype=bool)
     else:
         raise ValueError(f"unsupported Step2 admission for {source_id}: {policy}")
-    mask &= ~frame.apply(row_is_reserved, axis=1).to_numpy(bool)
-    return mask
+    reserved = frame.apply(row_is_reserved, axis=1).to_numpy(dtype=bool, copy=True)
+    return np.logical_and(np.asarray(mask, dtype=bool), ~reserved)
 
 
 def manifest_source_rows(project_root: str | Path, registry: Mapping[str, Any]) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
