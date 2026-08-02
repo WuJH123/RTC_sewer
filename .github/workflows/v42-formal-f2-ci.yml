@@ -4,9 +4,11 @@ on:
   pull_request:
     paths:
       - 'sewerrtc/v4/formal_f2.py'
+      - 'sewerrtc/control/formal_baselines_f2.py'
       - 'scripts/*v42_formal*f2.py'
       - 'scripts/select_v42_fast_gat_compatible_core.py'
       - 'scripts/run_v42_fast_core_pipeline.py'
+      - 'scripts/evaluate_v42_fast_policy_replay.py'
       - 'tests/test_v42_formal_f2.py'
       - 'tests/test_v42_fast_run_isolation.py'
       - 'configs/v42_formal_source_registry_f2.yaml'
@@ -15,9 +17,11 @@ on:
     branches: [main, 'feat/v42-formal-unified-data-f2-r1']
     paths:
       - 'sewerrtc/v4/formal_f2.py'
+      - 'sewerrtc/control/formal_baselines_f2.py'
       - 'scripts/*v42_formal*f2.py'
       - 'scripts/select_v42_fast_gat_compatible_core.py'
       - 'scripts/run_v42_fast_core_pipeline.py'
+      - 'scripts/evaluate_v42_fast_policy_replay.py'
       - 'tests/test_v42_formal_f2.py'
       - 'tests/test_v42_fast_run_isolation.py'
       - 'configs/v42_formal_source_registry_f2.yaml'
@@ -26,6 +30,8 @@ on:
 jobs:
   formal-f2-static:
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -37,6 +43,7 @@ jobs:
         run: |
           python -m py_compile \
             sewerrtc/v4/formal_f2.py \
+            sewerrtc/control/formal_baselines_f2.py \
             scripts/prepare_v42_formal_f2.py \
             scripts/build_v42_formal_step1_pool_f2.py \
             scripts/materialize_v42_formal_step2_f2.py \
@@ -50,6 +57,7 @@ jobs:
             scripts/write_v42_formal_f2_r0_adapter.py \
             scripts/run_v42_formal_f2.py \
             scripts/select_v42_fast_gat_compatible_core.py \
-            scripts/run_v42_fast_core_pipeline.py
+            scripts/run_v42_fast_core_pipeline.py \
+            scripts/evaluate_v42_fast_policy_replay.py
       - name: Run lightweight Formal F2 contract tests
-        run: pytest -q tests/test_v42_formal_f2.py tests/test_v42_fast_run_isolation.py
+        run: python -m pytest -q tests/test_v42_formal_f2.py tests/test_v42_fast_run_isolation.py
