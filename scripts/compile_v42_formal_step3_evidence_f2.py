@@ -32,7 +32,7 @@ def main() -> int:
     ap.add_argument(
         "--engineering-audit",
         type=Path,
-        required=True,
+        default=PROJECT_ROOT / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2/calibration/STEP3_AUTHORITATIVE_ENGINEERING_AUDIT.json",
         help="Authoritative executed/readback MPC audit produced on F2 calibration/validation runs.",
     )
     ap.add_argument(
