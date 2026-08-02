@@ -50,12 +50,14 @@ jobs:
             scripts/build_v42_formal_step1_pool_f2.py \
             scripts/materialize_v42_formal_step2_f2.py \
             scripts/materialize_v42_formal_gat_history_f2.py \
+            scripts/prepare_v42_formal_calibration_data_f2.py \
             scripts/train_v42_step1_formal_f2.py \
             scripts/train_v42_step2_formal_f2.py \
             scripts/build_v42_formal_eval_plan_f2.py \
             scripts/calibrate_v42_formal_step1_f2.py \
             scripts/calibrate_v42_formal_step2_safety_f2.py \
             scripts/compile_v42_formal_training_evidence_f2.py \
+            scripts/compile_v42_formal_step3_evidence_f2.py \
             scripts/write_v42_formal_f2_r0_adapter.py \
             scripts/run_v42_formal_f2.py \
             scripts/select_v42_fast_gat_compatible_core.py \
