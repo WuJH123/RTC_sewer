@@ -10,6 +10,7 @@ on:
       - 'scripts/run_v42_fast_core_pipeline.py'
       - 'scripts/evaluate_v42_fast_policy_replay.py'
       - 'tests/test_v42_formal_f2.py'
+      - 'tests/test_v42_formal_baselines_f2.py'
       - 'tests/test_v42_fast_run_isolation.py'
       - 'configs/v42_formal_source_registry_f2.yaml'
       - '.github/workflows/v42-formal-f2-ci.yml'
@@ -23,6 +24,7 @@ on:
       - 'scripts/run_v42_fast_core_pipeline.py'
       - 'scripts/evaluate_v42_fast_policy_replay.py'
       - 'tests/test_v42_formal_f2.py'
+      - 'tests/test_v42_formal_baselines_f2.py'
       - 'tests/test_v42_fast_run_isolation.py'
       - 'configs/v42_formal_source_registry_f2.yaml'
       - '.github/workflows/v42-formal-f2-ci.yml'
@@ -60,4 +62,4 @@ jobs:
             scripts/run_v42_fast_core_pipeline.py \
             scripts/evaluate_v42_fast_policy_replay.py
       - name: Run lightweight Formal F2 contract tests
-        run: python -m pytest -q tests/test_v42_formal_f2.py tests/test_v42_fast_run_isolation.py
+        run: python -m pytest -q tests/test_v42_formal_f2.py tests/test_v42_formal_baselines_f2.py tests/test_v42_fast_run_isolation.py
