@@ -2,10 +2,12 @@
 
 A history source must match the rainfall/event/checkpoint state, cover t-120..t,
 and produce all thirteen real Step1 calls at t-60..t. One failed checkpoint does
-not discard other states from the same rainfall group.
+not discard other states from the same rainfall group. Wide detail CSVs use a
+bounded LRU cache so full Formal populations remain memory-safe.
 """
 from __future__ import annotations
 import argparse,json,sys
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 import numpy as np,pandas as pd,torch
@@ -18,8 +20,15 @@ from sewerrtc.v4.v42_step1_dataset import _build_usecols,_detail_extract_window,
 
 def _detail(path:Path,required:list[str])->pd.DataFrame:
  h=pd.read_csv(path,nrows=0);missing=[c for c in required if c not in set(map(str,h.columns))]
- if missing:raise KeyError(f'formal GAT history detail missing columns: {missing[:10]}')
+ if missing:raise KeyError(f'formal GAT history detail missing required columns: {missing[:10]}')
  return pd.read_csv(path,usecols=required,low_memory=False).loc[:,required]
+def _cached_detail(cache:OrderedDict[str,pd.DataFrame],path:Path,required:list[str],max_items:int)->pd.DataFrame:
+ key=str(path.resolve())
+ if key in cache:
+  value=cache.pop(key);cache[key]=value;return value
+ value=_detail(path,required);cache[key]=value
+ while len(cache)>max_items:cache.popitem(last=False)
+ return value
 def _bounds(path:Path)->tuple[float,float]:
  x=pd.to_numeric(pd.read_csv(path,usecols=['elapsed_min']).elapsed_min,errors='coerce').dropna()
  if x.empty:raise ValueError('elapsed_min has no finite values')
@@ -41,16 +50,17 @@ def _reconstruct(detail:pd.DataFrame,cp:float,model,graph,mask:np.ndarray,device
  if hist.shape!=(13,graph.n_nodes):raise RuntimeError(f'unexpected formal reconstructed history shape {hist.shape}')
  return hist,std,ex[-1]['rainfall'].astype(np.float32)
 def main()->int:
- ap=argparse.ArgumentParser();ap.add_argument('--project-root',type=Path,default=PROJECT_ROOT);ap.add_argument('--input-manifest',type=Path,default=PROJECT_ROOT/'outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2/step2/FORMAL_F2_STEP2_RAW_MANIFEST.parquet');ap.add_argument('--step1-window-manifest',type=Path,default=PROJECT_ROOT/'outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2/prepare/FORMAL_F2_STEP1_WINDOW_MANIFEST.parquet');ap.add_argument('--step1-model-dir',type=Path,required=True);ap.add_argument('--output-manifest',type=Path,default=PROJECT_ROOT/'outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2/step2/FORMAL_F2_STEP2_GAT_MANIFEST.parquet');ap.add_argument('--min-rainfall-groups',type=int,default=65);ap.add_argument('--sensor-ratio',type=float,default=.1);ap.add_argument('--sensor-layout-seed',type=int,default=42);ap.add_argument('--hidden-dim',type=int,default=128);ap.add_argument('--heads',type=int,default=4);ap.add_argument('--gat-layers',type=int,default=3);a=ap.parse_args()
+ ap=argparse.ArgumentParser();ap.add_argument('--project-root',type=Path,default=PROJECT_ROOT);ap.add_argument('--input-manifest',type=Path,default=PROJECT_ROOT/'outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2/step2/FORMAL_F2_STEP2_RAW_MANIFEST.parquet');ap.add_argument('--step1-window-manifest',type=Path,default=PROJECT_ROOT/'outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2/prepare/FORMAL_F2_STEP1_WINDOW_MANIFEST.parquet');ap.add_argument('--step1-model-dir',type=Path,required=True);ap.add_argument('--output-manifest',type=Path,default=PROJECT_ROOT/'outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2/step2/FORMAL_F2_STEP2_GAT_MANIFEST.parquet');ap.add_argument('--min-rainfall-groups',type=int,default=65);ap.add_argument('--sensor-ratio',type=float,default=.1);ap.add_argument('--sensor-layout-seed',type=int,default=42);ap.add_argument('--hidden-dim',type=int,default=128);ap.add_argument('--heads',type=int,default=4);ap.add_argument('--gat-layers',type=int,default=3);ap.add_argument('--detail-cache-items',type=int,default=12);a=ap.parse_args()
+ if a.detail_cache_items<2:raise ValueError('detail-cache-items must be >=2')
  frame=read_table(a.input_manifest);windows=read_table(a.step1_window_manifest)
  if frame.empty or windows.empty:raise ValueError('Formal F2 GAT materialisation input is empty')
  if 'training_admission_authorized' not in frame or not bool(frame.training_admission_authorized.astype(bool).all()):raise RuntimeError('formal GAT materialiser requires raw-authorized Step2 rows')
- graph=load_graph_assets(a.project_root);mask,indices,sensor_sha=_sensor_layout(graph.n_nodes,a.sensor_ratio,a.sensor_layout_seed);device=torch.device('cuda' if torch.cuda.is_available() else 'cpu');model=TemporalSparseGATReconstructorV42(n_nodes=graph.n_nodes,n_facilities=graph.n_facilities,node_static_dim=graph.node_static.shape[1],link_static_dim=graph.link_static.shape[1],hidden_dim=a.hidden_dim,heads=a.heads,gat_layers=a.gat_layers).to(device);model.load_state_dict(torch.load(a.step1_model_dir/'best_model.pt',map_location=device,weights_only=True));model.eval();required=_build_usecols(graph.node_ids,graph.facility_ids);cache={};bcache={};out=[];fail=[];success={}
- windows=windows[~windows.get('formal_split',pd.Series('',index=windows.index)).astype(str).isin(['formal_blind','challenge','locked_validation'])].copy()
- for state,grp in frame.groupby('state_key',sort=True):
+ graph=load_graph_assets(a.project_root);mask,indices,sensor_sha=_sensor_layout(graph.n_nodes,a.sensor_ratio,a.sensor_layout_seed);device=torch.device('cuda' if torch.cuda.is_available() else 'cpu');model=TemporalSparseGATReconstructorV42(n_nodes=graph.n_nodes,n_facilities=graph.n_facilities,node_static_dim=graph.node_static.shape[1],link_static_dim=graph.link_static.shape[1],hidden_dim=a.hidden_dim,heads=a.heads,gat_layers=a.gat_layers).to(device);model.load_state_dict(torch.load(a.step1_model_dir/'best_model.pt',map_location=device,weights_only=True));model.eval();required=_build_usecols(graph.node_ids,graph.facility_ids);cache:OrderedDict[str,pd.DataFrame]=OrderedDict();bcache:dict[str,tuple[float,float]]={};out=[];fail=[];success={};peak_cache=0
+ windows=windows[~windows.get('formal_split',pd.Series('',index=windows.index)).astype(str).isin(['formal_blind','challenge','locked_validation'])].copy();groups=list(frame.groupby('state_key',sort=True))
+ for state_i,(state,grp) in enumerate(groups,start=1):
   first=grp.iloc[0];rain=str(first.split_group_key);event=str(first.get('event_id',''));cp=float(first.checkpoint_min);candidate=Path(str(first.source_detail_path_candidate))
   try:
-   ck=str(candidate.resolve());cache.setdefault(ck,_detail(candidate,required));csig=_signature(cache[ck],cp,graph);q=windows[windows.split_group_key.astype(str).eq(rain)].copy()
+   candidate_detail=_cached_detail(cache,candidate,required,a.detail_cache_items);peak_cache=max(peak_cache,len(cache));csig=_signature(candidate_detail,cp,graph);q=windows[windows.split_group_key.astype(str).eq(rain)].copy()
    if event and 'event_id' in q:
     qe=q[q.event_id.astype(str).eq(event)];q=qe if not qe.empty else q
    history_path=None;history_detail=None
@@ -62,8 +72,7 @@ def main()->int:
      if key not in bcache:bcache[key]=_bounds(p)
      lo,hi=bcache[key]
      if lo>cp-120.+1e-6 or hi<cp-1e-6:continue
-     if key not in cache:cache[key]=_detail(p,required)
-     d=cache[key]
+     d=_cached_detail(cache,p,required,a.detail_cache_items);peak_cache=max(peak_cache,len(cache))
      if not _same(csig,_signature(d,cp,graph)):continue
      for anchor in [cp-60.+5.*i for i in range(13)]:
       if _detail_extract_window(d,anchor,graph.node_ids,graph.facility_ids) is None:raise ValueError(f'history source misses anchor={anchor}')
@@ -75,7 +84,8 @@ def main()->int:
     rec=row.copy();rec['history_source_detail_path']=str(history_path);rec['history_depth']=json.dumps(hist.tolist(),allow_nan=False);rec['gat_depth_std_history_mean']=float(std.mean());rec['gat_depth_std_current_mean']=float(std[-1].mean());rec['rainfall_forecast']=json.dumps(forecast.tolist(),allow_nan=False);rec['state_source']='gat_sparse_reconstruction';rec['history_input_contract']='gat_compatible_causal_state';rec['reconstructor_contract']='formal_temporal_v42';rec['reconstructed_history_contract']='PROJECT6_V42_CAUSAL_RECONSTRUCTED_HISTORY_V1';rec['current_frame_repetition_used']=False;rec['authoritative_swmm_history_used_as_online_input']=False;rec['realized_future_rainfall_used_online']=False;rec['future_SWMM_trajectories_supervision_only']=True;rec['sensor_layout_sha256']=sensor_sha;out.append(rec)
    success.setdefault(rain,set()).add(str(state))
   except Exception as exc:fail.append({'rainfall_group':rain,'state_key':str(state),'event_id':event,'checkpoint_min':cp,'candidate_detail':str(candidate),'required_start_min':cp-120.,'error':f'{type(exc).__name__}: {exc}'})
- result=pd.DataFrame(out);groups=int(result.split_group_key.astype(str).nunique()) if not result.empty else 0;a.output_manifest.parent.mkdir(parents=True,exist_ok=True)
+  if state_i%25==0:print(json.dumps({'stage':'formal_f2_step2_gat_history','processed_states':state_i,'total_states':len(groups),'output_rows':len(out),'failed_states':len(fail),'detail_cache_items':len(cache)},allow_nan=False),flush=True)
+ result=pd.DataFrame(out);groups_out=int(result.split_group_key.astype(str).nunique()) if not result.empty else 0;a.output_manifest.parent.mkdir(parents=True,exist_ok=True)
  if not result.empty:result.to_parquet(a.output_manifest,index=False)
- inp=set(frame.split_group_key.astype(str));got=set(result.split_group_key.astype(str)) if not result.empty else set();audit={'formal_generation_id':FORMAL_GENERATION_ID,'stage':'formal_f2_step2_gat_history','status':'pass' if groups>=a.min_rainfall_groups else 'fail','development_only':False,'formal_mainline_authorized':False,'input_rows':len(frame),'output_rows':len(result),'input_states':int(frame.state_key.astype(str).nunique()),'output_states':int(result.state_key.astype(str).nunique()) if not result.empty else 0,'input_rainfall_groups':len(inp),'output_rainfall_groups':groups,'lost_rainfall_groups':sorted(inp-got),'minimum_rainfall_groups':a.min_rainfall_groups,'failed_states':len(fail),'failure_examples':fail[:200],'groups_with_alternate_successful_state':sum(1 for x in success.values() if x),'sensor_ratio':a.sensor_ratio,'sensor_count':len(indices),'sensor_layout_sha256':sensor_sha,'state_source':'gat_sparse_reconstruction','history_input_contract':'gat_compatible_causal_state','reconstructed_history_contract':'PROJECT6_V42_CAUSAL_RECONSTRUCTED_HISTORY_V1','current_frame_repetition_used':False,'authoritative_swmm_history_used_as_online_input':False,'realized_future_rainfall_used_online':False};(a.output_manifest.parent/'FORMAL_F2_STEP2_GAT_HISTORY_AUDIT.json').write_text(json.dumps(audit,indent=2,ensure_ascii=False,allow_nan=False),encoding='utf-8');print(json.dumps(audit,indent=2,ensure_ascii=False,allow_nan=False),flush=True);return 0 if audit['status']=='pass' else 3
+ inp=set(frame.split_group_key.astype(str));got=set(result.split_group_key.astype(str)) if not result.empty else set();audit={'formal_generation_id':FORMAL_GENERATION_ID,'stage':'formal_f2_step2_gat_history','status':'pass' if groups_out>=a.min_rainfall_groups else 'fail','development_only':False,'formal_mainline_authorized':False,'input_rows':len(frame),'output_rows':len(result),'input_states':int(frame.state_key.astype(str).nunique()),'output_states':int(result.state_key.astype(str).nunique()) if not result.empty else 0,'input_rainfall_groups':len(inp),'output_rainfall_groups':groups_out,'lost_rainfall_groups':sorted(inp-got),'minimum_rainfall_groups':a.min_rainfall_groups,'failed_states':len(fail),'failure_examples':fail[:200],'groups_with_alternate_successful_state':sum(1 for x in success.values() if x),'sensor_ratio':a.sensor_ratio,'sensor_count':len(indices),'sensor_layout_sha256':sensor_sha,'state_source':'gat_sparse_reconstruction','history_input_contract':'gat_compatible_causal_state','reconstructed_history_contract':'PROJECT6_V42_CAUSAL_RECONSTRUCTED_HISTORY_V1','current_frame_repetition_used':False,'authoritative_swmm_history_used_as_online_input':False,'realized_future_rainfall_used_online':False,'detail_cache_limit':a.detail_cache_items,'peak_detail_cache_items':peak_cache};(a.output_manifest.parent/'FORMAL_F2_STEP2_GAT_HISTORY_AUDIT.json').write_text(json.dumps(audit,indent=2,ensure_ascii=False,allow_nan=False),encoding='utf-8');print(json.dumps(audit,indent=2,ensure_ascii=False,allow_nan=False),flush=True);return 0 if audit['status']=='pass' else 3
 if __name__=='__main__':raise SystemExit(main())

@@ -3,9 +3,12 @@
 Every admitted row is independently rechecked against the current raw SWMM
 contract. Candidate/No-control/Dynamic-Internal/Hold-Previous must share forcing
 and checkpoint state, expose actual Engineering36 readback, and contain H120.
+Large Formal pools use bounded LRU caches so thousands of wide SWMM CSVs cannot
+accumulate in RAM.
 """
 from __future__ import annotations
 import argparse,hashlib,json,math,subprocess,sys
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any,Mapping
 import numpy as np,pandas as pd
@@ -98,28 +101,39 @@ def _physical(payload:Mapping[str,Any],source:Mapping[str,Any],frozen:str,raw:bo
  vals={text(source.get(k,'')) for k in ('physical_sha256','network_sha256','inp_sha256','physical_inp_sha256')}|{text(payload.get(k,'')) for k in ('physical_sha256','network_sha256','inp_sha256','physical_inp_sha256')};vals.discard('');return bool(frozen and frozen in vals)
 def _gate(source:Mapping[str,Any],name:str)->bool:return name in source and yes(source.get(name))
 def _h3sha(a:np.ndarray)->str:return hashlib.sha256(np.ascontiguousarray(a[:3],dtype=np.float64).tobytes(order='C')).hexdigest()
-def _source(meta:pd.Series)->dict[str,Any]:
- f=read_table(Path(str(meta['source_manifest'])));p=int(meta['source_row_number'])
- if p<0 or p>=len(f):raise IndexError('source_row_number outside source manifest')
- return f.iloc[p].to_dict()
+
+def _cached_detail(cache:OrderedDict[str,pd.DataFrame],path:Path,nodes:list[str],fac:list[str],max_items:int)->pd.DataFrame:
+ key=str(path.resolve())
+ if key in cache:
+  value=cache.pop(key);cache[key]=value;return value
+ value=_read_core_detail(path,nodes,fac);cache[key]=value
+ while len(cache)>max_items:cache.popitem(last=False)
+ return value
+
+def _source(meta:pd.Series,cache:OrderedDict[str,pd.DataFrame],max_items:int=8)->dict[str,Any]:
+ path=Path(str(meta['source_manifest'])).resolve();key=str(path)
+ if key in cache:value=cache.pop(key);cache[key]=value
+ else:
+  value=read_table(path);cache[key]=value
+  while len(cache)>max_items:cache.popitem(last=False)
+ p=int(meta['source_row_number'])
+ if p<0 or p>=len(value):raise IndexError('source_row_number outside source manifest')
+ return value.iloc[p].to_dict()
 def _uid(g:str,s:str,a:str)->str:return hashlib.sha256(f'{g}|{s}|{a}'.encode()).hexdigest()
 def main()->int:
- ap=argparse.ArgumentParser();ap.add_argument('--project-root',type=Path,default=PROJECT_ROOT);ap.add_argument('--metadata-pool',type=Path,default=PROJECT_ROOT/'outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2/prepare/FORMAL_F2_STEP2_METADATA_POOL.parquet');ap.add_argument('--output-root',type=Path,default=PROJECT_ROOT/'outputs/project6_dual_reference_v4');ap.add_argument('--output-manifest',type=Path,default=PROJECT_ROOT/'outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2/step2/FORMAL_F2_STEP2_RAW_MANIFEST.parquet');ap.add_argument('--min-rainfall-groups',type=int,default=65);a=ap.parse_args()
+ ap=argparse.ArgumentParser();ap.add_argument('--project-root',type=Path,default=PROJECT_ROOT);ap.add_argument('--metadata-pool',type=Path,default=PROJECT_ROOT/'outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2/prepare/FORMAL_F2_STEP2_METADATA_POOL.parquet');ap.add_argument('--output-root',type=Path,default=PROJECT_ROOT/'outputs/project6_dual_reference_v4');ap.add_argument('--output-manifest',type=Path,default=PROJECT_ROOT/'outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2/step2/FORMAL_F2_STEP2_RAW_MANIFEST.parquet');ap.add_argument('--min-rainfall-groups',type=int,default=65);ap.add_argument('--detail-cache-items',type=int,default=24);ap.add_argument('--source-cache-items',type=int,default=8);a=ap.parse_args()
+ if a.detail_cache_items<4 or a.source_cache_items<1:raise ValueError('cache limits too small')
  meta=read_table(a.metadata_pool)
  if meta.empty:raise ValueError('Formal F2 Step2 metadata pool is empty')
- graph=_load_graph_topology(a.project_root);frozen=sha256_file(a.project_root/'data/wuhan_v8_storage_retrofit.inp');nodes=list(map(str,graph['node_ids']));fac=list(map(str,graph['facility_ids']));priority=get_pfv_core_node_indices(nodes);index=_completion_index(a.output_root);cache={};records=[];failures=[]
- for _,m in meta.iterrows():
+ graph=_load_graph_topology(a.project_root);frozen=sha256_file(a.project_root/'data/wuhan_v8_storage_retrofit.inp');nodes=list(map(str,graph['node_ids']));fac=list(map(str,graph['facility_ids']));priority=get_pfv_core_node_indices(nodes);index=_completion_index(a.output_root);detail_cache:OrderedDict[str,pd.DataFrame]=OrderedDict();source_cache:OrderedDict[str,pd.DataFrame]=OrderedDict();records=[];failures=[];peak_detail_cache=0
+ for row_i,(_,m) in enumerate(meta.iterrows(),start=1):
   cid=text(m.get('case_id',''));sid=text(m.get('source_id',''))
   try:
-   src=_source(m);group=canonical_rain_group(src) or text(m.get('rainfall_group_key',''));cp=checkpoint_of(src);cp=float(m['checkpoint_min']) if not np.isfinite(cp) else cp
+   src=_source(m,source_cache,a.source_cache_items);group=canonical_rain_group(src) or text(m.get('rainfall_group_key',''));cp=checkpoint_of(src);cp=float(m['checkpoint_min']) if not np.isfinite(cp) else cp
    if not group or not np.isfinite(cp):raise ValueError('missing rainfall group or checkpoint')
    if not cid:cid=text(src.get('case_id',src.get('candidate_id','')))
    if not cid or cid not in index:raise FileNotFoundError(f'completion not found for case_id={cid!r}')
-   source_manifest=Path(str(m['source_manifest']));completion=_choose(index[cid],source_manifest);payload=json.loads(completion.read_text(encoding='utf-8'));paths={r:_resolve(completion,payload,r) for r in ROLES};details={}
-   for role,path in paths.items():
-    key=str(path)
-    if key not in cache:cache[key]=_read_core_detail(path,nodes,fac)
-    details[role]=cache[key]
+   source_manifest=Path(str(m['source_manifest']));completion=_choose(index[cid],source_manifest);payload=json.loads(completion.read_text(encoding='utf-8'));paths={r:_resolve(completion,payload,r) for r in ROLES};details={r:_cached_detail(detail_cache,p,nodes,fac,a.detail_cache_items) for r,p in paths.items()};peak_detail_cache=max(peak_detail_cache,len(detail_cache))
    ht,ft=_times(float(cp));history=_select(details['candidate'],ht);history_depth=_cols(history,'h:',nodes);history_actions=_cols(history,'setting:',fac);history_rain=_rain(history);branches={}
    for role in ROLES:
     future=_select(details[role],ft);branches[role]={'depth':_cols(future,'h:',nodes),'flood':_cols(future,'flood:',nodes),'action':_cols(future,'setting:',fac),'rainfall':_rain(future)}
@@ -132,9 +146,10 @@ def main()->int:
    for role in ROLES:rec[f'action_{role}_readback']=json.dumps(branches[role]['action'].tolist(),allow_nan=False);rec[f'trajectory_depth_{role}']=json.dumps(branches[role]['depth'].tolist(),allow_nan=False);rec[f'trajectory_flood_{role}']=json.dumps(branches[role]['flood'].tolist(),allow_nan=False);rec[f'source_detail_path_{role}']=str(paths[role])
    records.append(rec)
   except Exception as exc:failures.append({'source_dataset':sid,'case_id':cid,'source_manifest':text(m.get('source_manifest','')),'source_row_number':int(m.get('source_row_number',-1)),'error':f'{type(exc).__name__}: {exc}'})
+  if row_i%100==0:print(json.dumps({'stage':'formal_f2_step2_raw_readmission','processed':row_i,'total':len(meta),'accepted':len(records),'failed':len(failures),'detail_cache_items':len(detail_cache)},allow_nan=False),flush=True)
  out=pd.DataFrame(records);a.output_manifest.parent.mkdir(parents=True,exist_ok=True)
  if not out.empty:out=out.sort_values(['rainfall_sha256','state_key','candidate_action_sha256'],kind='mergesort').drop_duplicates(['rainfall_sha256','state_key','candidate_action_sha256']);out.to_parquet(a.output_manifest,index=False)
- groups=int(out.rainfall_sha256.astype(str).nunique()) if not out.empty else 0;source_summary={str(s):{'rows':len(g),'rainfall_groups':int(g.rainfall_sha256.astype(str).nunique()),'states':int(g.state_key.astype(str).nunique())} for s,g in out.groupby('source_dataset')} if not out.empty else {};audit={'formal_generation_id':FORMAL_GENERATION_ID,'stage':'formal_f2_step2_raw_readmission','development_only':False,'formal_mainline_authorized':False,'input_metadata_rows':len(meta),'accepted_rows':len(out),'accepted_rainfall_groups':groups,'minimum_rainfall_groups':a.min_rainfall_groups,'accepted_states':int(out.state_key.astype(str).nunique()) if not out.empty else 0,'actual_k_distribution':out.actual_k.value_counts().sort_index().to_dict() if not out.empty else {},'source_summary':source_summary,'failed_rows':len(failures),'failure_examples':failures[:200],'frozen_inp_sha256':frozen,'four_reference_shared_model_ready':not out.empty,'trajectory_first_kpi_derivation':True,'action_authority':'actual_readback_setting','raw_independent_oracle_all_pass':not out.empty,'status':'pass' if groups>=a.min_rainfall_groups else 'fail'}
+ groups=int(out.rainfall_sha256.astype(str).nunique()) if not out.empty else 0;source_summary={str(s):{'rows':len(g),'rainfall_groups':int(g.rainfall_sha256.astype(str).nunique()),'states':int(g.state_key.astype(str).nunique())} for s,g in out.groupby('source_dataset')} if not out.empty else {};audit={'formal_generation_id':FORMAL_GENERATION_ID,'stage':'formal_f2_step2_raw_readmission','development_only':False,'formal_mainline_authorized':False,'input_metadata_rows':len(meta),'accepted_rows':len(out),'accepted_rainfall_groups':groups,'minimum_rainfall_groups':a.min_rainfall_groups,'accepted_states':int(out.state_key.astype(str).nunique()) if not out.empty else 0,'actual_k_distribution':out.actual_k.value_counts().sort_index().to_dict() if not out.empty else {},'source_summary':source_summary,'failed_rows':len(failures),'failure_examples':failures[:200],'frozen_inp_sha256':frozen,'four_reference_shared_model_ready':not out.empty,'trajectory_first_kpi_derivation':True,'action_authority':'actual_readback_setting','raw_independent_oracle_all_pass':not out.empty,'detail_cache_limit':a.detail_cache_items,'peak_detail_cache_items':peak_detail_cache,'source_manifest_cache_limit':a.source_cache_items,'status':'pass' if groups>=a.min_rainfall_groups else 'fail'}
  if audit['status']=='fail':audit['reason']='accepted formal Step2 rainfall groups below minimum'
  (a.output_manifest.parent/'FORMAL_F2_STEP2_RAW_ADMISSION_AUDIT.json').write_text(json.dumps(audit,indent=2,ensure_ascii=False,allow_nan=False),encoding='utf-8');print(json.dumps(audit,indent=2,ensure_ascii=False,allow_nan=False),flush=True);return 0 if audit['status']=='pass' else 3
 if __name__=='__main__':raise SystemExit(main())
