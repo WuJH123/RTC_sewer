@@ -1,54 +1,167 @@
 """Visible restartable orchestration for Project6 V4.2 Formal F2.
 
-Stages: prepare structured metadata + expanded Step1 + raw Step2 admission;
-three-seed Step1; causal GAT histories + three-seed Step2; structural audit.
-Downstream OOD/safety calibration and authoritative paper-workflow stages remain
-fail-closed and are never fabricated by this runner.
+Stages are fail-closed and independently restartable:
+prepare -> Step1(3 seeds) -> Step2(3 seeds) -> new-event calibration -> evidence.
+The runner also freezes the untouched evaluation plan and writes the legacy R0
+compatibility view from stricter F2 proofs. It does NOT fabricate the later
+paper-workflow closed-loop/Policy-Lock/Challenge/Blind evidence.
 """
 from __future__ import annotations
-import argparse,json,subprocess,sys
+
+import argparse
+import json
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
-PROJECT_ROOT=Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:sys.path.insert(0,str(PROJECT_ROOT))
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from sewerrtc.v4.formal_f2 import FORMAL_GENERATION_ID
-def _run(cmd:list[str],root:Path):print('\nRUN:',' '.join(cmd),flush=True);subprocess.run(cmd,cwd=str(root),check=True)
-def _json(p:Path)->dict[str,Any]:return json.loads(p.read_text(encoding='utf-8'))
-def _status(root:Path)->dict[str,Any]:
- formal=root/'outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2';prep=formal/'prepare/FORMAL_F2_PREPARE_AUDIT.json';pool=formal/'prepare/FORMAL_F2_STEP1_POOL_AUDIT.json';raw=formal/'step2/FORMAL_F2_STEP2_RAW_ADMISSION_AUDIT.json';gat=formal/'step2/FORMAL_F2_STEP2_GAT_HISTORY_AUDIT.json';s1=sorted((formal/'step1').glob('seed_*/formal_step1_report.json'));s2=sorted((formal/'step2/models').glob('seed_*/formal_step2_report.json'));p={'formal_generation_id':FORMAL_GENERATION_ID,'prepare':_json(prep) if prep.exists() else None,'step1_pool':_json(pool) if pool.exists() else None,'raw_step2':_json(raw) if raw.exists() else None,'gat_step2':_json(gat) if gat.exists() else None,'step1_seed_reports':[str(x) for x in s1],'step2_seed_reports':[str(x) for x in s2],'formal_mainline_authorized':False};r=[]
- if not p['prepare'] or p['prepare'].get('status')!='pass':r.append('formal_prepare_not_pass')
- if not p['step1_pool'] or p['step1_pool'].get('status')!='pass':r.append('formal_step1_pool_not_pass')
- if not p['raw_step2'] or p['raw_step2'].get('status')!='pass':r.append('formal_step2_raw_admission_not_pass')
- if len(s1)<3:r.append('formal_step1_requires_three_model_seeds')
- if not p['gat_step2'] or p['gat_step2'].get('status')!='pass':r.append('formal_step2_gat_history_not_pass')
- if len(s2)<3:r.append('formal_step2_requires_three_model_seeds')
- a=[_json(x) for x in s1]
- if a:
-  if len({tuple(x.get('train_rainfall_groups',[])) for x in a})!=1:r.append('step1_split_changes_with_model_seed')
-  if any(int(x.get('train_rainfall_group_count',0))<65 for x in a):r.append('step1_train_rainfall_groups_below_65')
-  if any(x.get('uses_future_hydraulic_truth') is not False for x in a):r.append('step1_future_truth_contract_violation')
- b=[_json(x) for x in s2]
- if b:
-  if len({tuple(x.get('train_rainfall_groups',[])) for x in b})!=1:r.append('step2_split_changes_with_model_seed')
-  if any(int(x.get('train_rainfall_group_count',0))<65 for x in b):r.append('step2_train_rainfall_groups_below_65')
-  if any(x.get('raw_independent_oracle_all_pass') is not True for x in b):r.append('step2_raw_oracle_not_all_pass')
- p['structural_training_chain_pass']=not r;p['reasons']=r;p['next_required_stages']=['Step1 independent OOD calibration and evidence.json','Step2 ensemble/conformal PFV+Peak safety calibration','true_state_offline_validation','authoritative exact SWMM closed loop','surrogate closed loop','GAT-integrated closed loop','policy lock','challenge','one-shot locked validation','formal blind >=24 new rainfall SHA with all authoritative baselines'];formal.mkdir(parents=True,exist_ok=True);(formal/'FORMAL_F2_STATUS.json').write_text(json.dumps(p,indent=2,ensure_ascii=False,allow_nan=False),encoding='utf-8');return p
-def main()->int:
- ap=argparse.ArgumentParser();ap.add_argument('--project-root',type=Path,default=PROJECT_ROOT);ap.add_argument('--stage',choices=('prepare','step1','step2','audit','all'),default='prepare');ap.add_argument('--seeds',type=int,nargs='+',default=[17,42,73]);ap.add_argument('--primary-step1-seed',type=int,default=42);ap.add_argument('--split-seed',type=int,default=42);ap.add_argument('--sensor-layout-seed',type=int,default=42);a=ap.parse_args();root=a.project_root;py=str(Path(sys.executable));formal=root/'outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2';prep=formal/'prepare';s1=formal/'step1';s2=formal/'step2'
- def prepare():
-  _run([py,'-u',str(root/'scripts/prepare_v42_formal_f2.py'),'--project-root',str(root),'--seed',str(a.split_seed)],root)
-  _run([py,'-u',str(root/'scripts/build_v42_formal_step1_pool_f2.py'),'--project-root',str(root),'--source-rows',str(prep/'FORMAL_F2_SOURCE_ROWS.parquet'),'--ledger',str(prep/'FORMAL_F2_EVENT_LEDGER.csv'),'--output-manifest',str(prep/'FORMAL_F2_STEP1_WINDOW_MANIFEST.parquet'),'--split-seed',str(a.split_seed),'--min-target-train-groups','65'],root)
-  _run([py,'-u',str(root/'scripts/materialize_v42_formal_step2_f2.py'),'--project-root',str(root),'--metadata-pool',str(prep/'FORMAL_F2_STEP2_METADATA_POOL.parquet'),'--output-manifest',str(s2/'FORMAL_F2_STEP2_RAW_MANIFEST.parquet'),'--min-rainfall-groups','65'],root)
- def step1():
-  for seed in a.seeds:_run([py,'-u',str(root/'scripts/train_v42_step1_formal_f2.py'),'--project-root',str(root),'--manifest',str(prep/'FORMAL_F2_STEP1_WINDOW_MANIFEST.parquet'),'--output-dir',str(s1/f'seed_{seed}'),'--model-seed',str(seed),'--split-seed',str(a.split_seed),'--sensor-layout-seed',str(a.sensor_layout_seed),'--min-train-groups','65'],root)
- def step2():
-  primary=s1/f'seed_{a.primary_step1_seed}'
-  if not (primary/'best_model.pt').exists():raise FileNotFoundError(primary/'best_model.pt')
-  _run([py,'-u',str(root/'scripts/materialize_v42_formal_gat_history_f2.py'),'--project-root',str(root),'--input-manifest',str(s2/'FORMAL_F2_STEP2_RAW_MANIFEST.parquet'),'--step1-window-manifest',str(prep/'FORMAL_F2_STEP1_WINDOW_MANIFEST.parquet'),'--step1-model-dir',str(primary),'--output-manifest',str(s2/'FORMAL_F2_STEP2_GAT_MANIFEST.parquet'),'--min-rainfall-groups','69','--sensor-layout-seed',str(a.sensor_layout_seed)],root)
-  for seed in a.seeds:_run([py,'-u',str(root/'scripts/train_v42_step2_formal_f2.py'),'--project-root',str(root),'--manifest',str(s2/'FORMAL_F2_STEP2_GAT_MANIFEST.parquet'),'--output-dir',str(s2/'models'/f'seed_{seed}'),'--seed',str(seed),'--split-seed',str(a.split_seed),'--min-train-groups','65'],root)
- if a.stage=='prepare':prepare()
- elif a.stage=='step1':step1()
- elif a.stage=='step2':step2()
- elif a.stage=='all':prepare();step1();step2()
- p=_status(root);print(json.dumps(p,indent=2,ensure_ascii=False,allow_nan=False),flush=True);return 0 if (a.stage=='audit' and p['structural_training_chain_pass']) or a.stage!='audit' else 3
-if __name__=='__main__':raise SystemExit(main())
+
+
+def _run(cmd: list[str], root: Path) -> None:
+    print("\nRUN:", " ".join(cmd), flush=True)
+    subprocess.run(cmd, cwd=str(root), check=True)
+
+
+def _json(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _status(root: Path) -> dict[str, Any]:
+    formal = root / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2"
+    paths = {
+        "prepare": formal / "prepare/FORMAL_F2_PREPARE_AUDIT.json",
+        "step1_pool": formal / "prepare/FORMAL_F2_STEP1_POOL_AUDIT.json",
+        "raw_step2": formal / "step2/FORMAL_F2_STEP2_RAW_ADMISSION_AUDIT.json",
+        "gat_step2": formal / "step2/FORMAL_F2_STEP2_GAT_HISTORY_AUDIT.json",
+        "eval_plan": formal / "evaluation_plan/FORMAL_F2_EVALUATION_PLAN_AUDIT.json",
+        "step1_calibration": formal / "calibration/STEP1_UNCERTAINTY_OOD_CALIBRATION.json",
+        "step2_calibration": formal / "calibration/STEP2_SAFETY_CALIBRATION.json",
+        "training_evidence": formal / "FORMAL_F2_TRAINING_EVIDENCE_COMPILE.json",
+    }
+    s1 = sorted((formal / "step1").glob("seed_*/formal_step1_report.json"))
+    s2 = sorted((formal / "step2/models").glob("seed_*/formal_step2_report.json"))
+    payload: dict[str, Any] = {
+        "formal_generation_id": FORMAL_GENERATION_ID,
+        **{key: _json(path) if path.exists() else None for key, path in paths.items()},
+        "step1_seed_reports": [str(x) for x in s1],
+        "step2_seed_reports": [str(x) for x in s2],
+        "formal_mainline_authorized": False,
+    }
+    structural_reasons: list[str] = []
+    for key in ("prepare", "step1_pool", "raw_step2", "eval_plan"):
+        item = payload.get(key)
+        if not item or item.get("status") != "pass":
+            structural_reasons.append(f"{key}_not_pass")
+    if len(s1) < 3:
+        structural_reasons.append("formal_step1_requires_three_model_seeds")
+    if payload.get("gat_step2") is None or payload["gat_step2"].get("status") != "pass":
+        structural_reasons.append("formal_step2_gat_history_not_pass")
+    if len(s2) < 3:
+        structural_reasons.append("formal_step2_requires_three_model_seeds")
+    step1_reports = [_json(x) for x in s1]
+    if step1_reports:
+        if len({tuple(x.get("train_rainfall_groups", [])) for x in step1_reports}) != 1:
+            structural_reasons.append("step1_split_changes_with_model_seed")
+        if any(int(x.get("train_rainfall_group_count", 0)) < 65 for x in step1_reports):
+            structural_reasons.append("step1_train_rainfall_groups_below_65")
+        if any(x.get("uses_future_hydraulic_truth") is not False for x in step1_reports):
+            structural_reasons.append("step1_future_truth_contract_violation")
+    step2_reports = [_json(x) for x in s2]
+    if step2_reports:
+        if len({tuple(x.get("train_rainfall_groups", [])) for x in step2_reports}) != 1:
+            structural_reasons.append("step2_split_changes_with_model_seed")
+        if any(int(x.get("train_rainfall_group_count", 0)) < 65 for x in step2_reports):
+            structural_reasons.append("step2_train_rainfall_groups_below_65")
+        if any(x.get("raw_independent_oracle_all_pass") is not True for x in step2_reports):
+            structural_reasons.append("step2_raw_oracle_not_all_pass")
+    payload["structural_training_chain_pass"] = not structural_reasons
+    payload["structural_reasons"] = structural_reasons
+    calibration_reasons: list[str] = []
+    if not payload.get("step1_calibration") or payload["step1_calibration"].get("status") != "pass":
+        calibration_reasons.append("step1_new_event_uncertainty_ood_calibration_not_pass")
+    if not payload.get("step2_calibration") or payload["step2_calibration"].get("status") != "pass":
+        calibration_reasons.append("step2_new_event_safety_calibration_not_pass")
+    payload["calibration_chain_pass"] = not calibration_reasons
+    payload["calibration_reasons"] = calibration_reasons
+    payload["training_evidence_compiled"] = bool(payload.get("training_evidence") and payload["training_evidence"].get("status") == "pass")
+    payload["next_required_stages"] = [
+        "true_state_offline_validation",
+        "authoritative exact SWMM closed loop",
+        "surrogate closed loop",
+        "GAT-integrated closed loop",
+        "policy lock",
+        "challenge",
+        "one-shot locked validation",
+        "formal blind >=24 new rainfall SHA with Proposed/EFD/Auto-RBC/All-close/No-control/Internal/Hold authoritative SWMM",
+    ]
+    formal.mkdir(parents=True, exist_ok=True)
+    (formal / "FORMAL_F2_STATUS.json").write_text(json.dumps(payload, indent=2, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+    return payload
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--project-root", type=Path, default=PROJECT_ROOT)
+    ap.add_argument("--stage", choices=("prepare", "step1", "step2", "calibration", "evidence", "audit", "all"), default="prepare")
+    ap.add_argument("--seeds", type=int, nargs="+", default=[17, 42, 73])
+    ap.add_argument("--primary-step1-seed", type=int, default=42)
+    ap.add_argument("--split-seed", type=int, default=42)
+    ap.add_argument("--sensor-layout-seed", type=int, default=42)
+    args = ap.parse_args()
+    root = args.project_root
+    py = str(Path(sys.executable))
+    formal = root / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2"
+    prep, s1, s2 = formal / "prepare", formal / "step1", formal / "step2"
+
+    def prepare() -> None:
+        _run([py, "-u", str(root / "scripts/prepare_v42_formal_f2.py"), "--project-root", str(root), "--seed", str(args.split_seed)], root)
+        _run([py, "-u", str(root / "scripts/build_v42_formal_step1_pool_f2.py"), "--project-root", str(root), "--source-rows", str(prep / "FORMAL_F2_SOURCE_ROWS.parquet"), "--ledger", str(prep / "FORMAL_F2_EVENT_LEDGER.csv"), "--output-manifest", str(prep / "FORMAL_F2_STEP1_WINDOW_MANIFEST.parquet"), "--split-seed", str(args.split_seed), "--min-target-train-groups", "65"], root)
+        _run([py, "-u", str(root / "scripts/materialize_v42_formal_step2_f2.py"), "--project-root", str(root), "--metadata-pool", str(prep / "FORMAL_F2_STEP2_METADATA_POOL.parquet"), "--output-manifest", str(s2 / "FORMAL_F2_STEP2_RAW_MANIFEST.parquet"), "--min-rainfall-groups", "69"], root)
+        _run([py, "-u", str(root / "scripts/build_v42_formal_eval_plan_f2.py"), "--project-root", str(root), "--ledger", str(prep / "FORMAL_F2_EVENT_LEDGER.csv"), "--output-dir", str(formal / "evaluation_plan"), "--seed", str(args.split_seed)], root)
+        _run([py, "-u", str(root / "scripts/write_v42_formal_f2_r0_adapter.py"), "--project-root", str(root), "--formal-root", str(formal), "--min-train-groups", "65"], root)
+
+    def step1() -> None:
+        for seed in args.seeds:
+            _run([py, "-u", str(root / "scripts/train_v42_step1_formal_f2.py"), "--project-root", str(root), "--manifest", str(prep / "FORMAL_F2_STEP1_WINDOW_MANIFEST.parquet"), "--output-dir", str(s1 / f"seed_{seed}"), "--model-seed", str(seed), "--split-seed", str(args.split_seed), "--sensor-layout-seed", str(args.sensor_layout_seed), "--min-train-groups", "65"], root)
+
+    def step2() -> None:
+        primary = s1 / f"seed_{args.primary_step1_seed}"
+        if not (primary / "best_model.pt").exists():
+            raise FileNotFoundError(primary / "best_model.pt")
+        _run([py, "-u", str(root / "scripts/materialize_v42_formal_gat_history_f2.py"), "--project-root", str(root), "--input-manifest", str(s2 / "FORMAL_F2_STEP2_RAW_MANIFEST.parquet"), "--step1-window-manifest", str(prep / "FORMAL_F2_STEP1_WINDOW_MANIFEST.parquet"), "--step1-model-dir", str(primary), "--output-manifest", str(s2 / "FORMAL_F2_STEP2_GAT_MANIFEST.parquet"), "--min-rainfall-groups", "69", "--sensor-layout-seed", str(args.sensor_layout_seed)], root)
+        for seed in args.seeds:
+            _run([py, "-u", str(root / "scripts/train_v42_step2_formal_f2.py"), "--project-root", str(root), "--manifest", str(s2 / "FORMAL_F2_STEP2_GAT_MANIFEST.parquet"), "--output-dir", str(s2 / "models" / f"seed_{seed}"), "--seed", str(seed), "--split-seed", str(args.split_seed), "--min-train-groups", "65"], root)
+
+    def calibration() -> None:
+        _run([py, "-u", str(root / "scripts/calibrate_v42_formal_step1_f2.py"), "--project-root", str(root), "--model-dir", str(s1 / f"seed_{args.primary_step1_seed}"), "--sensor-layout-seed", str(args.sensor_layout_seed)], root)
+        _run([py, "-u", str(root / "scripts/calibrate_v42_formal_step2_safety_f2.py"), "--project-root", str(root), "--models-root", str(s2 / "models"), "--seeds", *[str(x) for x in args.seeds]], root)
+
+    def evidence() -> None:
+        _run([py, "-u", str(root / "scripts/compile_v42_formal_training_evidence_f2.py"), "--project-root", str(root), "--formal-root", str(formal), "--seeds", *[str(x) for x in args.seeds], "--primary-seed", str(args.primary_step1_seed)], root)
+
+    if args.stage == "prepare":
+        prepare()
+    elif args.stage == "step1":
+        step1()
+    elif args.stage == "step2":
+        step2()
+    elif args.stage == "calibration":
+        calibration()
+    elif args.stage == "evidence":
+        evidence()
+    elif args.stage == "all":
+        prepare(); step1(); step2(); calibration(); evidence()
+    payload = _status(root)
+    print(json.dumps(payload, indent=2, ensure_ascii=False, allow_nan=False), flush=True)
+    if args.stage == "audit" and not payload["structural_training_chain_pass"]:
+        return 3
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
