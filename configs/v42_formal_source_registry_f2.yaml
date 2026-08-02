@@ -1,0 +1,134 @@
+{
+  "formal_generation_id": "PROJECT6_V42_FORMAL_F2",
+  "description": "Structured-source registry for the V4.2 Formal F2 generation. Historical data are read-only; old revealed evaluation sets may train F2 but can never serve as new F2 locked/blind evidence.",
+  "evaluation_counts": {
+    "calibration": 12,
+    "locked_validation": 16,
+    "challenge": 12,
+    "formal_blind": 24
+  },
+  "sources": {
+    "train1600_v3": {
+      "paths": ["outputs/project6_dual_reference_v4/final_v4/train1600_v3/dataset/train1600_v3_sample_manifest.csv"],
+      "globs": ["outputs/project6_dual_reference_v4/final_v4/audits/frozen_evidence/train1600_v3/**/dataset/train1600_v3_sample_manifest.csv"],
+      "formal_step1_allowed": true,
+      "formal_step2_allowed": true,
+      "auxiliary_only": false,
+      "historically_revealed": true,
+      "step2_admission": "acceptance_14",
+      "notes": "Canonical F2 core. Frozen-evidence copies are provenance fallbacks and are deduplicated by manifest SHA."
+    },
+    "pilot_v3": {
+      "globs": ["outputs/project6_dual_reference_v4/final_v4/**/pilot_v3_sample_manifest.csv"],
+      "formal_step1_allowed": true,
+      "formal_step2_allowed": true,
+      "auxiliary_only": false,
+      "historically_revealed": true,
+      "step2_admission": "pilot_v3_training",
+      "notes": "Only eligible_for_training rows are admitted; pilot evaluation/oracle rows remain revealed."
+    },
+    "peak_boundary": {
+      "globs": [
+        "outputs/project6_dual_reference_v4/final_v4/**/peak_boundary/**/sample_manifest.csv",
+        "outputs/project6_dual_reference_v4/final_v4/**/peak_boundary/sample_manifest.csv"
+      ],
+      "formal_step1_allowed": true,
+      "formal_step2_allowed": true,
+      "auxiliary_only": false,
+      "historically_revealed": true,
+      "step2_admission": "raw_readmission_required",
+      "notes": "Must re-prove current four-reference/readback/H120 contract from raw completion/details before Step2 training."
+    },
+    "v41_calibration": {
+      "paths": ["outputs/project6_dual_reference_v4/final_v4/v4_compact_eval/calibration/dataset/round_sample_manifest.csv"],
+      "globs": ["outputs/project6_dual_reference_v4/final_v4/**/v4_compact_eval/calibration/**/round_sample_manifest.csv"],
+      "formal_step1_allowed": true,
+      "formal_step2_allowed": true,
+      "auxiliary_only": false,
+      "historically_revealed": true,
+      "step2_admission": "acceptance_14",
+      "notes": "Historical evaluation is revealed; if admitted it becomes F2 training only, never F2 calibration."
+    },
+    "v41_locked": {
+      "paths": ["outputs/project6_dual_reference_v4/final_v4/v4_compact_eval/locked/dataset/round_sample_manifest.csv"],
+      "globs": ["outputs/project6_dual_reference_v4/final_v4/**/v4_compact_eval/locked/**/round_sample_manifest.csv"],
+      "formal_step1_allowed": true,
+      "formal_step2_allowed": true,
+      "auxiliary_only": false,
+      "historically_revealed": true,
+      "step2_admission": "acceptance_14",
+      "notes": "Historical locked result is revealed; it may train F2 but can never be reused as F2 Locked."
+    },
+    "gate5r_canary": {
+      "globs": [
+        "outputs/project6_dual_reference_v4/**/gate5r*/**/*manifest*.csv",
+        "outputs/project6_dual_reference_v4/**/gate5r*/**/*manifest*.parquet"
+      ],
+      "formal_step1_allowed": true,
+      "formal_step2_allowed": false,
+      "auxiliary_only": true,
+      "historically_revealed": true,
+      "step2_admission": "none",
+      "notes": "Hard-negative/candidate-response auxiliary source only."
+    },
+    "v4_aug1": {
+      "globs": [
+        "outputs/project6_dual_reference_v4/final_v4/**/aug1/**/*manifest*.csv",
+        "outputs/project6_dual_reference_v4/final_v4/**/aug1/**/*manifest*.parquet"
+      ],
+      "formal_step1_allowed": true,
+      "formal_step2_allowed": false,
+      "auxiliary_only": true,
+      "historically_revealed": true,
+      "step2_admission": "none",
+      "notes": "Historical Passive/No-control and Internal semantics are not current four-reference authority; Step1 physics only."
+    },
+    "v4_base_rounds": {
+      "globs": [
+        "outputs/project6_dual_reference_v4/final_v4/**/round[0-5]/**/*manifest*.csv",
+        "outputs/project6_dual_reference_v4/final_v4/**/round[0-5]/**/*manifest*.parquet"
+      ],
+      "formal_step1_allowed": true,
+      "formal_step2_allowed": false,
+      "auxiliary_only": true,
+      "historically_revealed": true,
+      "step2_admission": "none",
+      "notes": "V3/V4 historical hydraulic trajectories; deduplicate physical runs and do not double count Round0-2 versus V4 Base."
+    },
+    "unified_development": {
+      "paths": ["data/v42_final_unified/sample_lineage.parquet"],
+      "formal_step1_allowed": true,
+      "formal_step2_allowed": false,
+      "auxiliary_only": true,
+      "historically_revealed": true,
+      "step2_admission": "none",
+      "notes": "Development lineage for provenance/cross-checking, not formal Step2 admission authority."
+    },
+    "event_inventory": {
+      "paths": [
+        "outputs/project6_dual_reference_v4/final_v4/inventory/event_inventory.csv",
+        "outputs/project6_dual_reference_v4/final_v4/event_inventory.csv"
+      ],
+      "globs": ["outputs/project6_dual_reference_v4/final_v4/**/event_inventory.csv"],
+      "formal_step1_allowed": false,
+      "formal_step2_allowed": false,
+      "auxiliary_only": false,
+      "historically_revealed": false,
+      "step2_admission": "none",
+      "notes": "Rainfall/event authority used to select new untouched F2 evaluation events."
+    },
+    "opportunity_pool": {
+      "paths": [
+        "outputs/project6_dual_reference_v4/final_v4/opportunity_pool.csv",
+        "outputs/project6_dual_reference_v4/final_v4/inventory/opportunity_pool.csv"
+      ],
+      "globs": ["outputs/project6_dual_reference_v4/final_v4/**/opportunity_pool.csv"],
+      "formal_step1_allowed": true,
+      "formal_step2_allowed": false,
+      "auxiliary_only": true,
+      "historically_revealed": true,
+      "step2_admission": "none",
+      "notes": "Checkpoint selection/Step1 auxiliary only; not a KPI label source."
+    }
+  }
+}
