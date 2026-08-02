@@ -57,6 +57,29 @@ def _read_detail(path: Path, required: list[str]) -> pd.DataFrame:
     return frame.loc[:, required]
 
 
+def _resolve_history_detail(
+    *,
+    window_manifest: pd.DataFrame,
+    event_id: str,
+    rainfall_sha: str,
+    checkpoint: float,
+    candidate_path: str,
+) -> Path | None:
+    """Find an existing same-event forcing detail with the earlier causal prefix."""
+    q = window_manifest[window_manifest["event_id"].astype(str).eq(str(event_id))].copy()
+    if "rainfall_sha256" in q.columns and rainfall_sha:
+        q = q[q["rainfall_sha256"].astype(str).eq(str(rainfall_sha))]
+    start = float(checkpoint) - 120.0
+    end = float(checkpoint) - 60.0
+    q["history_start_min"] = pd.to_numeric(q["history_start_min"], errors="coerce")
+    q["history_end_min"] = pd.to_numeric(q["history_end_min"], errors="coerce")
+    q = q[q.history_start_min.le(start) & q.history_end_min.ge(end)]
+    q = q[q.detail_path.astype(str).ne(str(candidate_path))]
+    if q.empty:
+        return None
+    return Path(str(q.sort_values(["history_start_min", "detail_path"]).iloc[0]["detail_path"]))
+
+
 def _reconstruct_state_history(
     *,
     detail: pd.DataFrame,
@@ -118,6 +141,11 @@ def main() -> int:
     ap.add_argument("--heads", type=int, default=4)
     ap.add_argument("--gat-layers", type=int, default=3)
     ap.add_argument("--min-rainfall-groups", type=int, default=MIN_RAINFALL_GROUPS)
+    ap.add_argument(
+        "--step1-window-manifest",
+        type=Path,
+        default=PROJECT_ROOT / "outputs/project6_dual_reference_v4/final_v4/v42_paper/step1_gat/dataset/step1_window_manifest.parquet",
+    )
     args = ap.parse_args()
 
     frame = _read(args.input_manifest)
@@ -134,6 +162,10 @@ def main() -> int:
     missing = required - set(frame.columns)
     if missing:
         raise KeyError(f"fast E2E manifest missing fields: {sorted(missing)}")
+    window_manifest = _read(args.step1_window_manifest)
+    window_required = {"event_id", "detail_path", "history_start_min", "history_end_min"}
+    if not window_required.issubset(window_manifest.columns):
+        raise KeyError(f"Step1 window manifest missing fields: {sorted(window_required - set(window_manifest.columns))}")
 
     graph = load_graph_assets(args.project_root)
     sensor_mask, sensor_indices, sensor_sha = _sensor_layout(
@@ -162,12 +194,22 @@ def main() -> int:
         first = group.iloc[0]
         try:
             checkpoint = float(first["checkpoint_min"])
-            detail_path = str(first["source_detail_path_candidate"])
-            path = Path(detail_path)
-            if detail_path not in detail_cache:
-                detail_cache[detail_path] = _read_detail(path, required_cols)
+            candidate_path = str(first["source_detail_path_candidate"])
+            rainfall_sha = str(first.get("rainfall_sha256", first.get("split_group_key", "")))
+            history_path = _resolve_history_detail(
+                window_manifest=window_manifest,
+                event_id=str(first.get("event_id", "")),
+                rainfall_sha=rainfall_sha,
+                checkpoint=checkpoint,
+                candidate_path=candidate_path,
+            )
+            if history_path is None or not history_path.exists():
+                raise FileNotFoundError("no same-state history detail covers checkpoint-120..checkpoint-60")
+            history_key = str(history_path.resolve())
+            if history_key not in detail_cache:
+                detail_cache[history_key] = _read_detail(history_path, required_cols)
             history, std, observed_rain = _reconstruct_state_history(
-                detail=detail_cache[detail_path],
+                detail=detail_cache[history_key],
                 checkpoint_min=checkpoint,
                 model=model,
                 graph=graph,
@@ -193,9 +235,46 @@ def main() -> int:
                 rec["fast_e2e_contract_id"] = FAST_E2E_CONTRACT_ID
                 output_rows.append(rec)
         except Exception as exc:
-            failures.append({"state_key": str(state_key), "error": f"{type(exc).__name__}: {exc}"})
+            candidate_path = str(first.get("source_detail_path_candidate", ""))
+            elapsed_min_min = None
+            elapsed_min_max = None
+            try:
+                h = pd.read_csv(candidate_path, usecols=["elapsed_min"])
+                elapsed = pd.to_numeric(h["elapsed_min"], errors="coerce").dropna()
+                elapsed_min_min = float(elapsed.min()) if not elapsed.empty else None
+                elapsed_min_max = float(elapsed.max()) if not elapsed.empty else None
+            except Exception:
+                pass
+            failures.append({
+                "state_key": str(state_key),
+                "checkpoint": str(first.get("checkpoint_min", "")),
+                "detail_path": candidate_path,
+                "elapsed_min_min": str(elapsed_min_min),
+                "elapsed_min_max": str(elapsed_min_max),
+                "failed_anchor": str(float(first.get("checkpoint_min", 0.0)) - 60.0),
+                "required_history_start": str(float(first.get("checkpoint_min", 0.0)) - 120.0),
+                "exception": f"{type(exc).__name__}: {exc}",
+            })
 
     out = pd.DataFrame(output_rows)
+    args.audit_output.parent.mkdir(parents=True, exist_ok=True)
+    early_audit = {
+        "contract_id": FAST_E2E_CONTRACT_ID,
+        "stage": "fast_e2e_gat_causal_history",
+        "development_only": True,
+        "input_rows": int(len(frame)),
+        "input_states": int(frame["state_key"].nunique()),
+        "output_rows": int(len(out)),
+        "output_states": int(out["state_key"].nunique()) if not out.empty else 0,
+        "failed_states": int(len(failures)),
+        "failure_examples": failures[:200],
+        "state_source": "gat_sparse_reconstruction",
+        "reconstructed_history_contract": "13_real_step1_calls_at_5min_spacing",
+        "current_frame_repetition_used": False,
+        "authoritative_swmm_history_used_as_online_input": False,
+        "realized_future_rainfall_used_online": False,
+    }
+    args.audit_output.write_text(json.dumps(early_audit, indent=2, allow_nan=False), encoding="utf-8")
     if out.empty:
         raise RuntimeError("no fast E2E state could build a causal GAT history")
     groups = int(out["split_group_key"].astype(str).nunique())
