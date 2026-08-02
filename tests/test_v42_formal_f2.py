@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
+
 import pandas as pd
 
+from scripts.prepare_v42_formal_f2 import _historical_contamination, _reserved
 from sewerrtc.v4.formal_f2 import (
     ACCEPTANCE_GATE_COLUMNS,
     build_event_ledger,
@@ -97,3 +100,63 @@ def test_raw_readmission_keeps_rows_without_stale_state_action_identity() -> Non
     assert len(out) == 1
     assert out.iloc[0].raw_readmission_pending
     assert not out.iloc[0].training_admission_authorized
+
+
+def test_step1_eligibility_alone_does_not_mark_rainfall_historically_consumed() -> None:
+    rows = pd.DataFrame([
+        {
+            "source_id": "opportunity_pool",
+            "rainfall_group_key": "untouched-rain",
+            "historically_revealed": False,
+            "formal_step1_allowed": True,
+            "formal_step2_allowed": False,
+            "step2_accepted_from_manifest": False,
+            "raw_readmission_required": False,
+        },
+        {
+            "source_id": "old_revealed",
+            "rainfall_group_key": "revealed-rain",
+            "historically_revealed": True,
+            "formal_step1_allowed": True,
+            "formal_step2_allowed": False,
+            "step2_accepted_from_manifest": False,
+            "raw_readmission_required": False,
+        },
+    ])
+    out = _historical_contamination(rows)
+    assert set(out.rainfall_group_key.astype(str)) == {"revealed-rain"}
+
+
+def test_step2_training_population_is_contamination_even_if_registry_flag_is_false() -> None:
+    rows = pd.DataFrame([
+        {
+            "source_id": "future_training_source",
+            "rainfall_group_key": "train-rain",
+            "historically_revealed": False,
+            "formal_step1_allowed": False,
+            "formal_step2_allowed": True,
+            "step2_accepted_from_manifest": True,
+            "raw_readmission_required": False,
+        }
+    ])
+    out = _historical_contamination(rows)
+    assert set(out.rainfall_group_key.astype(str)) == {"train-rain"}
+
+
+def test_reserved_event_ids_are_mapped_to_rainfall_groups_via_event_inventory(tmp_path) -> None:
+    root = tmp_path
+    rain_dir = root / "outputs/rainfall_library_v8_storage_variablepump"
+    rain_dir.mkdir(parents=True)
+    (rain_dir / "rainfall_event_table.formal_adapter.json").write_text(
+        json.dumps({"split": "formal_blind_v33", "event_ids": ["blind-1"]}), encoding="utf-8"
+    )
+    # Deliberately omit a rainfall SHA in the legacy table; the regression is
+    # that the event inventory must still recover the reserved rainfall group.
+    pd.DataFrame([{"event_id": "blind-1", "duration_min": 300}]).to_csv(
+        rain_dir / "rainfall_event_table.csv", index=False
+    )
+    inventory = pd.DataFrame([{"event_id": "blind-1", "rainfall_sha256": "reserved-rain-sha"}])
+    events, groups, audit = _reserved(root, pd.DataFrame(), inventory)
+    assert events == {"blind-1"}
+    assert groups == {"reserved-rain-sha"}
+    assert audit["reserved_rainfall_group_count"] == 1
