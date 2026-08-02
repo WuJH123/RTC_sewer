@@ -1,0 +1,55 @@
+name: V4.2 Formal F2 CI
+
+on:
+  pull_request:
+    paths:
+      - 'sewerrtc/v4/formal_f2.py'
+      - 'scripts/*v42_formal*f2.py'
+      - 'scripts/select_v42_fast_gat_compatible_core.py'
+      - 'scripts/run_v42_fast_core_pipeline.py'
+      - 'tests/test_v42_formal_f2.py'
+      - 'tests/test_v42_fast_run_isolation.py'
+      - 'configs/v42_formal_source_registry_f2.yaml'
+      - '.github/workflows/v42-formal-f2-ci.yml'
+  push:
+    branches: [main, 'feat/v42-formal-unified-data-f2-r1']
+    paths:
+      - 'sewerrtc/v4/formal_f2.py'
+      - 'scripts/*v42_formal*f2.py'
+      - 'scripts/select_v42_fast_gat_compatible_core.py'
+      - 'scripts/run_v42_fast_core_pipeline.py'
+      - 'tests/test_v42_formal_f2.py'
+      - 'tests/test_v42_fast_run_isolation.py'
+      - 'configs/v42_formal_source_registry_f2.yaml'
+      - '.github/workflows/v42-formal-f2-ci.yml'
+
+jobs:
+  formal-f2-static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install lightweight contract-test dependencies
+        run: python -m pip install --upgrade pip numpy pandas pyarrow pyyaml pytest
+      - name: Compile Formal F2 entry points
+        run: |
+          python -m py_compile \
+            sewerrtc/v4/formal_f2.py \
+            scripts/prepare_v42_formal_f2.py \
+            scripts/build_v42_formal_step1_pool_f2.py \
+            scripts/materialize_v42_formal_step2_f2.py \
+            scripts/materialize_v42_formal_gat_history_f2.py \
+            scripts/train_v42_step1_formal_f2.py \
+            scripts/train_v42_step2_formal_f2.py \
+            scripts/build_v42_formal_eval_plan_f2.py \
+            scripts/calibrate_v42_formal_step1_f2.py \
+            scripts/calibrate_v42_formal_step2_safety_f2.py \
+            scripts/compile_v42_formal_training_evidence_f2.py \
+            scripts/write_v42_formal_f2_r0_adapter.py \
+            scripts/run_v42_formal_f2.py \
+            scripts/select_v42_fast_gat_compatible_core.py \
+            scripts/run_v42_fast_core_pipeline.py
+      - name: Run lightweight Formal F2 contract tests
+        run: pytest -q tests/test_v42_formal_f2.py tests/test_v42_fast_run_isolation.py
