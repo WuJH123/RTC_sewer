@@ -6,8 +6,15 @@ This is the formal (paper-evidence) line. `fast_e2e_64plus` remains development-
 
 - **Formal Step1 physics:** all current-Wuhan, finite, causal, readback-compatible physical trajectories discovered through the F2 source registry; physical detail SHA dedupe; maximum 4 timeline-spread windows per physical run.
 - **Formal Step2 core:** Train1600 current 14-gate rows + Pilot V3 training-eligible rows + raw re-admitted Peak Boundary + raw re-admitted revealed V4.1 Calibration/Locked. Candidate/NC/Dynamic-Internal/Hold-Previous are mandatory.
-- **Auxiliary only:** V3/V4 Base/Rounds, Aug1, Gate5R/oracle search, Pilot V1/V2 superseded rows, augmented-state/unified/opportunity assets according to `configs/v42_formal_source_registry_f2.yaml`.
+- **Auxiliary only:** V3/V4 Base/Rounds, Aug1, Gate5R/oracle search, Pilot V1/V2 superseded rows, augmented-state/unified assets according to `configs/v42_formal_source_registry_f2.yaml`.
+- **Opportunity pool:** pre-control checkpoint-selection metadata. Merely appearing in this pool does **not** make every rainfall historically consumed. The F2 rainfall ledger is frozen first; only rainfalls assigned `train`/historical `auxiliary` may contribute Step1 training windows. Calibration/Locked/Challenge/Blind and `unused_untouched` rainfalls are excluded from Step1 training.
 - **New F2 evaluation:** new rainfall SHA only: Calibration 12, Locked 16, Challenge 12, Formal Blind >=24 by default. Same rainfall SHA may never cross a role.
+
+### Eligibility is not contamination
+
+`formal_step1_allowed` / `formal_step2_allowed` describe whether a source *can* support a model after the ledger is frozen. `historically_revealed` describes whether the rainfall itself has already been exposed by prior development/evaluation. The two must not be OR-ed together when deciding what remains untouched. Any row already admitted to (or pending raw re-admission for) Formal Step2 training is contamination regardless of the registry flag.
+
+Legacy reserved event IDs (for example the old `formal_blind_v33` adapter) must be mapped back to rainfall SHA using the event inventory before the new F2 ledger is built. `reserved_event_count > 0` together with `reserved_rainfall_group_count == 0` is a Prepare failure, not a valid state.
 
 ## 1. Formal Prepare
 
@@ -16,6 +23,8 @@ Run the VS Code task `RTC: Formal F2 Prepare`.
 Required outputs under `.../v42_paper/formal_f2/`:
 
 - `prepare/FORMAL_F2_EVENT_LEDGER.csv`
+- `prepare/FORMAL_F2_SOURCE_ROWS.parquet`
+- `prepare/FORMAL_F2_CONTAMINATION_ROWS.parquet`
 - `prepare/FORMAL_F2_STEP1_WINDOW_MANIFEST.parquet`
 - `prepare/FORMAL_F2_STEP1_POOL_AUDIT.json`
 - `prepare/FORMAL_F2_STEP2_METADATA_POOL.parquet`
@@ -29,7 +38,10 @@ Do not proceed unless:
 - raw Step2 groups >=69 so the fixed Step2 train/validation/internal-calibration split can retain >=65 train groups;
 - Calibration/Locked/Challenge/Blind group counts meet the frozen plan;
 - every rainfall-group overlap is zero;
+- old reserved event IDs resolve to rainfall groups and remain excluded;
 - raw Step2 admission proves same state, same forcing, frozen physical model, actual readback, H120 and current engineering semantics.
+
+If Prepare reports zero untouched evaluation groups while the event inventory is non-empty, inspect `contamination_audit` and the per-source historical contamination counts before generating new data. Do not infer that every Step1-eligible source was historically consumed.
 
 ## 2. Formal Step1
 
