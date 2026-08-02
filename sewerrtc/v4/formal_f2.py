@@ -166,16 +166,19 @@ def source_acceptance_mask(frame: pd.DataFrame, source_id: str, spec: Mapping[st
     if frame.empty:
         return np.zeros(0, dtype=bool)
     policy = text(spec.get("step2_admission", "none")).casefold()
+    gates_present = set(ACCEPTANCE_GATE_COLUMNS).issubset(frame.columns)
     if policy in {"acceptance_14", "current_14_gate"}:
-        if not set(ACCEPTANCE_GATE_COLUMNS).issubset(frame.columns):
+        if not gates_present:
             return np.zeros(len(frame), dtype=bool)
         mask = np.asarray(compute_acceptance(frame), dtype=bool).copy()
     elif policy == "pilot_v3_training":
         if "eligible_for_training" not in frame.columns:
             return np.zeros(len(frame), dtype=bool)
-        mask = frame["eligible_for_training"].map(yes).to_numpy(dtype=bool, copy=True)
-        if set(ACCEPTANCE_GATE_COLUMNS).issubset(frame.columns):
-            mask = np.logical_and(mask, np.asarray(compute_acceptance(frame), dtype=bool))
+        eligible = frame["eligible_for_training"].map(yes).to_numpy(dtype=bool, copy=True)
+        # Pilot rows never become formally authorized from the historical
+        # eligible flag alone. If current 14-gate columns are absent they are
+        # kept as raw-readmission candidates by manifest_source_rows below.
+        mask = np.logical_and(eligible, np.asarray(compute_acceptance(frame), dtype=bool)) if gates_present else np.zeros(len(frame), dtype=bool)
     elif policy in {"raw_readmission_required", "none", ""}:
         return np.zeros(len(frame), dtype=bool)
     else:
@@ -201,9 +204,18 @@ def manifest_source_rows(project_root: str | Path, registry: Mapping[str, Any]) 
             except Exception as exc:
                 audits.append({"source_id": sid, "path": str(path), "status": f"unreadable:{type(exc).__name__}"})
                 continue
+            policy = text(spec.get("step2_admission", "none")).casefold()
+            gates_present = set(ACCEPTANCE_GATE_COLUMNS).issubset(df.columns)
             mask = source_acceptance_mask(df, str(sid), spec) if spec.get("formal_step2_allowed", False) else np.zeros(len(df), bool)
+            raw_pending_count = 0
             for pos, (_, r) in enumerate(df.iterrows()):
                 d = r.to_dict()
+                pilot_pending = policy == "pilot_v3_training" and yes(d.get("eligible_for_training", False)) and not gates_present
+                raw_pending = policy == "raw_readmission_required" or pilot_pending
+                if raw_pending and not row_is_reserved(d):
+                    raw_pending_count += 1
+                else:
+                    raw_pending = False
                 rows.append({
                     "source_id": str(sid), "source_manifest": str(path), "source_manifest_sha256": fsha,
                     "source_row_number": pos, "event_id": event_id_of(d),
@@ -214,14 +226,14 @@ def manifest_source_rows(project_root: str | Path, registry: Mapping[str, Any]) 
                     "auxiliary_only": bool(spec.get("auxiliary_only", False)),
                     "historically_revealed": bool(spec.get("historically_revealed", True)),
                     "step2_accepted_from_manifest": bool(mask[pos]),
-                    "step2_admission_policy": text(spec.get("step2_admission", "none")),
-                    "raw_readmission_required": text(spec.get("step2_admission", "")).casefold() == "raw_readmission_required",
+                    "step2_admission_policy": policy,
+                    "raw_readmission_required": bool(raw_pending),
                     "source_split": _split_text(d), "case_id": text(d.get("case_id", d.get("candidate_id", ""))),
                     "detail_path": next((text(d.get(c, "")) for c in DETAIL_COLUMNS if text(d.get(c, ""))), ""),
                 })
             audits.append({
                 "source_id": sid, "path": str(path), "status": "read", "rows": len(df),
-                "step2_accepted_rows": int(mask.sum()),
+                "step2_accepted_rows": int(mask.sum()), "raw_readmission_candidate_rows": int(raw_pending_count),
                 "unique_event_ids": int(df["event_id"].astype(str).nunique()) if "event_id" in df else 0,
                 "unique_rainfall_groups": len({g for g in (canonical_rain_group(x) for x in df.to_dict("records")) if g}),
                 "manifest_sha256": fsha,
@@ -324,15 +336,24 @@ def formal_step2_metadata_pool(source_rows: pd.DataFrame, ledger: pd.DataFrame) 
     role = dict(zip(ledger.rainfall_group_key.astype(str), ledger.formal_f2_role.astype(str)))
     f = source_rows.copy()
     f["formal_f2_role"] = f.rainfall_group_key.astype(str).map(role).fillna("excluded")
-    mask = (f.formal_step2_allowed.astype(bool) & f.formal_f2_role.eq("train")
-            & (f.step2_accepted_from_manifest.astype(bool) | f.raw_readmission_required.astype(bool))
-            & f.rainfall_group_key.astype(str).ne("") & f.state_key.astype(str).ne("") & f.action_key.astype(str).ne(""))
-    out = f.loc[mask].copy()
+    admitted = f.step2_accepted_from_manifest.astype(bool)
+    pending = f.raw_readmission_required.astype(bool)
+    base = f.formal_step2_allowed.astype(bool) & f.formal_f2_role.eq("train") & (admitted | pending) & f.rainfall_group_key.astype(str).ne("")
+    # Already-authorized historical rows must carry stable state/action identity.
+    # Raw-readmission rows are intentionally allowed to lack those stale keys:
+    # current state/action hashes are recomputed from authoritative detail files.
+    identified_authorized = admitted & f.state_key.astype(str).ne("") & f.action_key.astype(str).ne("")
+    identifiable_pending = pending & f.case_id.astype(str).ne("")
+    out = f.loc[base & (identified_authorized | identifiable_pending)].copy()
     out["formal_generation_id"] = FORMAL_GENERATION_ID
     out["training_admission_authorized"] = out.step2_accepted_from_manifest.astype(bool)
     out["raw_readmission_pending"] = out.raw_readmission_required.astype(bool)
-    return out.sort_values(["rainfall_group_key", "state_key", "action_key", "source_id", "source_manifest"], kind="mergesort").drop_duplicates(
-        ["rainfall_group_key", "state_key", "action_key"], keep="first").reset_index(drop=True)
+    out["_dedup_key"] = np.where(
+        out.raw_readmission_pending.astype(bool),
+        "raw|" + out.source_manifest.astype(str) + "|" + out.source_row_number.astype(str),
+        "accepted|" + out.rainfall_group_key.astype(str) + "|" + out.state_key.astype(str) + "|" + out.action_key.astype(str),
+    )
+    return out.sort_values(["rainfall_group_key", "source_id", "source_manifest", "source_row_number"], kind="mergesort").drop_duplicates("_dedup_key", keep="first").drop(columns=["_dedup_key"]).reset_index(drop=True)
 
 
 def pool_summary(step1: pd.DataFrame, step2: pd.DataFrame, ledger: pd.DataFrame) -> dict[str, Any]:
