@@ -50,6 +50,16 @@ def test_status_accepts_step2_report_without_legacy_status_field(tmp_path: Path)
     assert runner._pass_model_report(report, "qualification_step2_single_seed") is True
 
 
+def test_step1_qualification_report_is_explicitly_provisional() -> None:
+    report = step1_runner._qualification_metadata({"status": "pass"})
+    assert report["process_status"] == "pass"
+    assert report["scientific_performance_status"] == "provisional"
+    assert report["formal_evidence_eligible"] is False
+    assert report["uncertainty_interface_operational"] is True
+    assert report["uncertainty_formally_calibrated"] is False
+    assert report["ood_formally_calibrated"] is False
+
+
 def test_candidate_selection_uses_distinct_actual_h3_schedules() -> None:
     frame = pd.DataFrame(
         {

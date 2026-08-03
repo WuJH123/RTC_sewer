@@ -32,6 +32,16 @@ def _cuda_total_memory_bytes() -> int | None:
     return None
 
 
+def _qualification_metadata(report: dict) -> dict:
+    report["process_status"] = "pass"
+    report["scientific_performance_status"] = "provisional"
+    report["formal_evidence_eligible"] = False
+    report["uncertainty_interface_operational"] = True
+    report["uncertainty_formally_calibrated"] = False
+    report["ood_formally_calibrated"] = False
+    return report
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--project-root", type=Path, default=PROJECT_ROOT)
@@ -102,6 +112,7 @@ def main() -> int:
     report["effective_batch_size"] = int(effective_batch_size)
     report["cuda_total_memory_bytes"] = cuda_memory
     report["mixed_precision_amp"] = bool(cuda_memory is not None)
+    report = _qualification_metadata(report)
     report["qualification_note"] = (
         "One-epoch qualification model used only to exercise downstream interfaces. "
         "It cannot substitute for Formal production training."
