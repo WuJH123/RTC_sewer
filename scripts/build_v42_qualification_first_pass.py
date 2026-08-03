@@ -59,6 +59,20 @@ def _rank(values: list[str], seed: int, salt: str) -> list[str]:
     )
 
 
+def _rank_preferred_groups(
+    values: list[str],
+    *,
+    preferred: set[str],
+    seed: int,
+    salt: str,
+) -> list[str]:
+    preferred = {str(value) for value in preferred}
+    values = {str(value) for value in values}
+    return _rank(sorted(values & preferred), seed, salt) + _rank(
+        sorted(values - preferred), seed, salt
+    )
+
+
 def _spread(frame: pd.DataFrame, limit: int, *, order_columns: list[str]) -> pd.DataFrame:
     if len(frame) <= limit:
         return frame.copy()
@@ -200,6 +214,27 @@ def main() -> int:
     if missing:
         raise KeyError(f"Formal Step1 manifest missing required columns: {missing}")
 
+    raw_required = {"split_group_key", "state_key", "event_id", "checkpoint_min"}
+    missing = sorted(raw_required - set(raw.columns))
+    if missing:
+        raise KeyError(f"Formal Raw Step2 manifest missing required columns: {missing}")
+    failed_gates = [column for column in RAW_REQUIRED_GATES if not _bool_all(raw, column)]
+    if failed_gates:
+        raise RuntimeError(f"Formal Raw Step2 input is not fully admitted: {failed_gates}")
+
+    candidates_per_state = int(selection["step2_candidates_per_state"])
+    eligible_groups: dict[str, pd.DataFrame] = {}
+    min_checkpoint_min = float(selection.get("step2_min_checkpoint_min", 120.0))
+    for group_key, group in raw.groupby("split_group_key", sort=True):
+        chosen = _choose_step2_state(
+            group,
+            candidates_per_state,
+            seed,
+            min_checkpoint_min=min_checkpoint_min,
+        )
+        if chosen is not None:
+            eligible_groups[str(group_key)] = chosen
+
     target_train = step1[
         step1["step1_domain_role"].astype(str).eq("target_formal")
         & step1["formal_split"].astype(str).eq("train")
@@ -212,8 +247,19 @@ def main() -> int:
 
     train_group_count = int(selection["step1_train_rainfall_groups"])
     validation_group_count = int(selection["step1_validation_rainfall_groups"])
-    train_groups = _rank(target_train["split_group_key"].astype(str).unique().tolist(), seed, "step1-train")[:train_group_count]
-    validation_groups = _rank(target_validation["split_group_key"].astype(str).unique().tolist(), seed, "step1-validation")[:validation_group_count]
+    eligible_group_keys = set(eligible_groups)
+    train_groups = _rank_preferred_groups(
+        target_train["split_group_key"].astype(str).unique().tolist(),
+        preferred=eligible_group_keys,
+        seed=seed,
+        salt="step1-train",
+    )[:train_group_count]
+    validation_groups = _rank_preferred_groups(
+        target_validation["split_group_key"].astype(str).unique().tolist(),
+        preferred=eligible_group_keys,
+        seed=seed,
+        salt="step1-validation",
+    )[:validation_group_count]
     if len(train_groups) < train_group_count:
         raise RuntimeError(f"qualification Step1 has only {len(train_groups)} train groups; required {train_group_count}")
     if len(validation_groups) < validation_group_count:
@@ -235,27 +281,6 @@ def main() -> int:
     selected_step1["qualification_contract_id"] = QUALIFICATION_CONTRACT
     selected_step1_path = out / "QUALIFICATION_STEP1_WINDOW_MANIFEST.parquet"
     selected_step1.to_parquet(selected_step1_path, index=False)
-
-    raw_required = {"split_group_key", "state_key", "event_id", "checkpoint_min"}
-    missing = sorted(raw_required - set(raw.columns))
-    if missing:
-        raise KeyError(f"Formal Raw Step2 manifest missing required columns: {missing}")
-    failed_gates = [column for column in RAW_REQUIRED_GATES if not _bool_all(raw, column)]
-    if failed_gates:
-        raise RuntimeError(f"Formal Raw Step2 input is not fully admitted: {failed_gates}")
-
-    candidates_per_state = int(selection["step2_candidates_per_state"])
-    eligible_groups: dict[str, pd.DataFrame] = {}
-    min_checkpoint_min = float(selection.get("step2_min_checkpoint_min", 120.0))
-    for group_key, group in raw.groupby("split_group_key", sort=True):
-        chosen = _choose_step2_state(
-            group,
-            candidates_per_state,
-            seed,
-            min_checkpoint_min=min_checkpoint_min,
-        )
-        if chosen is not None:
-            eligible_groups[str(group_key)] = chosen
 
     required_step2_groups = int(selection["step2_rainfall_groups"])
     ranked_groups = _rank(list(eligible_groups), seed, "step2-qualification")

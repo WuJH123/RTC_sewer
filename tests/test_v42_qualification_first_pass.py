@@ -90,6 +90,16 @@ def test_step2_groups_are_limited_to_step1_history_groups() -> None:
     assert selected == ["g1", "g3"]
 
 
+def test_step1_selection_prefers_step2_eligible_groups() -> None:
+    ranked = builder._rank_preferred_groups(
+        ["g1", "g2", "g3", "g4"],
+        preferred={"g3", "g4"},
+        seed=42,
+        salt="step1-train",
+    )
+    assert set(ranked[:2]) == {"g3", "g4"}
+
+
 def test_prepare_reuse_requires_matching_config_hash(tmp_path: Path) -> None:
     config = tmp_path / "config.json"
     config.write_text('{"step2_min_checkpoint_min": 120}', encoding="utf-8")
