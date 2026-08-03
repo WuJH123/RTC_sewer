@@ -146,6 +146,38 @@ def _event_count(payload: Mapping[str, Any]) -> int:
         return 0
 
 
+def _legacy_reason_aliases(
+    *,
+    stage_prefix: str,
+    payload: Mapping[str, Any],
+    policy_locked: bool,
+) -> list[str]:
+    """Emit old reason names for legacy correctness fixtures only.
+
+    Production evidence is evaluated with current-generation holdout semantics.
+    These aliases are diagnostics so older callers/tests get a recognizable
+    reason instead of interpreting a renamed failure as a relaxed gate.
+    """
+    reasons: list[str] = []
+    if not policy_locked:
+        aliases = {
+            "challenge": "challenge_before_policy_lock",
+            "locked": "locked_validation_before_policy_lock",
+            "formal_test": "formal_blind_before_policy_lock",
+        }
+        if stage_prefix in aliases:
+            reasons.append(aliases[stage_prefix])
+    if payload.get("new_rainfall_sha_only") is False:
+        aliases = {
+            "challenge": "challenge_rainfall_not_new",
+            "locked": "locked_validation_rainfall_not_new",
+            "formal_test": "formal_blind_rainfall_not_new",
+        }
+        if stage_prefix in aliases:
+            reasons.append(aliases[stage_prefix])
+    return reasons
+
+
 def _holdout_evidence_reasons(
     payload: Mapping[str, Any],
     *,
@@ -162,8 +194,16 @@ def _holdout_evidence_reasons(
         "policy_locked_before_evaluation",
         payload.get("policy_locked_before_reveal"),
     )
-    if lock_flag is not True:
+    policy_locked = lock_flag is True
+    if not policy_locked:
         reasons.append(f"{stage_prefix}_evaluated_before_policy_lock")
+    reasons.extend(
+        _legacy_reason_aliases(
+            stage_prefix=stage_prefix,
+            payload=payload,
+            policy_locked=policy_locked,
+        )
+    )
     if payload.get("current_generation_holdout_only") is not True:
         reasons.append(f"{stage_prefix}_not_current_generation_holdout")
     if payload.get(
