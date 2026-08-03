@@ -24,6 +24,7 @@ from sewerrtc.v4.paper_workflow_v42 import (
     CONTRACT_ID,
     MODEL_LINE,
     PAPER_STAGE_ORDER,
+    REQUIRED_FORMAL_BLIND_STRATEGIES,
     audit_paper_workflow,
     write_stage_evidence,
 )
@@ -304,6 +305,21 @@ def _stage_payload(stage: str) -> dict:
             gat_model_sha256="g",
             fallback_contract_sha256="f",
         )
+    elif stage == "locked_validation":
+        base.update(
+            event_count=16,
+            policy_locked_before_reveal=True,
+            new_rainfall_sha_only=True,
+            post_reveal_exclusion_used=False,
+            used_for_retraining=False,
+            rainfall_sha256s=[f"locked-{i}" for i in range(16)],
+            revealed_rainfall_sha256s=["train-a", "train-b", "challenge-rain"],
+            revealed_rainfall_overlap_count=0,
+            policy_sha256="p",
+            model_sha256="m",
+            gat_model_sha256="g",
+            fallback_contract_sha256="f",
+        )
     elif stage == "formal_blind":
         base.update(
             event_count=24,
@@ -312,12 +328,14 @@ def _stage_payload(stage: str) -> dict:
             post_reveal_exclusion_used=False,
             used_for_retraining=False,
             rainfall_sha256s=[f"rain-{i}" for i in range(24)],
-            revealed_rainfall_sha256s=["train-a", "train-b", "challenge-rain"],
+            revealed_rainfall_sha256s=["train-a", "train-b", "challenge-rain", "locked-0"],
             revealed_rainfall_overlap_count=0,
             policy_sha256="p",
             model_sha256="m",
             gat_model_sha256="g",
             fallback_contract_sha256="f",
+            strategy_authority={name: "authoritative_swmm" for name in REQUIRED_FORMAL_BLIND_STRATEGIES},
+            strategy_event_counts={name: 24 for name in REQUIRED_FORMAL_BLIND_STRATEGIES},
         )
     return base
 
