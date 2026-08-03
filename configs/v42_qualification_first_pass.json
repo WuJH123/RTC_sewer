@@ -1,0 +1,62 @@
+{
+  "contract_id": "PROJECT6_V42_QUALIFICATION_FIRST_PASS_V1",
+  "qualification_only": true,
+  "development_only": true,
+  "formal_mainline_authorized": false,
+  "purpose": "Exercise the complete V4.2 execution chain quickly on isolated development evidence before the expensive Formal production run.",
+  "formal_outputs_must_not_be_overwritten": true,
+  "output_relative_root": "outputs/project6_dual_reference_v4/final_v4/v42_paper/qualification_first_pass",
+  "selection": {
+    "seed": 42,
+    "step1_train_rainfall_groups": 69,
+    "step1_validation_rainfall_groups": 8,
+    "step1_windows_per_group": 64,
+    "step1_windows_per_physical_run": 2,
+    "step2_rainfall_groups": 69,
+    "step2_states_per_rainfall": 1,
+    "step2_candidates_per_state": 3,
+    "qualification_calibration_groups": 2,
+    "qualification_challenge_groups": 2,
+    "qualification_locked_groups": 2,
+    "qualification_blind_groups": 4
+  },
+  "training": {
+    "seeds": [17, 42, 73],
+    "primary_step1_seed": 42,
+    "split_seed": 42,
+    "sensor_layout_seed": 42,
+    "step1_epochs": 1,
+    "step1_aux_epochs": 0,
+    "step1_batch_size": 128,
+    "step2_epochs": 1,
+    "step2_batch_size": 8,
+    "patience": 1
+  },
+  "step2_qualification_targets": {
+    "required": [
+      "node_depth",
+      "node_flooding_rate",
+      "storage_volume",
+      "managed_facility_flow"
+    ],
+    "deferred_for_formal_promotion": [
+      "outfall_flow"
+    ],
+    "note": "The qualification pass may exercise the pipeline without outfall supervision, but its models/evidence are never Formal-authoritative. Formal production remains fail-closed on full hydraulic targets."
+  },
+  "closed_loop_qualification": {
+    "strategies": [
+      "Proposed",
+      "EFD",
+      "Auto-RBC",
+      "All-close",
+      "No-control",
+      "Internal",
+      "Hold"
+    ],
+    "authoritative_swmm_required": true,
+    "maximum_parallel_swmm": 16,
+    "qualification_events_are_revealed_development_only": true,
+    "formal_untouched_events_must_not_be_consumed": true
+  }
+}
