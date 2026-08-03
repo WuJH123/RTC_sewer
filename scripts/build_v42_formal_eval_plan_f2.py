@@ -24,6 +24,14 @@ if str(PROJECT_ROOT) not in sys.path:
 from sewerrtc.v4.formal_f2 import FORMAL_GENERATION_ID, canonical_rain_group, read_table, text
 
 
+def _finite_or_none(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if np.isfinite(number) else None
+
+
 def _first_column(frame: pd.DataFrame, names: tuple[str, ...]) -> str | None:
     lookup = {str(c).casefold(): str(c) for c in frame.columns}
     for name in names:
@@ -188,7 +196,7 @@ def main() -> int:
                     "rainfall_sha256": rain,
                     "event_id": event,
                     "rainfall_family": text(item.get("rainfall_family", "")),
-                    "duration_min": item.get("duration_min", np.nan),
+                    "duration_min": _finite_or_none(item.get("duration_min")),
                     "checkpoints": checkpoints,
                     "policy_locked_before_reveal_required": role in {"challenge", "formal_blind"},
                     "candidate_training_allowed": role == "calibration",

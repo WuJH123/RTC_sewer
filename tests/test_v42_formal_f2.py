@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from scripts.materialize_v42_formal_step2_f2 import _engineering, _physical, _resolve, _same_state, _state_sha
+from scripts.build_v42_formal_eval_plan_f2 import _finite_or_none
 from scripts.prepare_v42_formal_f2 import _historical_contamination, _reserved
 from sewerrtc.v4.formal_f2 import (
     ACCEPTANCE_GATE_COLUMNS,
@@ -42,6 +43,11 @@ def test_formal_f2_group_splits_are_rainfall_isolated() -> None:
     assert all(v == 0 for v in split_overlap_matrix(ledger).values())
     assert (ledger.formal_f2_role == "train").sum() == 70
     assert (ledger.formal_f2_role == "formal_blind").sum() == 24
+
+
+def test_evaluation_plan_normalizes_nonfinite_duration_for_strict_json() -> None:
+    assert _finite_or_none(120) == 120.0
+    assert _finite_or_none(np.nan) is None
 
 
 def test_explicit_step1_roles_do_not_depend_on_domain_id() -> None:
