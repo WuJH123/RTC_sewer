@@ -1,9 +1,18 @@
-"""Compile formal Step1/Step2 evidence only after real F2 calibration passes.
+"""Compile Formal Step1/Step2 evidence after current-generation calibration.
 
-This script is intentionally unable to turn development artifacts into paper
-evidence. It requires three-seed formal training, new-rainfall calibration,
-causal GAT history, raw four-reference admission, full formal hydraulic target
-supervision and zero rainfall overlap.
+Formal Step2 can now be authorised under one of two explicit target contracts:
+
+CONTROL_CORE
+    Requires real SWMM supervision for node depth, node flooding, storage volume
+    and managed-facility flow. Explicit outfall discharge is optional and must
+    not be claimed when absent.
+
+FULL_HYDRAULIC
+    Requires CONTROL_CORE plus explicit outfall-flow supervision.
+
+Both contracts require three model seeds, causal GAT history, raw four-reference
+admission, current-generation Calibration, and zero rainfall-group overlap
+between model development and held-out evaluation roles.
 """
 from __future__ import annotations
 
@@ -19,13 +28,6 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from sewerrtc.v4.formal_f2 import FORMAL_GENERATION_ID, read_table, sha256_file
 from sewerrtc.v4.paper_workflow_v42 import CONTRACT_ID
-
-
-FULL_STEP2_SUPERVISION_FLAGS = (
-    "storage_supervised",
-    "facility_flow_supervised",
-    "outfall_supervised",
-)
 
 
 def _json(path: Path) -> dict:
@@ -49,18 +51,30 @@ def _assert_same_split(reports: list[dict], keys: tuple[str, ...]) -> None:
             raise RuntimeError(f"formal model seeds do not share frozen {key}")
 
 
-def _assert_full_step2_target_supervision(reports: list[dict]) -> None:
+def _assert_step2_target_contract(reports: list[dict]) -> str:
+    contracts = {str(r.get("step2_target_contract", "")) for r in reports}
+    if len(contracts) != 1 or "" in contracts:
+        raise RuntimeError(f"Formal Step2 seeds have inconsistent target contracts: {contracts}")
+    contract = next(iter(contracts))
+    if contract not in {"CONTROL_CORE", "FULL_HYDRAULIC"}:
+        raise RuntimeError(f"unsupported Formal Step2 target contract: {contract}")
     missing: dict[str, list[int]] = {}
-    for flag in FULL_STEP2_SUPERVISION_FLAGS:
+    for flag in ("storage_supervised", "facility_flow_supervised"):
         bad = [int(r.get("seed", -1)) for r in reports if r.get(flag) is not True]
         if bad:
             missing[flag] = bad
+    if contract == "FULL_HYDRAULIC":
+        bad = [int(r.get("seed", -1)) for r in reports if r.get("outfall_supervised") is not True]
+        if bad:
+            missing["outfall_supervised"] = bad
     if missing:
         raise RuntimeError(
-            "Formal Step2 cannot authorize paper evidence without full hydraulic "
-            f"target supervision: {missing}. Missing targets must not be zero-filled; "
-            "materialize authoritative storage/facility/outfall targets first."
+            f"Formal Step2 target supervision incomplete for {contract}: {missing}. "
+            "Missing targets must not be zero-filled."
         )
+    if any(r.get("no_control_all_open_verified") is not True for r in reports):
+        raise RuntimeError("Formal Step2 has not verified all-open No-control semantics")
+    return contract
 
 
 def main() -> int:
@@ -69,61 +83,141 @@ def main() -> int:
     ap.add_argument(
         "--formal-root",
         type=Path,
-        default=PROJECT_ROOT / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2",
+        default=PROJECT_ROOT
+        / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2",
     )
     ap.add_argument(
         "--paper-root",
         type=Path,
-        default=PROJECT_ROOT / "outputs/project6_dual_reference_v4/final_v4/v42_paper",
+        default=PROJECT_ROOT
+        / "outputs/project6_dual_reference_v4/final_v4/v42_paper",
     )
     ap.add_argument("--seeds", type=int, nargs="+", default=[17, 42, 73])
     ap.add_argument("--primary-seed", type=int, default=42)
     args = ap.parse_args()
 
-    step1_reports = [_json(args.formal_root / "step1" / f"seed_{seed}" / "formal_step1_report.json") for seed in args.seeds]
-    step2_reports = [_json(args.formal_root / "step2" / "models" / f"seed_{seed}" / "formal_step2_report.json") for seed in args.seeds]
-    step1_cal = _json(args.formal_root / "calibration" / "STEP1_UNCERTAINTY_OOD_CALIBRATION.json")
-    step2_cal = _json(args.formal_root / "calibration" / "STEP2_SAFETY_CALIBRATION.json")
-    raw_audit = _json(args.formal_root / "step2" / "FORMAL_F2_STEP2_RAW_ADMISSION_AUDIT.json")
-    gat_audit = _json(args.formal_root / "step2" / "FORMAL_F2_STEP2_GAT_HISTORY_AUDIT.json")
-    gat_manifest = args.formal_root / "step2" / "FORMAL_F2_STEP2_GAT_MANIFEST.parquet"
-    ledger = read_table(args.formal_root / "prepare" / "FORMAL_F2_EVENT_LEDGER.csv")
+    step1_reports = [
+        _json(args.formal_root / "step1" / f"seed_{seed}" / "formal_step1_report.json")
+        for seed in args.seeds
+    ]
+    step2_reports = [
+        _json(
+            args.formal_root
+            / "step2"
+            / "models"
+            / f"seed_{seed}"
+            / "formal_step2_report.json"
+        )
+        for seed in args.seeds
+    ]
+    step1_cal = _json(
+        args.formal_root / "calibration" / "STEP1_UNCERTAINTY_OOD_CALIBRATION.json"
+    )
+    step2_cal = _json(
+        args.formal_root / "calibration" / "STEP2_SAFETY_CALIBRATION.json"
+    )
+    raw_audit = _json(
+        args.formal_root / "step2" / "FORMAL_F2_STEP2_RAW_ADMISSION_AUDIT.json"
+    )
+    gat_audit = _json(
+        args.formal_root / "step2" / "FORMAL_F2_STEP2_GAT_HISTORY_AUDIT.json"
+    )
+    gat_manifest = (
+        args.formal_root / "step2" / "FORMAL_F2_STEP2_GAT_MANIFEST.parquet"
+    )
+    ledger = read_table(
+        args.formal_root / "prepare" / "FORMAL_F2_EVENT_LEDGER.csv"
+    )
 
     if any(r.get("status") != "pass" for r in step1_reports + step2_reports):
         raise RuntimeError("one or more Formal F2 model seed reports are not pass")
-    _assert_full_step2_target_supervision(step2_reports)
-    if step1_cal.get("status") != "pass" or step1_cal.get("uncertainty_calibrated") is not True or step1_cal.get("ood_calibrated") is not True:
-        raise RuntimeError("Formal F2 Step1 uncertainty/OOD calibration has not passed on new calibration rainfalls")
+    target_contract = _assert_step2_target_contract(step2_reports)
+    if (
+        step1_cal.get("status") != "pass"
+        or step1_cal.get("uncertainty_calibrated") is not True
+        or step1_cal.get("ood_calibrated") is not True
+    ):
+        raise RuntimeError(
+            "Formal F2 Step1 uncertainty/OOD calibration has not passed on current Calibration holdout"
+        )
     if step2_cal.get("status") != "pass" or step2_cal.get("safety_calibrated") is not True:
-        raise RuntimeError("Formal F2 Step2 safety calibration has not passed on new calibration rainfalls")
+        raise RuntimeError(
+            "Formal F2 Step2 PFV/depth safety calibration has not passed on current Calibration holdout"
+        )
+    if str(step2_cal.get("step2_target_contract", "")) != target_contract:
+        raise RuntimeError("Step2 safety calibration target contract differs from trained models")
     if raw_audit.get("status") != "pass" or raw_audit.get("raw_independent_oracle_all_pass") is not True:
         raise RuntimeError("Formal F2 raw Step2 admission has not passed")
-    if gat_audit.get("status") != "pass" or gat_audit.get("current_frame_repetition_used") is not False or gat_audit.get("authoritative_swmm_history_used_as_online_input") is not False or gat_audit.get("realized_future_rainfall_used_online") is not False:
+    if (
+        gat_audit.get("status") != "pass"
+        or gat_audit.get("current_frame_repetition_used") is not False
+        or gat_audit.get("authoritative_swmm_history_used_as_online_input") is not False
+        or gat_audit.get("realized_future_rainfall_used_online") is not False
+    ):
         raise RuntimeError("Formal F2 causal GAT-history audit has not passed")
-    _assert_same_split(step1_reports, ("train_rainfall_groups", "validation_rainfall_groups", "model_calibration_rainfall_groups"))
-    _assert_same_split(step2_reports, ("train_rainfall_groups", "validation_rainfall_groups", "calibration_rainfall_groups"))
+
+    _assert_same_split(
+        step1_reports,
+        (
+            "train_rainfall_groups",
+            "validation_rainfall_groups",
+            "model_calibration_rainfall_groups",
+        ),
+    )
+    _assert_same_split(
+        step2_reports,
+        (
+            "train_rainfall_groups",
+            "validation_rainfall_groups",
+            "calibration_rainfall_groups",
+        ),
+    )
     if min(int(r.get("train_rainfall_group_count", 0)) for r in step1_reports) < 65:
         raise RuntimeError("Formal Step1 train rainfall diversity below 65")
     if min(int(r.get("train_rainfall_group_count", 0)) for r in step2_reports) < 65:
         raise RuntimeError("Formal Step2 train rainfall diversity below 65")
 
-    eval_roles = {role: set(ledger.loc[ledger.formal_f2_role.astype(str).eq(role), "rainfall_group_key"].astype(str)) for role in ("calibration", "locked_validation", "challenge", "formal_blind")}
-    train1 = set(map(str, step1_reports[0]["train_rainfall_groups"])) | set(map(str, step1_reports[0]["validation_rainfall_groups"])) | set(map(str, step1_reports[0]["model_calibration_rainfall_groups"]))
-    train2 = set(map(str, step2_reports[0]["train_rainfall_groups"])) | set(map(str, step2_reports[0]["validation_rainfall_groups"])) | set(map(str, step2_reports[0]["calibration_rainfall_groups"]))
+    eval_roles = {
+        role: set(
+            ledger.loc[
+                ledger.formal_f2_role.astype(str).eq(role), "rainfall_group_key"
+            ].astype(str)
+        )
+        for role in ("calibration", "locked_validation", "challenge", "formal_blind")
+    }
+    train1 = (
+        set(map(str, step1_reports[0]["train_rainfall_groups"]))
+        | set(map(str, step1_reports[0]["validation_rainfall_groups"]))
+        | set(map(str, step1_reports[0]["model_calibration_rainfall_groups"]))
+    )
+    train2 = (
+        set(map(str, step2_reports[0]["train_rainfall_groups"]))
+        | set(map(str, step2_reports[0]["validation_rainfall_groups"]))
+        | set(map(str, step2_reports[0]["calibration_rainfall_groups"]))
+    )
+    development_groups = train1 | train2
     for role, groups in eval_roles.items():
-        if role != "calibration" and (groups & (train1 | train2)):
-            raise RuntimeError(f"Formal F2 {role} rainfall overlaps model development groups")
-    new_cal_groups = set(map(str, step1_cal.get("calibration_rainfall_groups", []))) | set(map(str, step2_cal.get("calibration_rainfall_groups", [])))
-    if not new_cal_groups.issubset(eval_roles["calibration"]):
-        raise RuntimeError("calibration reports are not tied to F2 Calibration ledger")
+        if groups & development_groups:
+            raise RuntimeError(
+                f"Formal F2 current holdout {role} overlaps model development groups"
+            )
+    current_cal_groups = set(map(str, step1_cal.get("calibration_rainfall_groups", []))) | set(
+        map(str, step2_cal.get("calibration_rainfall_groups", []))
+    )
+    if not current_cal_groups.issubset(eval_roles["calibration"]):
+        raise RuntimeError("calibration reports are not tied to current F2 Calibration ledger")
 
-    primary_idx = args.seeds.index(args.primary_seed) if args.primary_seed in args.seeds else None
+    primary_idx = (
+        args.seeds.index(args.primary_seed) if args.primary_seed in args.seeds else None
+    )
     if primary_idx is None:
         raise ValueError("primary seed must be among --seeds")
     step1_primary = step1_reports[primary_idx]
     step2_primary = step2_reports[primary_idx]
     ensemble_gat_hash = _combined_model_hash(step1_reports, "gat_model_sha256")
-    ensemble_surrogate_hash = _combined_model_hash(step2_reports, "surrogate_model_sha256")
+    ensemble_surrogate_hash = _combined_model_hash(
+        step2_reports, "surrogate_model_sha256"
+    )
     sample_lineage_sha = sha256_file(gat_manifest)
 
     step1_evidence = {
@@ -134,7 +228,7 @@ def main() -> int:
         "formal_generation_id": FORMAL_GENERATION_ID,
         "formal_reconstructor": "TemporalSparseGATReconstructorV42",
         "reconstructor_contract": "formal_temporal_v42",
-        "new_formal_training": True,
+        "current_generation_training": True,
         "rainfall_group_isolated_split": True,
         "action_authority": "actual_readback_setting",
         "uncertainty_calibrated": True,
@@ -146,10 +240,13 @@ def main() -> int:
         "model_seeds": args.seeds,
         "train_rainfall_group_count": int(step1_primary["train_rainfall_group_count"]),
         "validation_rainfall_group_count": int(step1_primary["validation_rainfall_group_count"]),
-        "calibration_evidence_sha256": sha256_file(args.formal_root / "calibration" / "STEP1_UNCERTAINTY_OOD_CALIBRATION.json"),
+        "calibration_evidence_sha256": sha256_file(
+            args.formal_root / "calibration" / "STEP1_UNCERTAINTY_OOD_CALIBRATION.json"
+        ),
         "uncertainty_scale_95": step1_cal.get("uncertainty_scale_95"),
         "ood_limit_99": step1_cal.get("ood_limit_99"),
     }
+    full_hydraulic = target_contract == "FULL_HYDRAULIC"
     step2_evidence = {
         "contract_id": CONTRACT_ID,
         "stage": "step2_hydraulic_surrogate",
@@ -165,10 +262,14 @@ def main() -> int:
         "history_input_contract": "gat_compatible_causal_state",
         "rainfall_group_isolated_split": True,
         "formal_target_domain_only": True,
-        "formal_target_coverage_complete": True,
+        "step2_target_contract": target_contract,
+        "control_core_target_coverage_complete": True,
+        "full_hydraulic_target_coverage_complete": full_hydraulic,
         "storage_supervised": True,
         "facility_flow_supervised": True,
-        "outfall_supervised": True,
+        "outfall_supervised": full_hydraulic,
+        "outfall_claim_authorized": full_hydraulic,
+        "no_control_all_open_verified": True,
         "sample_lineage_sha256": sample_lineage_sha,
         "surrogate_model_sha256": str(step2_primary["surrogate_model_sha256"]),
         "surrogate_ensemble_sha256": ensemble_surrogate_hash,
@@ -176,22 +277,35 @@ def main() -> int:
         "model_seeds": args.seeds,
         "train_rainfall_group_count": int(step2_primary["train_rainfall_group_count"]),
         "safety_calibrated": True,
-        "safety_calibration_sha256": sha256_file(args.formal_root / "calibration" / "STEP2_SAFETY_CALIBRATION.json"),
+        "safety_calibration_sha256": sha256_file(
+            args.formal_root / "calibration" / "STEP2_SAFETY_CALIBRATION.json"
+        ),
         "confidence_z": step2_cal.get("confidence_z"),
         "pfv_false_safe_rate_calibration": step2_cal.get("pfv_false_safe_rate"),
-        "peak_false_safe_rate_calibration": step2_cal.get("peak_false_safe_rate"),
+        "priority_depth_false_safe_rate_calibration": step2_cal.get(
+            "priority_depth_false_safe_rate"
+        ),
         "joint_false_safe_rate_calibration": step2_cal.get("joint_false_safe_rate"),
+        "peak_is_hard_safety_constraint": False,
+        "peak_delta_ensemble_mae_m3s": step2_cal.get("peak_delta_ensemble_mae_m3s"),
         "uncertainty_limit": step2_cal.get("uncertainty_limit_99"),
     }
+
     step1_path = args.paper_root / "step1_gat" / "evidence.json"
     step2_path = args.paper_root / "step2_surrogate" / "evidence.json"
     step1_path.parent.mkdir(parents=True, exist_ok=True)
     step2_path.parent.mkdir(parents=True, exist_ok=True)
-    step1_path.write_text(json.dumps(step1_evidence, indent=2, allow_nan=False), encoding="utf-8")
-    step2_path.write_text(json.dumps(step2_evidence, indent=2, allow_nan=False), encoding="utf-8")
+    step1_path.write_text(
+        json.dumps(step1_evidence, indent=2, allow_nan=False), encoding="utf-8"
+    )
+    step2_path.write_text(
+        json.dumps(step2_evidence, indent=2, allow_nan=False), encoding="utf-8"
+    )
     result = {
         "formal_generation_id": FORMAL_GENERATION_ID,
         "status": "pass",
+        "split_policy": "current_generation_rainfall_group_holdout",
+        "step2_target_contract": target_contract,
         "step1_evidence": str(step1_path),
         "step2_evidence": str(step2_path),
         "primary_gat_model_sha256": step1_evidence["gat_model_sha256"],
