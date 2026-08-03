@@ -55,7 +55,6 @@ def _load_opportunity(root: Path) -> tuple[pd.DataFrame, str]:
     for path in candidates:
         if path.exists():
             return pd.read_csv(path, low_memory=False), str(path)
-    # Structured metadata only; this is intentionally not a raw trajectory scan.
     try:
         import subprocess
         proc = subprocess.run(
@@ -99,9 +98,6 @@ def _select_checkpoints(frame: pd.DataFrame, n: int, seed: int, rain: str) -> li
     if frame.empty:
         return []
     frame["_checkpoint"] = cp.loc[frame.index].astype(float)
-    # Use only pre-control/decision metadata. Any known future-outcome fields are
-    # ignored even when present. Opportunity score is allowed because this pool
-    # was generated at the checkpoint before candidate execution.
     score = _numeric(frame, ("opportunity_score", "joint_opportunity_score", "control_opportunity_score"), 0.0).fillna(0.0)
     active = _numeric(frame, ("active_flow_signal", "flood_signal", "storage_signal"), 0.0).fillna(0.0)
     frame["_score"] = score + 0.05 * active
@@ -198,7 +194,7 @@ def main() -> int:
                     "rainfall_family": text(item.get("rainfall_family", "")),
                     "duration_min": _finite_or_none(item.get("duration_min")),
                     "checkpoints": checkpoints,
-                    "policy_locked_before_reveal_required": role in {"challenge", "formal_blind"},
+                    "policy_locked_before_reveal_required": role in {"locked_validation", "challenge", "formal_blind"},
                     "candidate_training_allowed": role == "calibration",
                     "post_reveal_exclusion_allowed": False,
                     "selection_uses_control_outcome": False,
@@ -222,10 +218,16 @@ def main() -> int:
         "event_counts": {role: int((table.formal_f2_role == role).sum()) for role in ("calibration", "locked_validation", "challenge", "formal_blind")},
         "checkpoint_counts": {role: int(sum(len(x) for x in table.loc[table.formal_f2_role == role, "checkpoints"])) for role in ("calibration", "locked_validation", "challenge", "formal_blind")},
         "blind_has_preselected_control_states": bool(any(len(x) for x in table.loc[table.formal_f2_role == "formal_blind", "checkpoints"])),
+        "locked_requires_policy_lock_before_reveal": bool(table.loc[table.formal_f2_role == "locked_validation", "policy_locked_before_reveal_required"].all()) if not table.loc[table.formal_f2_role == "locked_validation"].empty else False,
         "selection_uses_control_outcome": False,
         "post_reveal_exclusion_allowed": False,
     }
-    if audit["event_counts"]["formal_blind"] < 24 or audit["blind_has_preselected_control_states"]:
+    if (
+        audit["event_counts"]["formal_blind"] < 24
+        or audit["event_counts"]["locked_validation"] < 16
+        or audit["blind_has_preselected_control_states"]
+        or not audit["locked_requires_policy_lock_before_reveal"]
+    ):
         audit["status"] = "fail"
     (args.output_dir / "FORMAL_F2_EVALUATION_PLAN_AUDIT.json").write_text(json.dumps(audit, indent=2, allow_nan=False), encoding="utf-8")
     print(json.dumps(audit, indent=2, allow_nan=False), flush=True)
