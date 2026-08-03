@@ -6,7 +6,7 @@ is read from recorded authoritative SWMM trajectories.
 
 Qualification uses the current control objective:
 * PFV delta UCB <= 100 m3 + 5% * predicted No-control PFV;
-* priority-node depth <= node-specific safety limits;
+* priority-node depth <= raw-INP node-specific safety limits;
 * Engineering/K/uncertainty/OOD/executability hard gates;
 * minimise TFV vs Dynamic Internal, with positive Peak excess and action change
   as performance penalties.
@@ -38,6 +38,7 @@ from sewerrtc.control.pfvfirst_mpc_v42 import (
 )
 from sewerrtc.v4.models_v42.hydraulic_multi_reference import MultiReferenceHydraulicSurrogate
 from sewerrtc.v4.v42_fast_feasibility import FAST_CONTRACT_ID
+from sewerrtc.v4.v42_node_safety import priority_depth_limits_m
 from sewerrtc.v4.v42_priority_contract import get_pfv_core_node_indices
 from sewerrtc.v4.v42_trajectory_builder import _load_graph_topology
 
@@ -65,7 +66,9 @@ def _branch_metrics(
     }
 
 
-def _priority_depth_max(row: pd.Series, branch: str, priority_idx: list[int]) -> np.ndarray:
+def _priority_depth_max(
+    row: pd.Series, branch: str, priority_idx: list[int]
+) -> np.ndarray:
     depth = _arr(row[f"trajectory_depth_{branch}"]).astype(np.float64)
     return depth[:, priority_idx].max(axis=0)
 
@@ -95,20 +98,6 @@ def _mean(rows: list[dict], key: str) -> float | None:
 
 def _rate(rows: list[dict], key: str) -> float | None:
     return None if not rows else float(np.mean([bool(r[key]) for r in rows]))
-
-
-def _priority_depth_limits(graph: dict, priority_idx: list[int]) -> np.ndarray:
-    cols = list(map(str, graph.get("node_static_cols", [])))
-    if "max_depth" not in cols:
-        raise KeyError("graph node_static missing max_depth")
-    max_depth = np.asarray(graph["node_static"], dtype=float)[:, cols.index("max_depth")]
-    selected = max_depth[np.asarray(priority_idx, dtype=int)]
-    if not np.isfinite(selected).all() or np.any(selected <= 0.0):
-        raise ValueError("priority max_depth must be finite and positive")
-    return np.maximum(
-        0.0,
-        np.minimum(DEPTH_FRACTION * selected, selected - MIN_FREEBOARD_M),
-    )
 
 
 def main() -> int:
@@ -141,7 +130,12 @@ def main() -> int:
     action_map = torch.from_numpy(graph["action_node_map"].astype(np.float32)).to(device)
     priority_idx = get_pfv_core_node_indices(list(graph["node_ids"]))
     priority_tensor = torch.as_tensor(priority_idx, dtype=torch.long, device=device)
-    depth_limits = _priority_depth_limits(graph, priority_idx)
+    depth_limits = priority_depth_limits_m(
+        args.project_root,
+        priority_idx,
+        max_depth_fraction=DEPTH_FRACTION,
+        minimum_freeboard_m=MIN_FREEBOARD_M,
+    )
     model = MultiReferenceHydraulicSurrogate(
         n_nodes=int(graph["n_nodes"]),
         n_facilities=int(graph["n_facilities"]),
@@ -153,7 +147,11 @@ def main() -> int:
         horizon=12,
     ).to(device)
     model.load_state_dict(
-        torch.load(args.model_dir / "best_model.pt", map_location=device, weights_only=True)
+        torch.load(
+            args.model_dir / "best_model.pt",
+            map_location=device,
+            weights_only=True,
+        )
     )
     model.eval()
 
@@ -227,6 +225,7 @@ def main() -> int:
                     metadata={
                         "development_only": True,
                         "authoritative_outcome_available": True,
+                        "physical_depth_limit_authority": "raw_frozen_INP",
                         "uncertainty_note": "qualification single-model interface; Formal uses calibrated ensemble UCB",
                     },
                 )
@@ -260,7 +259,12 @@ def main() -> int:
             actual_priority_depth = _priority_depth_max(
                 first, "hold_previous", priority_idx
             )
-            selected_pred = {"pfv": None, "tfv": None, "peak": None, "nc_pfv": None}
+            selected_pred = {
+                "pfv": None,
+                "tfv": None,
+                "peak": None,
+                "nc_pfv": None,
+            }
         else:
             chosen = row_by_id[decision.selected_id]
             actual = _actual_deltas(chosen, "candidate", priority_idx)
@@ -284,7 +288,8 @@ def main() -> int:
         predicted_pfv_allowance = (
             None
             if selected_pred["nc_pfv"] is None
-            else PFV_ABS_M3 + PFV_REL * max(0.0, float(selected_pred["nc_pfv"]))
+            else PFV_ABS_M3
+            + PFV_REL * max(0.0, float(selected_pred["nc_pfv"]))
         )
         candidate_predicted_safe = bool(
             not decision.used_fallback
@@ -337,8 +342,8 @@ def main() -> int:
             writer = csv.DictWriter(handle, fieldnames=list(replay_rows[0].keys()))
             writer.writeheader()
             writer.writerows(replay_rows)
-    fallback_rows = [r for r in replay_rows if r["used_fallback"]]
-    selected_rows = [r for r in replay_rows if not r["used_fallback"]]
+    fallback_rows = [row for row in replay_rows if row["used_fallback"]]
+    selected_rows = [row for row in replay_rows if not row["used_fallback"]]
     summary = {
         "contract_id": FAST_CONTRACT_ID,
         "control_objective_contract": "PROJECT6_V42_PFV_BUDGETED_TFV_MPC_V1",
@@ -346,6 +351,7 @@ def main() -> int:
         "development_only": True,
         "formal_closed_loop": False,
         "authoritative_outcomes": "recorded_SWMM_trajectories",
+        "physical_depth_limit_authority": "raw_frozen_INP",
         "validation_rainfall_groups": val_groups,
         "state_groups_total": int(val_reset["state_key"].nunique()),
         "state_groups_replayed": int(len(replay_rows)),
@@ -391,7 +397,9 @@ def main() -> int:
             or summary["selected_candidate_false_safe_rate"] <= 0.2
         )
     )
-    summary["next_required_if_go"] = "one_event_authoritative_SWMM_rolling_closed_loop"
+    summary["next_required_if_go"] = (
+        "one_event_authoritative_SWMM_rolling_closed_loop"
+    )
     (args.output_dir / "fast_policy_replay_summary.json").write_text(
         json.dumps(summary, indent=2, allow_nan=False), encoding="utf-8"
     )
