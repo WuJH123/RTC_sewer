@@ -74,6 +74,20 @@ def _pass_json(path: Path) -> bool:
         return False
 
 
+def _prepare_artifacts_reusable(
+    audit_path: Path,
+    step1_manifest: Path,
+    step2_raw: Path,
+    config_path: Path,
+) -> bool:
+    if not (_pass_json(audit_path) and step1_manifest.exists() and step2_raw.exists()):
+        return False
+    try:
+        return str(_read_json(audit_path).get("config_sha256", "")) == _sha(config_path)
+    except Exception:
+        return False
+
+
 def _status(root: Path, qualification: Path) -> dict[str, Any]:
     formal = root / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2"
     statuses = {stage: "NOT_STARTED" for stage in STAGES}
@@ -147,7 +161,9 @@ def main() -> int:
     step2_gat = qualification / "step2/QUALIFICATION_STEP2_GAT_MANIFEST.parquet"
 
     def prepare() -> None:
-        if not args.force and _pass_json(prepare_audit) and step1_manifest.exists() and step2_raw.exists():
+        if not args.force and _prepare_artifacts_reusable(
+            prepare_audit, step1_manifest, step2_raw, args.config
+        ):
             print("REUSE: qualification prepare", flush=True)
             return
         _run(

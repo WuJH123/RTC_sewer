@@ -44,6 +44,14 @@ def _read(path: Path) -> pd.DataFrame:
     return frame
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def _rank(values: list[str], seed: int, salt: str) -> list[str]:
     return sorted(
         {str(v) for v in values},
@@ -306,6 +314,7 @@ def main() -> int:
     step1_group_counts = selected_step1.groupby(["formal_split", "step1_domain_role"])["split_group_key"].nunique().to_dict()
     audit = {
         "contract_id": QUALIFICATION_CONTRACT,
+        "config_sha256": _sha256_file(args.config),
         "status": "pass",
         "qualification_only": True,
         "development_only": True,

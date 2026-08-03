@@ -90,6 +90,18 @@ def test_step2_groups_are_limited_to_step1_history_groups() -> None:
     assert selected == ["g1", "g3"]
 
 
+def test_prepare_reuse_requires_matching_config_hash(tmp_path: Path) -> None:
+    config = tmp_path / "config.json"
+    config.write_text('{"step2_min_checkpoint_min": 120}', encoding="utf-8")
+    audit = tmp_path / "audit.json"
+    audit.write_text(json.dumps({"status": "pass", "config_sha256": "stale"}), encoding="utf-8")
+    step1 = tmp_path / "step1.parquet"
+    step2 = tmp_path / "step2.parquet"
+    step1.write_bytes(b"step1")
+    step2.write_bytes(b"step2")
+    assert not runner._prepare_artifacts_reusable(audit, step1, step2, config)
+
+
 def test_pre_action_signature_ignores_checkpoint_transition(monkeypatch) -> None:
     graph = SimpleNamespace(node_ids=["n1"], facility_ids=["f1"])
     first = {
