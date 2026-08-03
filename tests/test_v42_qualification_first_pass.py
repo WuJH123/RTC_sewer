@@ -79,6 +79,17 @@ def test_step2_selection_rejects_states_before_causal_warmup() -> None:
     assert (selected["checkpoint_min"] >= 120.0).all()
 
 
+def test_step2_groups_are_limited_to_step1_history_groups() -> None:
+    eligible = {"g1": pd.DataFrame(), "g2": pd.DataFrame(), "g3": pd.DataFrame()}
+    selected = builder._select_step2_groups(
+        eligible,
+        ranked_groups=["g1", "g2", "g3"],
+        step1_history_groups={"g1", "g3"},
+        required_groups=2,
+    )
+    assert selected == ["g1", "g3"]
+
+
 def test_pre_action_signature_ignores_checkpoint_transition(monkeypatch) -> None:
     graph = SimpleNamespace(node_ids=["n1"], facility_ids=["f1"])
     first = {

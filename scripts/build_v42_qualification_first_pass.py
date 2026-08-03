@@ -134,6 +134,26 @@ def _choose_step2_state(
     return state
 
 
+def _select_step2_groups(
+    eligible_groups: dict[str, pd.DataFrame],
+    *,
+    ranked_groups: list[str],
+    step1_history_groups: set[str],
+    required_groups: int,
+) -> list[str]:
+    selected = [
+        str(group)
+        for group in ranked_groups
+        if str(group) in eligible_groups and str(group) in step1_history_groups
+    ][: int(required_groups)]
+    if len(selected) < int(required_groups):
+        raise RuntimeError(
+            "qualification Step2 has fewer history-compatible groups than required: "
+            f"{len(selected)} < {int(required_groups)}"
+        )
+    return selected
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--project-root", type=Path, default=PROJECT_ROOT)
@@ -231,11 +251,13 @@ def main() -> int:
 
     required_step2_groups = int(selection["step2_rainfall_groups"])
     ranked_groups = _rank(list(eligible_groups), seed, "step2-qualification")
-    train_step2_groups = ranked_groups[:required_step2_groups]
-    if len(train_step2_groups) < required_step2_groups:
-        raise RuntimeError(
-            f"qualification Step2 has only {len(train_step2_groups)} viable groups; required {required_step2_groups}"
-        )
+    step1_history_groups = set(selected_step1["split_group_key"].astype(str))
+    train_step2_groups = _select_step2_groups(
+        eligible_groups,
+        ranked_groups=ranked_groups,
+        step1_history_groups=step1_history_groups,
+        required_groups=required_step2_groups,
+    )
     selected_step2 = pd.concat([eligible_groups[group] for group in train_step2_groups], ignore_index=True)
     selected_step2["qualification_only"] = True
     selected_step2["development_only"] = True
