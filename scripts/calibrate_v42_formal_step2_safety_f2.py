@@ -1,17 +1,13 @@
 """Calibrate Formal F2 uncertainty for PFV-budget and priority-depth safety.
 
-The current controller has two hydraulic hard-safety quantities:
+Hard hydraulic safety quantities:
+1. PFV_delta_UCB <= 100 m3 + 5% * PFV_no_control.
+2. Priority-node depth_UCB <= node-specific raw-INP depth limit.
 
-1. Candidate-minus-No-control PFV must not exceed the frozen non-inferiority
-   allowance ``100 m3 + 5% * PFV_no_control``.
-2. Predicted priority-node depth must remain below the frozen node-specific depth
-   limits.
-
-Three independently trained surrogates form the epistemic ensemble. One-sided
-standardized conformal multipliers are calibrated on the current-generation
-Calibration holdout. Peak relative to Dynamic Internal remains a performance
-penalty, not a zero-tolerance safety gate; its ensemble error is reported only as
-an objective-quality diagnostic.
+Peak relative to Dynamic Internal is a performance penalty, not a hard gate.
+Three Step2 seeds provide epistemic uncertainty. The current-generation
+Calibration holdout is used only for uncertainty/safety calibration, not model
+weight training.
 """
 from __future__ import annotations
 
@@ -32,6 +28,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from scripts.train_v42_step2_fast import _forward, _slice, _tensorise
 from sewerrtc.v4.formal_f2 import FORMAL_GENERATION_ID, read_table, sha256_file
 from sewerrtc.v4.models_v42.hydraulic_multi_reference import MultiReferenceHydraulicSurrogate
+from sewerrtc.v4.v42_node_safety import priority_depth_limits_m
 from sewerrtc.v4.v42_priority_contract import get_pfv_core_node_indices
 from sewerrtc.v4.v42_trajectory_builder import _load_graph_topology
 
@@ -43,19 +40,24 @@ DT_SEC = 600.0
 
 
 def _conformal_quantile(values: np.ndarray, alpha: float) -> float:
-    v = np.asarray(values, dtype=float)
-    v = v[np.isfinite(v)]
-    if v.size == 0:
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
         raise ValueError("empty conformal residual array")
-    level = min(1.0, math.ceil((v.size + 1) * (1.0 - alpha)) / v.size)
+    level = min(
+        1.0,
+        math.ceil((values.size + 1) * (1.0 - alpha)) / values.size,
+    )
     try:
-        return float(np.quantile(v, level, method="higher"))
+        return float(np.quantile(values, level, method="higher"))
     except TypeError:
-        return float(np.quantile(v, level, interpolation="higher"))
+        return float(np.quantile(values, level, interpolation="higher"))
 
 
 def _validate_calibration_lineage(
-    frame: pd.DataFrame, ledger: pd.DataFrame, model_reports: list[dict]
+    frame: pd.DataFrame,
+    ledger: pd.DataFrame,
+    model_reports: list[dict],
 ) -> tuple[list[str], set[str]]:
     groups = set(frame["split_group_key"].astype(str))
     allowed = set(
@@ -66,49 +68,34 @@ def _validate_calibration_lineage(
     )
     if not groups or not groups.issubset(allowed):
         raise RuntimeError(
-            "Step2 safety calibration contains non-current-Calibration rainfall groups: "
+            "Step2 calibration contains rainfall outside the current Calibration holdout: "
             f"{sorted(groups - allowed)[:10]}"
         )
-    training = set()
+    development: set[str] = set()
     for report in model_reports:
-        training.update(map(str, report.get("train_rainfall_groups", [])))
-        training.update(map(str, report.get("validation_rainfall_groups", [])))
-        training.update(map(str, report.get("calibration_rainfall_groups", [])))
-    overlap = groups & training
+        development.update(map(str, report.get("train_rainfall_groups", [])))
+        development.update(map(str, report.get("validation_rainfall_groups", [])))
+        development.update(map(str, report.get("calibration_rainfall_groups", [])))
+    overlap = groups & development
     if overlap:
         raise RuntimeError(
-            f"current Calibration overlaps surrogate development groups: {sorted(overlap)[:10]}"
+            f"current Calibration overlaps Step2 model-development groups: {sorted(overlap)[:10]}"
         )
-    return sorted(groups), training
+    return sorted(groups), development
 
 
 def _json_array(value: str) -> np.ndarray:
     return np.asarray(json.loads(str(value)), dtype=np.float64)
 
 
-def _actual_no_control_pfv(frame: pd.DataFrame, priority_idx: list[int]) -> np.ndarray:
-    values = []
+def _actual_no_control_pfv(
+    frame: pd.DataFrame, priority_idx: list[int]
+) -> np.ndarray:
+    values: list[float] = []
     for raw in frame["trajectory_flood_no_control"]:
         flood = _json_array(raw)
         values.append(float(flood[:, priority_idx].sum() * DT_SEC))
     return np.asarray(values, dtype=float)
-
-
-def _priority_depth_limits(graph: dict, priority_idx: list[int]) -> np.ndarray:
-    cols = list(map(str, graph.get("node_static_cols", [])))
-    if "max_depth" not in cols:
-        raise KeyError("graph node_static is missing max_depth")
-    max_depth = np.asarray(graph["node_static"], dtype=float)[:, cols.index("max_depth")]
-    selected = max_depth[np.asarray(priority_idx, dtype=int)]
-    if not np.isfinite(selected).all() or np.any(selected <= 0.0):
-        raise ValueError("priority-node max_depth must be finite and positive")
-    return np.maximum(
-        0.0,
-        np.minimum(
-            PRIORITY_DEPTH_MAX_FRACTION * selected,
-            selected - PRIORITY_DEPTH_MIN_FREEBOARD_M,
-        ),
-    )
 
 
 def main() -> int:
@@ -150,7 +137,8 @@ def main() -> int:
     ledger = read_table(args.ledger)
     if frame.empty:
         raise ValueError("Formal F2 Step2 calibration manifest is empty")
-    required_contracts = {
+
+    contracts = {
         "training_admission_authorized": True,
         "raw_independent_oracle_all_pass": True,
         "actual_readback_verified": True,
@@ -158,7 +146,7 @@ def main() -> int:
         "authoritative_swmm_history_used_as_online_input": False,
         "realized_future_rainfall_used_online": False,
     }
-    for key, expected in required_contracts.items():
+    for key, expected in contracts.items():
         if key not in frame:
             raise KeyError(f"calibration manifest missing {key}")
         observed = frame[key].astype(bool)
@@ -166,26 +154,31 @@ def main() -> int:
             raise RuntimeError(f"calibration contract failed: {key}")
         if not expected and bool(observed.any()):
             raise RuntimeError(f"calibration leakage contract failed: {key}")
-    if not bool(frame["state_source"].astype(str).eq("gat_sparse_reconstruction").all()):
+    if not bool(
+        frame["state_source"].astype(str).eq("gat_sparse_reconstruction").all()
+    ):
         raise RuntimeError("calibration states are not causal sparse-GAT reconstructions")
 
-    reports = []
+    reports: list[dict] = []
     for seed in args.seeds:
         path = args.models_root / f"seed_{seed}" / "formal_step2_report.json"
         if not path.exists():
             raise FileNotFoundError(path)
         reports.append(json.loads(path.read_text(encoding="utf-8")))
-    calibration_groups, training_groups = _validate_calibration_lineage(
+    calibration_groups, development_groups = _validate_calibration_lineage(
         frame, ledger, reports
     )
     if len(calibration_groups) < args.min_calibration_groups:
         raise RuntimeError(
-            f"only {len(calibration_groups)} F2 calibration groups; require {args.min_calibration_groups}"
+            f"only {len(calibration_groups)} current Calibration groups; require {args.min_calibration_groups}"
         )
-
-    target_contracts = {str(r.get("step2_target_contract", "")) for r in reports}
+    target_contracts = {
+        str(report.get("step2_target_contract", "")) for report in reports
+    }
     if len(target_contracts) != 1 or "" in target_contracts:
-        raise RuntimeError(f"Formal Step2 seeds have inconsistent target contracts: {target_contracts}")
+        raise RuntimeError(
+            f"Formal Step2 seeds have inconsistent target contracts: {target_contracts}"
+        )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     graph = _load_graph_topology(args.project_root)
@@ -194,13 +187,22 @@ def main() -> int:
     action_map = torch.from_numpy(graph["action_node_map"].astype(np.float32)).to(device)
     priority_idx = get_pfv_core_node_indices(list(graph["node_ids"]))
     priority = torch.as_tensor(priority_idx, dtype=torch.long, device=device)
-    depth_limits = _priority_depth_limits(graph, priority_idx)
+    # Critical: node_static is standardized for ML. Physical safety thresholds
+    # must come from the raw frozen INP, never from standardized graph features.
+    depth_limits = priority_depth_limits_m(
+        args.project_root,
+        priority_idx,
+        max_depth_fraction=PRIORITY_DEPTH_MAX_FRACTION,
+        minimum_freeboard_m=PRIORITY_DEPTH_MIN_FREEBOARD_M,
+    )
     data = _tensorise(frame)
 
-    pred_by_seed = {k: [] for k in ("pfv_delta", "tfv_delta", "peak_delta", "no_control_pfv")}
+    pred_by_seed = {
+        key: []
+        for key in ("pfv_delta", "tfv_delta", "peak_delta", "no_control_pfv")
+    }
     priority_depth_by_seed: list[np.ndarray] = []
     model_hashes: dict[str, str] = {}
-
     for seed, report in zip(args.seeds, reports):
         cfg = report.get("config", {})
         model = MultiReferenceHydraulicSurrogate(
@@ -220,8 +222,8 @@ def main() -> int:
         model.eval()
         model_hashes[str(seed)] = str(report.get("surrogate_model_sha256", ""))
         outputs = {
-            k: np.zeros(len(frame), dtype=float)
-            for k in ("pfv_delta", "tfv_delta", "peak_delta", "no_control_pfv")
+            key: np.zeros(len(frame), dtype=float)
+            for key in pred_by_seed
         }
         depth_out = np.zeros((len(frame), 12, len(priority_idx)), dtype=float)
         with torch.no_grad():
@@ -249,7 +251,9 @@ def main() -> int:
             pred_by_seed[key].append(outputs[key])
         priority_depth_by_seed.append(depth_out)
 
-    ensemble = {key: np.stack(values, axis=0) for key, values in pred_by_seed.items()}
+    ensemble = {
+        key: np.stack(values, axis=0) for key, values in pred_by_seed.items()
+    }
     depth_ensemble = np.stack(priority_depth_by_seed, axis=0)
     actual_delta = {
         key: frame[key].to_numpy(dtype=float)
@@ -257,7 +261,10 @@ def main() -> int:
     }
     actual_nc_pfv = _actual_no_control_pfv(frame, priority_idx)
     actual_priority_depth = np.stack(
-        [_json_array(v)[:, priority_idx] for v in frame["trajectory_depth_candidate"]],
+        [
+            _json_array(value)[:, priority_idx]
+            for value in frame["trajectory_depth_candidate"]
+        ],
         axis=0,
     )
 
@@ -274,22 +281,29 @@ def main() -> int:
         actual_priority_depth - depth_mean
     ) / np.maximum(depth_std, eps)
     z_pfv = max(0.0, _conformal_quantile(pfv_std_resid, args.alpha))
-    z_depth = max(0.0, _conformal_quantile(depth_std_resid.reshape(-1), args.alpha))
+    z_depth = max(
+        0.0, _conformal_quantile(depth_std_resid.reshape(-1), args.alpha)
+    )
     confidence_z = float(max(z_pfv, z_depth))
 
     pfv_ucb = mean["pfv_delta"] + confidence_z * std["pfv_delta"]
-    predicted_allowance = PFV_ABSOLUTE_ALLOWANCE_M3 + PFV_RELATIVE_ALLOWANCE_FRACTION * np.maximum(
-        mean["no_control_pfv"], 0.0
+    predicted_allowance = (
+        PFV_ABSOLUTE_ALLOWANCE_M3
+        + PFV_RELATIVE_ALLOWANCE_FRACTION
+        * np.maximum(mean["no_control_pfv"], 0.0)
     )
-    actual_allowance = PFV_ABSOLUTE_ALLOWANCE_M3 + PFV_RELATIVE_ALLOWANCE_FRACTION * np.maximum(
-        actual_nc_pfv, 0.0
+    actual_allowance = (
+        PFV_ABSOLUTE_ALLOWANCE_M3
+        + PFV_RELATIVE_ALLOWANCE_FRACTION * np.maximum(actual_nc_pfv, 0.0)
     )
     predicted_pfv_safe = pfv_ucb <= predicted_allowance
     actual_pfv_safe = actual_delta["pfv_delta"] <= actual_allowance
     pfv_false_safe = float(np.mean(predicted_pfv_safe & ~actual_pfv_safe))
 
     depth_ucb = depth_mean + confidence_z * depth_std
-    predicted_depth_safe = np.all(depth_ucb <= depth_limits[None, None, :], axis=(1, 2))
+    predicted_depth_safe = np.all(
+        depth_ucb <= depth_limits[None, None, :], axis=(1, 2)
+    )
     actual_depth_safe = np.all(
         actual_priority_depth <= depth_limits[None, None, :], axis=(1, 2)
     )
@@ -300,12 +314,22 @@ def main() -> int:
     joint_actual_safe = actual_pfv_safe & actual_depth_safe
     joint_false_safe = float(np.mean(joint_predicted_safe & ~joint_actual_safe))
 
-    peak_mae = float(np.mean(np.abs(mean["peak_delta"] - actual_delta["peak_delta"])))
-    tfv_mae = float(np.mean(np.abs(mean["tfv_delta"] - actual_delta["tfv_delta"])))
+    peak_mae = float(
+        np.mean(np.abs(mean["peak_delta"] - actual_delta["peak_delta"]))
+    )
+    tfv_mae = float(
+        np.mean(np.abs(mean["tfv_delta"] - actual_delta["tfv_delta"]))
+    )
     uncertainty_score = np.sqrt(
-        np.square(std["pfv_delta"] / (np.std(actual_delta["pfv_delta"]) + eps))
-        + np.square(std["peak_delta"] / (np.std(actual_delta["peak_delta"]) + eps))
-        + np.square(std["tfv_delta"] / (np.std(actual_delta["tfv_delta"]) + eps))
+        np.square(
+            std["pfv_delta"] / (np.std(actual_delta["pfv_delta"]) + eps)
+        )
+        + np.square(
+            std["tfv_delta"] / (np.std(actual_delta["tfv_delta"]) + eps)
+        )
+        + np.square(
+            std["peak_delta"] / (np.std(actual_delta["peak_delta"]) + eps)
+        )
     )
     uncertainty_limit = float(np.quantile(uncertainty_score, 0.99))
     status = (
@@ -327,7 +351,7 @@ def main() -> int:
         "calibration_rainfall_groups": calibration_groups,
         "calibration_rainfall_group_count": len(calibration_groups),
         "training_or_internal_validation_overlap_count": len(
-            set(calibration_groups) & training_groups
+            set(calibration_groups) & development_groups
         ),
         "step2_target_contract": next(iter(target_contracts)),
         "model_hashes": model_hashes,
@@ -338,6 +362,7 @@ def main() -> int:
         "pfv_absolute_allowance_m3": PFV_ABSOLUTE_ALLOWANCE_M3,
         "pfv_relative_allowance_fraction": PFV_RELATIVE_ALLOWANCE_FRACTION,
         "priority_depth_limit_contract": {
+            "physical_metadata_authority": "raw_frozen_INP",
             "max_depth_fraction": PRIORITY_DEPTH_MAX_FRACTION,
             "minimum_freeboard_m": PRIORITY_DEPTH_MIN_FREEBOARD_M,
             "priority_node_limits_m": depth_limits.tolist(),
