@@ -139,7 +139,8 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--project-root", type=Path, default=PROJECT_ROOT)
     parser.add_argument("--input-manifest", type=Path, required=True)
-    parser.add_argument("--step1-window-manifest", type=Path, required=True)
+    parser.add_argument("--step1-window-manifest", type=Path, required=False)
+    parser.add_argument("--history-source-manifest", type=Path, required=False)
     parser.add_argument("--step1-model-dir", type=Path, required=True)
     parser.add_argument("--output-manifest", type=Path, required=True)
     parser.add_argument("--min-rainfall-groups", type=int, default=65)
@@ -154,7 +155,13 @@ def main() -> int:
     if args.detail_cache_items < 2:
         raise ValueError("detail-cache-items must be >=2")
     frame = _read(args.input_manifest)
-    windows = _read(args.step1_window_manifest)
+    history_source_path = args.history_source_manifest or (
+        args.output_manifest.parent.parent / "QUALIFICATION_GAT_HISTORY_SOURCE_MANIFEST.parquet"
+    )
+    history_sources = _read(history_source_path)
+    missing_history_columns = sorted({"state_key", "history_detail_path", "compatible"} - set(history_sources.columns))
+    if missing_history_columns:
+        raise KeyError(f"qualification history source manifest missing columns: {missing_history_columns}")
     if "qualification_only" not in frame.columns or not bool(frame["qualification_only"].astype(bool).all()):
         raise RuntimeError("qualification GAT bridge accepts qualification-only input")
 
@@ -195,45 +202,35 @@ def main() -> int:
         try:
             candidate_detail = _cached_detail(cache, candidate_path, required, args.detail_cache_items)
             candidate_signature = _pre_action_signature(candidate_detail, checkpoint, graph)
-            candidates = windows[windows["split_group_key"].astype(str).eq(rainfall_group)].copy()
-            if event_id and "event_id" in candidates.columns:
-                same_event = candidates[candidates["event_id"].astype(str).eq(event_id)]
-                if not same_event.empty:
-                    candidates = same_event
-            history_path: Path | None = None
-            history_detail: pd.DataFrame | None = None
-            for raw_path in sorted(set(candidates["detail_path"].astype(str))):
-                path = Path(raw_path)
-                if not path.exists():
-                    failure_reason = "history_file_missing"
-                    continue
-                key = str(path.resolve())
-                if key not in bounds_cache:
-                    bounds_cache[key] = _bounds(path)
-                lower, upper = bounds_cache[key]
-                if lower > checkpoint - 120.0 + 1.0e-6:
-                    failure_reason = "coverage_start_too_late"
-                    continue
-                if upper < checkpoint - 1.0e-6:
-                    failure_reason = "coverage_end_too_early"
-                    continue
-                detail = _cached_detail(cache, path, required, args.detail_cache_items)
-                if _pre_action_signature(detail, checkpoint, graph) != candidate_signature:
-                    failure_reason = "pre_action_signature_mismatch"
-                    continue
-                anchors_ok = True
-                for anchor in [checkpoint - 60.0 + 5.0 * index for index in range(13)]:
-                    if _detail_extract_window(detail, anchor, graph.node_ids, graph.facility_ids) is None:
-                        anchors_ok = False
-                        failure_reason = "missing_gat_anchor"
-                        break
-                if not anchors_ok:
-                    continue
-                history_path = path.resolve()
-                history_detail = detail
-                break
-            if history_path is None or history_detail is None:
+            mapping = history_sources[
+                history_sources["state_key"].astype(str).eq(str(state_key))
+                & history_sources["compatible"].fillna(False).astype(bool)
+            ]
+            if mapping.empty:
+                raise FileNotFoundError("no_history_source_mapping")
+            history_path = Path(str(mapping.iloc[0]["history_detail_path"]))
+            if not history_path.exists():
+                failure_reason = "history_file_missing"
+                raise FileNotFoundError(history_path)
+            key = str(history_path.resolve())
+            if key not in bounds_cache:
+                bounds_cache[key] = _bounds(history_path)
+            lower, upper = bounds_cache[key]
+            if lower > checkpoint - 120.0 + 1.0e-6:
+                failure_reason = "coverage_start_too_late"
                 raise FileNotFoundError(failure_reason)
+            if upper < checkpoint - 1.0e-6:
+                failure_reason = "coverage_end_too_early"
+                raise FileNotFoundError(failure_reason)
+            history_detail = _cached_detail(cache, history_path, required, args.detail_cache_items)
+            if _pre_action_signature(history_detail, checkpoint, graph) != candidate_signature:
+                failure_reason = "pre_action_signature_mismatch"
+                raise FileNotFoundError(failure_reason)
+            for anchor in [checkpoint - 60.0 + 5.0 * index for index in range(13)]:
+                if _detail_extract_window(history_detail, anchor, graph.node_ids, graph.facility_ids) is None:
+                    failure_reason = "missing_gat_anchor"
+                    raise FileNotFoundError(failure_reason)
+            history_path = history_path.resolve()
 
             history, uncertainty, observed_rainfall = _reconstruct(
                 history_detail, checkpoint, model, graph, mask, device
@@ -304,6 +301,7 @@ def main() -> int:
         "development_only": True,
         "formal_mainline_authorized": False,
         "input_rows": int(len(frame)),
+        "history_source_manifest": str(history_source_path),
         "output_rows": int(len(result)),
         "input_states": int(frame["state_key"].astype(str).nunique()),
         "output_states": int(len(successful_states)),

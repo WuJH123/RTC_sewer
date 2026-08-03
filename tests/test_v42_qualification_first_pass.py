@@ -11,6 +11,7 @@ from scripts import build_v42_qualification_first_pass as builder
 from scripts import materialize_v42_qualification_gat_history as gat_bridge
 from scripts import run_v42_qualification_first_pass as runner
 from scripts import train_v42_step1_qualification as step1_runner
+from sewerrtc.v4 import v42_qualification_history_resolver as history_resolver
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +21,12 @@ def _action(value: float) -> str:
     array = np.zeros((12, 36), dtype=float)
     array[:3, 0] = value
     return json.dumps(array.tolist())
+
+
+def _detail_with_attrs(**attrs) -> pd.DataFrame:
+    detail = pd.DataFrame()
+    detail.attrs.update(attrs)
+    return detail
 
 
 def test_qualification_profile_never_authorizes_formal() -> None:
@@ -35,6 +42,12 @@ def test_qualification_runner_registers_all_28_units() -> None:
     assert len(runner.STAGES) == 28
     assert runner.STAGES[0].startswith("01_")
     assert runner.STAGES[-1].startswith("28_")
+
+
+def test_status_accepts_step2_report_without_legacy_status_field(tmp_path: Path) -> None:
+    report = tmp_path / "qualification_step2_report.json"
+    report.write_text(json.dumps({"stage": "qualification_step2_single_seed"}), encoding="utf-8")
+    assert runner._pass_model_report(report, "qualification_step2_single_seed") is True
 
 
 def test_candidate_selection_uses_distinct_actual_h3_schedules() -> None:
@@ -163,3 +176,111 @@ def test_step1_spread_caps_each_physical_run_and_group() -> None:
     capped = builder._cap_step1(frame, windows_per_run=2, windows_per_group=3)
     assert len(capped) <= 3
     assert capped.groupby("physical_identity_sha256").size().max() <= 2
+
+
+def test_history_resolver_prefers_full_same_event_history(monkeypatch) -> None:
+    graph = SimpleNamespace(node_ids=["n1"], facility_ids=["f1"])
+    signature = {
+        "checkpoint_depth": np.array([1.0]),
+        "rainfall_history": np.arange(13, dtype=float),
+        "pre_action_history": np.zeros((12, 1), dtype=float),
+    }
+
+    def fake_extract(detail, *_args):
+        return {
+            "depth_history": np.array(detail.attrs["depth"], dtype=float).reshape(13, 1),
+            "rainfall": np.array(detail.attrs["rain"], dtype=float),
+            "actions": np.array(detail.attrs["actions"], dtype=float).reshape(13, 1),
+        }
+
+    monkeypatch.setattr(history_resolver, "_detail_extract_window", fake_extract)
+    history_index = pd.DataFrame(
+        [
+            {"split_group_key": "g1", "event_id": "e1", "detail_path": "late.csv", "history_start_min": 60.0, "history_end_min": 240.0},
+            {"split_group_key": "g1", "event_id": "e1", "detail_path": "full.csv", "history_start_min": 0.0, "history_end_min": 240.0},
+        ]
+    )
+    details = {
+        "late.csv": _detail_with_attrs(depth=[1] * 13, rain=list(range(13)), actions=[[0]] * 13),
+        "full.csv": _detail_with_attrs(depth=[1] * 13, rain=list(range(13)), actions=[[0]] * 13),
+    }
+    resolved = history_resolver.resolve_compatible_history(
+        history_index=history_index,
+        rainfall_group="g1",
+        event_id="e1",
+        checkpoint_min=120.0,
+        candidate_signature=signature,
+        load_detail=details.__getitem__,
+        graph=graph,
+    )
+    assert resolved["compatible"] is True
+    assert resolved["history_detail_path"] == "full.csv"
+
+
+def test_history_resolver_chooses_later_state_when_first_state_has_no_h120(monkeypatch) -> None:
+    graph = SimpleNamespace(node_ids=["n1"], facility_ids=["f1"])
+
+    def fake_extract(detail, *_args):
+        value = float(detail.attrs["value"])
+        return {
+            "depth_history": np.full((13, 1), value),
+            "rainfall": np.arange(13, dtype=float),
+            "actions": np.zeros((13, 1), dtype=float),
+        }
+
+    monkeypatch.setattr(history_resolver, "_detail_extract_window", fake_extract)
+    rows = []
+    for state_key, checkpoint, path, value in (
+        ("early", 120.0, "early.csv", 1.0),
+        ("warm", 150.0, "warm.csv", 2.0),
+    ):
+        for action_index in range(3):
+            rows.append(
+                {
+                    "state_key": state_key,
+                    "split_group_key": "g1",
+                    "event_id": "e1",
+                    "checkpoint_min": checkpoint,
+                    "source_detail_path_candidate": path,
+                    "candidate_action_sha256": f"a-{state_key}-{action_index}",
+                    "_value": value,
+                }
+            )
+    states = pd.DataFrame(rows)
+    history_index = pd.DataFrame(
+        [
+            {"split_group_key": "g1", "event_id": "e1", "detail_path": "early.csv", "history_start_min": 60.0, "history_end_min": 240.0},
+            {"split_group_key": "g1", "event_id": "e1", "detail_path": "warm.csv", "history_start_min": 30.0, "history_end_min": 270.0},
+        ]
+    )
+    details = {
+        "early.csv": _detail_with_attrs(value=1.0),
+        "warm.csv": _detail_with_attrs(value=2.0),
+    }
+    selected = history_resolver.choose_history_compatible_state(
+        states,
+        history_index=history_index,
+        load_detail=details.__getitem__,
+        graph=graph,
+        required_candidates=3,
+        min_checkpoint_min=120.0,
+    )
+    assert selected is not None
+    assert selected["state_key"] == "warm"
+    assert selected["history"]["history_detail_path"] == "warm.csv"
+
+
+def test_pre_action_signature_mismatch_is_split_by_component() -> None:
+    first = {
+        "checkpoint_depth": np.array([1.0]),
+        "rainfall_history": np.array([1.0, 2.0]),
+        "pre_action_history": np.zeros((2, 1)),
+    }
+    second = {key: value.copy() for key, value in first.items()}
+    second["rainfall_history"][0] = 9.0
+    second["pre_action_history"][1, 0] = 1.0
+    result = history_resolver.compare_pre_action_signatures(first, second)
+    assert result["compatible"] is False
+    assert result["checkpoint_depth_mismatch"] is False
+    assert result["rainfall_history_mismatch"] is True
+    assert result["pre_action_history_mismatch"] is True
