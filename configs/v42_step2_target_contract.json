@@ -1,0 +1,39 @@
+{
+  "contract_id": "PROJECT6_V42_STEP2_TARGET_CONTRACT_V1",
+  "default_target_contract": "CONTROL_CORE",
+  "contracts": {
+    "CONTROL_CORE": {
+      "required_targets": [
+        "node_depth",
+        "node_flooding_rate",
+        "storage_volume",
+        "managed_facility_flow"
+      ],
+      "optional_targets": ["outfall_flow"],
+      "formal_authorized": true,
+      "claim": "control-oriented hydraulic trajectory surrogate",
+      "minimum_train_rainfall_groups": 65
+    },
+    "FULL_HYDRAULIC": {
+      "required_targets": [
+        "node_depth",
+        "node_flooding_rate",
+        "storage_volume",
+        "managed_facility_flow",
+        "outfall_flow"
+      ],
+      "optional_targets": [],
+      "formal_authorized": true,
+      "claim": "extended hydraulic trajectory surrogate including explicit outfall discharge",
+      "minimum_train_rainfall_groups": 65
+    }
+  },
+  "system_flooding_rate_sequence": "derived_from_node_flooding_rate",
+  "kpis": {
+    "PFV": "derived_from_priority_node_flooding_rate",
+    "TFV": "derived_from_system_node_flooding_rate",
+    "Peak": "derived_from_system_node_flooding_rate"
+  },
+  "no_missing_target_imputation": true,
+  "no_control_action_contract": "all_engineering36_settings_equal_1.0"
+}
