@@ -2,15 +2,29 @@
   "contract_id": "PROJECT6_V42_PAPER_WORKFLOW_V1",
   "status": "FROZEN_CODE_CONTRACT",
   "created_at": "2026-07-31",
+  "updated_at": "2026-08-04",
   "authoritative_for": "paper_scientific_workflow",
   "legacy_pipeline_authorizes_formal": false,
   "network_variant": "rainfall_only_no_dwf",
+  "data_split_policy": {
+    "authority": "rainfall_sha_or_fingerprint",
+    "semantics": "current_generation_rainfall_group_holdout",
+    "historical_status_is_split_gate": false,
+    "hard_requirement": "zero_overlap_between_current_model_development_and_current_evaluation_roles",
+    "evaluation_roles": [
+      "calibration",
+      "challenge",
+      "locked_validation",
+      "formal_blind"
+    ],
+    "formal_blind_legacy_stage_name_semantics": "final_current_generation_held_out_test_after_policy_lock"
+  },
   "mainline_order": [
     "phase_r0",
     "step1_sparse_state_reconstruction",
     "step2_multi_reference_hydraulic_surrogate",
-    "step3_pfv_first_rolling_mpc",
-    "step4_closed_loop_and_blind_evaluation"
+    "step3_pfv_budgeted_tfv_rolling_mpc",
+    "step4_closed_loop_and_heldout_evaluation"
   ],
   "mainline_auditor": "sewerrtc.v4.v42_mainline_workflow.audit_v42_mainline",
   "timing": {
@@ -30,8 +44,7 @@
     "full_finite_audit_required": true,
     "numeric_four_reference_alignment_required": true,
     "rainfall_series_split_isolation_required": true,
-    "historical_revealed_evidence_role": "consumed_development_not_fresh_blind",
-    "reserved_challenge_formal_reuse_forbidden": true,
+    "historical_labels_are_lineage_metadata_only": true,
     "action_authority": "actual_readback_setting",
     "missing_target_imputation_allowed": false,
     "counterfactual_requires_all_four_roles_finite": true
@@ -58,9 +71,6 @@
     ],
     "formal_reconstructor": "sewerrtc.models.temporal_sparse_gat_v42.TemporalSparseGATReconstructorV42",
     "formal_adapter": "sewerrtc.state.v42_sparse_state.build_sparse_state_estimate",
-    "legacy_sr0p15_status": "historical_single_snapshot_depth_reconstructor_not_full_step1_contract",
-    "legacy_sr0p15_can_authorize_formal_gat_integrated_loop": false,
-    "formal_reconstructor_requires_new_training_and_compatibility_audit": true,
     "formal_training_action_authority": "actual_readback_setting",
     "future_hydraulic_truth_forbidden": true,
     "offline_truth_must_not_be_labelled_reconstructed": true,
@@ -80,26 +90,48 @@
       "dynamic_internal",
       "hold_previous"
     ],
+    "branch_semantics": {
+      "candidate": "candidate MPC Engineering36 schedule",
+      "no_control": "all Engineering36 facilities fully open/on, setting=1.0 throughout H120",
+      "dynamic_internal": "native SWMM dynamic internal rules",
+      "hold_previous": "hold current/readback setting throughout the horizon"
+    },
+    "branch_equivalence_policy": "real action/hydraulic equality is allowed but must be audited and reported; same-action different-hydraulic outcomes under same state/forcing fail consistency checks",
     "formal_model": "sewerrtc.v4.models_v42.hydraulic_multi_reference.MultiReferenceHydraulicSurrogate",
     "formal_loss": "sewerrtc.v4.models_v42.hydraulic_trajectory_losses.HydraulicTrajectoryLoss",
-    "formal_dataset_builder": "sewerrtc.v4.v42_r0_paper_dataset.build_r0_paper_dataset",
-    "formal_raw_independent_oracle": "sewerrtc.v4.v42_r0_independent_oracle.audit_r0_manifest_raw",
-    "formal_training_admission": "sewerrtc.v4.v42_paper_training_admission.audit_training_admission",
-    "legacy_direct_kpi_trainer_status": "development_only_not_formal_authority",
     "history_input_contract": "gat_compatible_causal_state",
     "history_input_features": [
       "network_node_depth"
     ],
     "historical_actual_readback_actions_required": true,
     "full_network_flooding_history_as_online_input": false,
-    "trajectory_targets": [
-      "node_depth",
-      "node_flooding_rate",
-      "storage_volume",
-      "managed_facility_flow",
-      "outfall_flow",
-      "system_flooding_rate_sequence"
-    ],
+    "default_target_contract": "CONTROL_CORE",
+    "target_contracts": {
+      "CONTROL_CORE": {
+        "required_targets": [
+          "node_depth",
+          "node_flooding_rate",
+          "storage_volume",
+          "managed_facility_flow"
+        ],
+        "optional_targets": [
+          "outfall_flow"
+        ],
+        "formal_claim": "control-oriented hydraulic trajectory surrogate"
+      },
+      "FULL_HYDRAULIC": {
+        "required_targets": [
+          "node_depth",
+          "node_flooding_rate",
+          "storage_volume",
+          "managed_facility_flow",
+          "outfall_flow"
+        ],
+        "optional_targets": [],
+        "formal_claim": "extended hydraulic trajectory surrogate including explicit outfall discharge"
+      }
+    },
+    "system_flooding_rate_sequence": "derived_from_node_flooding_rate",
     "kpi_derivation": {
       "PFV": "integral of candidate-minus-no_control priority-node flooding-rate sequence",
       "TFV": "integral of candidate-minus-dynamic_internal system flooding-rate sequence",
@@ -107,26 +139,16 @@
     },
     "independent_free_standing_kpi_head_authoritative": false,
     "missing_reference_policy": "fail_closed_no_substitution",
-    "formal_target_coverage": {
-      "node_depth": "required",
-      "node_flooding_rate": "required",
-      "storage_volume": "required",
-      "managed_facility_flow": "required",
-      "outfall_flow": "required",
-      "system_flooding_rate_sequence": "derived_from_node_flooding_rate"
-    },
     "authoritative_raw_recorder": "sewerrtc.simulation.v42_hydraulic_recorder.record_v42_hydraulic_targets",
     "fixed_train1200_or_train1600_quota_required": false,
-    "current_known_data_gap": {
-      "legacy_detail_outfall_flow": "absent_in_existing_generic_detail_writer",
-      "formal_training_before_new_target_coverage_audit_passes": false
-    }
+    "missing_target_imputation_allowed": false
   },
-  "step3_pfv_first_rolling_mpc": {
+  "step3_pfv_budgeted_tfv_rolling_mpc": {
     "selector": "sewerrtc.control.pfvfirst_mpc_v42.decide_pfvfirst_mpc",
+    "control_objective_contract": "PROJECT6_V42_PFV_BUDGETED_TFV_MPC_V1",
     "hard_constraints": [
-      "PFV_safety_vs_no_control",
-      "Peak_safety_vs_dynamic_internal",
+      "PFV_noninferiority_budget_vs_no_control",
+      "priority_node_depth_safety",
       "K",
       "bounds",
       "rate",
@@ -137,7 +159,20 @@
       "OOD",
       "executability"
     ],
-    "performance_objective": "delta_TFV_DI + lambda1*J_action + lambda2*J_terminal + lambda3*J_uncertainty",
+    "pfv_noninferiority": {
+      "reference": "no_control",
+      "absolute_allowance_m3": 100.0,
+      "relative_allowance_fraction": 0.05,
+      "decision_rule": "PFV_delta_UCB <= 100 + 0.05 * PFV_no_control"
+    },
+    "priority_depth_safety": {
+      "nodes": "PFV_CORE8_V1",
+      "limit_rule": "min(0.95 * node_max_depth, node_max_depth - 0.05m)",
+      "decision_rule": "priority_depth_UCB <= node_specific_limit"
+    },
+    "performance_objective": "delta_TFV_DI + lambda_peak*positive(delta_Peak_DI) + lambda_action*J_action + lambda_terminal*J_terminal + lambda_uncertainty*J_uncertainty",
+    "peak_is_hard_safety_constraint": false,
+    "peak_positive_excess_penalty_weight_seconds": 600.0,
     "tfv_is_hard_safety_constraint": false,
     "safety_violation_can_be_compensated_by_performance": false,
     "safe_set_empty": "execute_frozen_fallback",
@@ -148,7 +183,7 @@
     "formal_evidence_requires_actual_readback_verification": true,
     "formal_evidence_requires_calibrated_uncertainty_and_ood_lineage": true
   },
-  "step4_closed_loop_and_blind_evaluation": {
+  "step4_closed_loop_and_heldout_evaluation": {
     "ordered_stages": [
       "true_state_offline_validation",
       "exact_swmm_closed_loop",
@@ -159,33 +194,41 @@
       "locked_validation",
       "formal_blind"
     ],
-    "v41_compact_gate_can_authorize": false,
-    "old_calibration_can_substitute_formal": false,
-    "old_locked_can_substitute_formal": false,
+    "evaluation_semantics": "current_generation_rainfall_group_holdout",
+    "historical_status_is_split_gate": false,
     "development_results_can_substitute_formal": false,
     "policy_lock_lineage": {
-      "challenge_locked_and_formal_must_match_policy_sha256": true,
-      "challenge_locked_and_formal_must_match_model_sha256": true,
-      "challenge_locked_and_formal_must_match_gat_model_sha256": true,
-      "challenge_locked_and_formal_must_match_fallback_contract_sha256": true
+      "challenge_locked_and_final_must_match_policy_sha256": true,
+      "challenge_locked_and_final_must_match_model_sha256": true,
+      "challenge_locked_and_final_must_match_gat_model_sha256": true,
+      "challenge_locked_and_final_must_match_fallback_contract_sha256": true
+    },
+    "challenge": {
+      "minimum_events": 12,
+      "current_generation_holdout_required": true,
+      "current_training_overlap_required": 0,
+      "post_evaluation_exclusion_allowed": false,
+      "policy_lock_required_before_evaluation": true,
+      "used_for_retraining": false
     },
     "locked_validation": {
       "minimum_events": 16,
-      "new_rainfall_sha_required": true,
+      "current_generation_holdout_required": true,
       "explicit_unique_rainfall_sha_list_required": true,
-      "revealed_rainfall_overlap_count_required": 0,
-      "post_reveal_exclusion_allowed": false,
-      "policy_lock_required_before_reveal": true,
+      "current_training_overlap_required": 0,
+      "post_evaluation_exclusion_allowed": false,
+      "policy_lock_required_before_evaluation": true,
       "used_for_retraining": false,
       "one_shot": true
     },
     "formal_blind": {
+      "semantic_name": "final_current_generation_held_out_test",
       "minimum_events": 24,
-      "new_rainfall_sha_required": true,
+      "current_generation_holdout_required": true,
       "explicit_unique_rainfall_sha_list_required": true,
-      "revealed_rainfall_overlap_count_required": 0,
-      "post_reveal_exclusion_allowed": false,
-      "policy_lock_required_before_reveal": true,
+      "current_training_overlap_required": 0,
+      "post_evaluation_exclusion_allowed": false,
+      "policy_lock_required_before_evaluation": true,
       "required_authoritative_strategies": [
         "Proposed",
         "EFD",
@@ -200,13 +243,13 @@
     }
   },
   "scientific_stop_conditions": [
-    "do not authorize R0 until full finite, numeric four-reference alignment, and rainfall-isolation manifests pass",
-    "do_not_train formal Step1 temporal GAT until independent sparse-sensor training/validation data and uncertainty/OOD calibration are available",
-    "do_not_train formal trajectory surrogate until the strict R0 materializer, raw Independent Oracle, and all required hydraulic target groups pass",
-    "do_not_run closed loop until true-state offline validation passes",
-    "do_not accept Step3 engineering/K/readback flags unless derived from actual projected/written/readback execution",
-    "do_not lock policy until exact, surrogate, and GAT-integrated closed loops pass",
-    "do not use Challenge, Locked Validation, or Formal events for development or retraining",
-    "do not claim Formal Blind from development, Calibration, historical Locked, or proxy-baseline evidence"
+    "do not authorize R0 until full finite, numeric four-reference alignment, and current rainfall-isolation manifests pass",
+    "do not train formal Step1/Step2 on rainfall groups assigned to current Calibration/Challenge/Locked/final held-out evaluation",
+    "do not train formal trajectory surrogate until strict Raw Readmission and the selected Step2 target contract pass",
+    "do not run closed loop until true-state offline validation passes",
+    "do not accept Step3 engineering/K/readback flags unless derived from actual projected/written/readback execution",
+    "do not lock policy until exact, surrogate, and GAT-integrated closed loops pass",
+    "do not use current Challenge, Locked Validation, or final held-out test groups for model-weight retraining",
+    "do not claim FULL_HYDRAULIC when explicit outfall supervision is absent"
   ]
 }
