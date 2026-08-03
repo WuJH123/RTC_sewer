@@ -1,31 +1,41 @@
-"""Canonical PFV-first rolling-MPC decision logic for the V4.2 paper line.
+"""Canonical PFV-budgeted rolling MPC for the V4.2 paper line.
 
-Safety and performance are deliberately separated:
+The controller separates *admission* from *performance*.
 
-Safety set
-~~~~~~~~~~
-Candidate must pass PFV non-inferiority vs No-control, Peak non-inferiority vs
-Dynamic Internal, K/bounds/rate/ramp/dwell/interlock, uncertainty/OOD and
-executability checks.
+Hard admission
+--------------
+A Candidate must satisfy:
 
-Performance objective inside the safety set
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    ΔTFV_DI + λ1 J_action + λ2 J_terminal + λ3 J_uncertainty
+* priority flooding non-inferiority relative to No-control with a frozen budget
+  ``100 m3 + 5% * PFV_no_control`` (evaluated on a one-sided UCB);
+* node-specific priority-depth safety when depth limits are supplied;
+* Engineering36 K/bounds/rate/ramp/dwell/interlock constraints;
+* uncertainty/OOD/executability gates.
 
-TFV is not allowed to compensate a safety violation because unsafe candidates
-are removed before the objective is evaluated.  If the safe set is empty, or
-selection raises an exception, the frozen fallback is executed.
+Performance inside the admitted set
+-----------------------------------
+The primary objective is total flooding volume relative to Dynamic Internal.
+System peak is no longer a zero-tolerance hard gate; only its positive excess
+relative to Dynamic Internal is penalised. Action movement, terminal risk and
+model uncertainty are also penalised.
+
+If the admitted set is empty, or candidate selection fails, the frozen fallback
+is executed. A performance improvement can never compensate a hard admission
+violation.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterable, Mapping, Sequence
+from typing import Mapping, Sequence
 
 import numpy as np
 
 
 @dataclass(frozen=True)
 class MPCWeights:
+    # Convert a positive peak-rate excess into an interpretable volume-equivalent
+    # penalty. 600 s is one control interval.
+    peak: float = 600.0
     action: float = 0.05
     terminal: float = 0.10
     uncertainty: float = 0.10
@@ -33,9 +43,20 @@ class MPCWeights:
 
 @dataclass(frozen=True)
 class SafetyMargins:
-    pfv_delta_ucb_max_m3: float = 0.0
-    peak_delta_ucb_max_m3s: float = 0.0
+    pfv_absolute_allowance_m3: float = 100.0
+    pfv_relative_allowance_fraction: float = 0.05
     max_changed_facilities: int = 8
+    # Backward-compatible API: legacy callers that do not yet provide predicted
+    # priority-depth arrays can opt out. Formal/qualification V4.2 runners must
+    # set this True and supply per-node UCB/limit arrays on every Candidate.
+    require_priority_depth: bool = False
+
+    def pfv_allowance_m3(self, no_control_pfv_m3: float) -> float:
+        ref = max(0.0, float(no_control_pfv_m3))
+        return float(
+            self.pfv_absolute_allowance_m3
+            + self.pfv_relative_allowance_fraction * ref
+        )
 
 
 @dataclass(frozen=True)
@@ -62,7 +83,10 @@ class EngineeringStatus:
 class MPCandidate:
     candidate_id: str
     action_sequence: np.ndarray
+    # Candidate-minus-No-control priority flooding UCB [m3].
     pfv_delta_ucb_m3: float
+    # Candidate-minus-Dynamic-Internal peak rate [m3/s]. Kept under the legacy
+    # field name for schema compatibility; it is now a performance term.
     peak_delta_ucb_m3s: float
     tfv_delta_di_m3: float
     action_cost: float
@@ -73,6 +97,10 @@ class MPCandidate:
     uncertainty_pass: bool
     ood_pass: bool
     executable: bool
+    # Additional inputs for the PFV budget and priority-depth hard safety.
+    pfv_no_control_m3: float = 0.0
+    priority_depth_ucb_m: tuple[float, ...] = field(default_factory=tuple)
+    priority_depth_limit_m: tuple[float, ...] = field(default_factory=tuple)
     metadata: Mapping[str, object] = field(default_factory=dict)
 
 
@@ -91,6 +119,8 @@ class CandidateAudit:
     safe: bool
     rejection_reasons: tuple[str, ...]
     objective: float | None
+    pfv_allowance_m3: float | None = None
+    maximum_priority_depth_exceedance_m: float | None = None
 
 
 @dataclass(frozen=True)
@@ -114,6 +144,18 @@ def _validate_action_sequence(name: str, sequence: np.ndarray) -> np.ndarray:
     return arr
 
 
+def _priority_depth_exceedance(candidate: MPCandidate) -> float | None:
+    depths = np.asarray(candidate.priority_depth_ucb_m, dtype=float).reshape(-1)
+    limits = np.asarray(candidate.priority_depth_limit_m, dtype=float).reshape(-1)
+    if depths.size == 0 and limits.size == 0:
+        return None
+    if depths.size == 0 or limits.size == 0 or depths.shape != limits.shape:
+        raise ValueError("priority depth UCB/limit arrays must have the same non-zero shape")
+    if not np.isfinite(depths).all() or not np.isfinite(limits).all():
+        raise ValueError("priority depth UCB/limit arrays must be finite")
+    return float(np.max(depths - limits))
+
+
 def audit_candidate_safety(
     candidate: MPCandidate,
     *,
@@ -125,15 +167,26 @@ def audit_candidate_safety(
     except ValueError:
         reasons.append("invalid_action_sequence")
 
+    allowance: float | None = None
+    if not np.isfinite(float(candidate.pfv_no_control_m3)):
+        reasons.append("no_control_pfv_not_finite")
+    else:
+        allowance = margins.pfv_allowance_m3(float(candidate.pfv_no_control_m3))
+
     if not np.isfinite(float(candidate.pfv_delta_ucb_m3)):
         reasons.append("pfv_uncertainty_not_finite")
-    elif float(candidate.pfv_delta_ucb_m3) > float(margins.pfv_delta_ucb_max_m3):
-        reasons.append("pfv_safety_violation_vs_no_control")
+    elif allowance is not None and float(candidate.pfv_delta_ucb_m3) > allowance:
+        reasons.append("pfv_noninferiority_budget_exceeded_vs_no_control")
 
-    if not np.isfinite(float(candidate.peak_delta_ucb_m3s)):
-        reasons.append("peak_uncertainty_not_finite")
-    elif float(candidate.peak_delta_ucb_m3s) > float(margins.peak_delta_ucb_max_m3s):
-        reasons.append("peak_safety_violation_vs_dynamic_internal")
+    depth_exceedance: float | None = None
+    try:
+        depth_exceedance = _priority_depth_exceedance(candidate)
+        if margins.require_priority_depth and depth_exceedance is None:
+            reasons.append("priority_depth_safety_missing")
+        elif depth_exceedance is not None and depth_exceedance > 0.0:
+            reasons.append("priority_depth_safety_violation")
+    except ValueError as exc:
+        reasons.append(f"priority_depth_safety_invalid:{exc}")
 
     if int(candidate.changed_facilities) < 0:
         reasons.append("negative_changed_facility_count")
@@ -149,30 +202,34 @@ def audit_candidate_safety(
     if not candidate.executable:
         reasons.append("candidate_not_executable")
 
-    safe = not reasons
     return CandidateAudit(
         candidate_id=str(candidate.candidate_id),
-        safe=safe,
+        safe=not reasons,
         rejection_reasons=tuple(reasons),
         objective=None,
+        pfv_allowance_m3=allowance,
+        maximum_priority_depth_exceedance_m=depth_exceedance,
     )
 
 
 def performance_objective(candidate: MPCandidate, *, weights: MPCWeights) -> float:
-    """Evaluate performance only after hard-safety admission."""
+    """Evaluate TFV-first performance only after hard-safety admission."""
     terms = (
         float(candidate.tfv_delta_di_m3),
+        float(candidate.peak_delta_ucb_m3s),
         float(candidate.action_cost),
         float(candidate.terminal_cost),
         float(candidate.uncertainty_cost),
     )
     if not all(np.isfinite(v) for v in terms):
         raise ValueError(f"candidate {candidate.candidate_id} has non-finite objective term")
+    positive_peak_excess = max(0.0, terms[1])
     return float(
         terms[0]
-        + float(weights.action) * terms[1]
-        + float(weights.terminal) * terms[2]
-        + float(weights.uncertainty) * terms[3]
+        + float(weights.peak) * positive_peak_excess
+        + float(weights.action) * terms[2]
+        + float(weights.terminal) * terms[3]
+        + float(weights.uncertainty) * terms[4]
     )
 
 
@@ -198,6 +255,8 @@ def select_safe_candidate(
                     safe=False,
                     rejection_reasons=("objective_not_finite", str(exc)),
                     objective=None,
+                    pfv_allowance_m3=audit.pfv_allowance_m3,
+                    maximum_priority_depth_exceedance_m=audit.maximum_priority_depth_exceedance_m,
                 )
             )
             continue
@@ -207,6 +266,8 @@ def select_safe_candidate(
                 safe=True,
                 rejection_reasons=(),
                 objective=score,
+                pfv_allowance_m3=audit.pfv_allowance_m3,
+                maximum_priority_depth_exceedance_m=audit.maximum_priority_depth_exceedance_m,
             )
         )
         safe_scored.append((score, str(candidate.candidate_id), candidate))
@@ -242,6 +303,7 @@ def execute_frozen_fallback(
         metadata={
             "fallback_contract_hash": fallback.contract_hash,
             "safety_and_performance_separated": True,
+            "control_objective_contract": "PROJECT6_V42_PFV_BUDGETED_TFV_MPC_V1",
         },
     )
 
@@ -254,12 +316,7 @@ def decide_pfvfirst_mpc(
     weights: MPCWeights | None = None,
     expected_fallback_contract_hash: str | None = None,
 ) -> MPCDecision:
-    """Return first action of the best safe candidate or the frozen fallback.
-
-    This function is deliberately exception-safe around candidate scoring.  A
-    candidate/solver-side error cannot promote an unsafe action; it falls back
-    to the frozen safety policy.
-    """
+    """Return the first action of the best admitted candidate or fallback."""
     margins = margins or SafetyMargins()
     weights = weights or MPCWeights()
     try:
@@ -290,14 +347,18 @@ def decide_pfvfirst_mpc(
         execute_action=sequence[0].copy(),
         selected_sequence=sequence.copy(),
         used_fallback=False,
-        reason="minimum_tfv_objective_within_hard_safety_set",
+        reason="minimum_tfv_objective_within_pfv_budget_and_depth_safe_set",
         objective=objective,
         audits=audits,
         metadata={
-            "objective": "delta_tfv_di + lambda_action*J_action + lambda_terminal*J_terminal + lambda_uncertainty*J_uncertainty",
+            "objective": (
+                "delta_tfv_di + lambda_peak*positive(delta_peak_di) + "
+                "lambda_action*J_action + lambda_terminal*J_terminal + "
+                "lambda_uncertainty*J_uncertainty"
+            ),
             "hard_constraints": [
-                "PFV_vs_no_control",
-                "Peak_vs_dynamic_internal",
+                "PFV_budget_vs_no_control",
+                "priority_depth_safety_when_required",
                 "K",
                 "bounds",
                 "rate",
@@ -308,7 +369,10 @@ def decide_pfvfirst_mpc(
                 "OOD",
                 "executability",
             ],
-            "tfv_is_hard_safety_constraint": False,
+            "pfv_absolute_allowance_m3": margins.pfv_absolute_allowance_m3,
+            "pfv_relative_allowance_fraction": margins.pfv_relative_allowance_fraction,
+            "peak_is_performance_penalty_not_hard_gate": True,
             "safety_and_performance_separated": True,
+            "control_objective_contract": "PROJECT6_V42_PFV_BUDGETED_TFV_MPC_V1",
         },
     )
