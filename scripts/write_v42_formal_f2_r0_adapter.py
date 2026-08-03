@@ -95,6 +95,9 @@ def main() -> int:
         "source_datasets": sorted(sources),
         "formal_f2_prepare_sha256": sha256_file(args.formal_root / "prepare" / "FORMAL_F2_PREPARE_AUDIT.json"),
         "formal_f2_raw_admission_sha256": sha256_file(args.formal_root / "step2" / "FORMAL_F2_STEP2_RAW_ADMISSION_AUDIT.json"),
+        "raw_manifest_sha256": sha256_file(args.formal_root / "step2" / "FORMAL_F2_STEP2_RAW_MANIFEST.parquet"),
+        "event_ledger_sha256": sha256_file(args.formal_root / "prepare" / "FORMAL_F2_EVENT_LEDGER.csv"),
+        "step1_manifest_sha256": sha256_file(args.formal_root / "prepare" / "FORMAL_F2_STEP1_WINDOW_MANIFEST.parquet"),
     }
     (args.output_root / "data_reuse_audit.json").write_text(json.dumps(audit, indent=2, allow_nan=False), encoding="utf-8")
     reusable = {
