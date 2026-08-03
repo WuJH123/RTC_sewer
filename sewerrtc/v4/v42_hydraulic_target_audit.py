@@ -1,8 +1,16 @@
-"""Audit raw SWMM detail files for the trajectory-first V4.2 target contract.
+"""Audit raw SWMM detail files for V4.2 Step2 target contracts.
 
-The audit distinguishes core hydraulic trajectory supervision from the extended
-explicit-outfall target. Missing targets are reported as missing and are never
-reconstructed from another variable here.
+Two explicit contracts are supported:
+
+CONTROL_CORE
+    node depth, node flooding rate, storage volume, managed-facility flow.
+
+FULL_HYDRAULIC
+    CONTROL_CORE plus explicit outfall flow.
+
+Missing targets are reported as missing and are never reconstructed or zero
+filled from another variable. Backward-compatible aliases ``core_trajectory``
+and ``formal_complete`` are retained for existing audit readers.
 """
 from __future__ import annotations
 
@@ -27,7 +35,7 @@ class TargetCoverage:
     missing_columns: dict[str, list[str]]
 
     @property
-    def core_trajectory_complete(self) -> bool:
+    def control_core_complete(self) -> bool:
         return bool(
             self.node_depth
             and self.node_flooding_rate
@@ -36,8 +44,17 @@ class TargetCoverage:
         )
 
     @property
+    def full_hydraulic_complete(self) -> bool:
+        return bool(self.control_core_complete and self.outfall_flow)
+
+    @property
+    def core_trajectory_complete(self) -> bool:
+        return self.control_core_complete
+
+    @property
     def formal_complete(self) -> bool:
-        return bool(self.core_trajectory_complete and self.outfall_flow)
+        """Legacy alias for the old extended FULL_HYDRAULIC contract."""
+        return self.full_hydraulic_complete
 
     def as_dict(self) -> dict:
         return {
@@ -47,6 +64,8 @@ class TargetCoverage:
             "storage_volume": self.storage_volume,
             "managed_facility_flow": self.managed_facility_flow,
             "outfall_flow": self.outfall_flow,
+            "control_core_complete": self.control_core_complete,
+            "full_hydraulic_complete": self.full_hydraulic_complete,
             "core_trajectory_complete": self.core_trajectory_complete,
             "formal_complete": self.formal_complete,
             "finite_fraction": self.finite_fraction,
@@ -58,7 +77,9 @@ def _expected(prefix: str, ids: Iterable[str]) -> list[str]:
     return [f"{prefix}{str(item)}" for item in ids]
 
 
-def _coverage(df: pd.DataFrame, columns: list[str]) -> tuple[bool, float, list[str]]:
+def _coverage(
+    df: pd.DataFrame, columns: list[str]
+) -> tuple[bool, float, list[str]]:
     missing = [c for c in columns if c not in df.columns]
     if missing or not columns:
         return False, 0.0, missing
@@ -131,25 +152,31 @@ def audit_detail_pool(
                 outfall_node_ids=outfall_node_ids,
             ).as_dict()
         )
-    core_targets = [
+    control_core_count = sum(bool(row["control_core_complete"]) for row in rows)
+    full_count = sum(bool(row["full_hydraulic_complete"]) for row in rows)
+    control_core_targets = [
         "node_depth",
         "node_flooding_rate",
         "storage_volume",
         "managed_facility_flow",
     ]
-    extended_targets = ["outfall_flow"]
-    core_count = sum(bool(row["core_trajectory_complete"]) for row in rows)
-    formal_count = sum(bool(row["formal_complete"]) for row in rows)
     return {
         "contract": "PROJECT6_V42_PAPER_WORKFLOW_V1",
         "detail_count": len(rows),
-        "core_trajectory_complete_count": int(core_count),
-        "formal_complete_count": int(formal_count),
-        "core_trajectory_complete": bool(rows) and core_count == len(rows),
-        "formal_complete": bool(rows) and formal_count == len(rows),
-        "core_target_groups": core_targets,
-        "extended_target_groups": extended_targets,
-        "required_target_groups": core_targets + extended_targets,
+        "default_target_contract": "CONTROL_CORE",
+        "control_core_complete_count": int(control_core_count),
+        "full_hydraulic_complete_count": int(full_count),
+        "control_core_complete": bool(rows) and control_core_count == len(rows),
+        "full_hydraulic_complete": bool(rows) and full_count == len(rows),
+        "core_trajectory_complete_count": int(control_core_count),
+        "formal_complete_count": int(full_count),
+        "core_trajectory_complete": bool(rows) and control_core_count == len(rows),
+        "formal_complete": bool(rows) and full_count == len(rows),
+        "control_core_required_targets": control_core_targets,
+        "full_hydraulic_additional_targets": ["outfall_flow"],
+        "core_target_groups": control_core_targets,
+        "extended_target_groups": ["outfall_flow"],
+        "required_target_groups": control_core_targets,
         "sample_lineage_sha256": str(sample_lineage_sha256 or ""),
         "population_lineage_required_for_formal_admission": True,
         "rows": rows,
@@ -159,4 +186,6 @@ def audit_detail_pool(
 def write_audit(path: str | Path, payload: dict) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(payload, indent=2, allow_nan=False), encoding="utf-8")
+    target.write_text(
+        json.dumps(payload, indent=2, allow_nan=False), encoding="utf-8"
+    )
