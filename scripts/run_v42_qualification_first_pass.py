@@ -1,9 +1,14 @@
 """Restartable qualification-first orchestration for the V4.2 28-stage chain.
 
-This runner accelerates software qualification by using a small, diverse subset
-of already admitted development evidence.  It never writes Formal evidence and
-never consumes untouched Calibration/Locked/Challenge/Formal-Blind rainfalls.
-The expensive Formal production line remains unchanged and fail-closed.
+The core runner reuses already admitted development evidence and executes the
+same theory-facing interfaces used later by Formal production. Qualification is
+kept isolated from Formal evidence paths. The current core path is:
+
+prepare subset -> Step1 -> causal 13-frame GAT -> CONTROL_CORE target
+materialisation -> Step2.
+
+Stages 13-28 still require the authoritative micro closed-loop runner; this file
+does not fabricate those later results.
 """
 from __future__ import annotations
 
@@ -34,7 +39,7 @@ STAGES = (
     "13_new_calibration_authoritative_swmm",
     "14_calibration_data_bridge",
     "15_step1_uncertainty_ood_calibration",
-    "16_step2_pfv_peak_safety_calibration",
+    "16_step2_pfv_depth_safety_calibration",
     "17_compile_step1_step2_evidence",
     "18_step3_authoritative_engineering_audit",
     "19_compile_step3_evidence",
@@ -70,7 +75,9 @@ def _run(command: list[str], root: Path) -> None:
         print(
             json.dumps(
                 {
-                    "type": "SCIENTIFIC_GATE_FAIL" if exc.returncode == 3 else "CHILD_PROCESS_FAIL",
+                    "type": "SCIENTIFIC_GATE_FAIL"
+                    if exc.returncode == 3
+                    else "CHILD_PROCESS_FAIL",
                     "returncode": int(exc.returncode),
                     "command": command,
                 },
@@ -114,29 +121,54 @@ def _status(root: Path, qualification: Path) -> dict[str, Any]:
     formal = root / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2"
     statuses = {stage: "NOT_STARTED" for stage in STAGES}
     formal_inputs = {
-        "01_formal_source_ledger_prepare": formal / "prepare/FORMAL_F2_PREPARE_AUDIT.json",
+        "01_formal_source_ledger_prepare": formal
+        / "prepare/FORMAL_F2_PREPARE_AUDIT.json",
         "02_formal_step1_pool": formal / "prepare/FORMAL_F2_STEP1_POOL_AUDIT.json",
-        "03_formal_step2_raw_readmission": formal / "step2/FORMAL_F2_STEP2_RAW_ADMISSION_AUDIT.json",
-        "04_formal_evaluation_plan": formal / "evaluation_plan/FORMAL_F2_EVALUATION_PLAN_AUDIT.json",
-        "05_formal_r0_adapter": root / "outputs/project6_dual_reference_v4/final_v4/v42_paper/data_reuse/FORMAL_F2_R0_ADAPTER_AUDIT.json",
+        "03_formal_step2_raw_readmission": formal
+        / "step2/FORMAL_F2_STEP2_RAW_ADMISSION_AUDIT.json",
+        "04_formal_evaluation_plan": formal
+        / "evaluation_plan/FORMAL_F2_EVALUATION_PLAN_AUDIT.json",
+        "05_formal_r0_adapter": root
+        / "outputs/project6_dual_reference_v4/final_v4/v42_paper/data_reuse/FORMAL_F2_R0_ADAPTER_AUDIT.json",
     }
     for stage, path in formal_inputs.items():
         statuses[stage] = "PASS_REUSABLE" if _pass_json(path) else "STALE_OR_INVALID"
 
-    for seed, stage in ((17, "06_step1_seed17"), (42, "07_step1_seed42"), (73, "08_step1_seed73")):
+    for seed, stage in (
+        (17, "06_step1_seed17"),
+        (42, "07_step1_seed42"),
+        (73, "08_step1_seed73"),
+    ):
         report = qualification / f"step1/seed_{seed}/qualification_step1_report.json"
         model = qualification / f"step1/seed_{seed}/best_model.pt"
-        statuses[stage] = "PASS_REUSABLE" if _pass_json(report) and model.exists() else "NOT_STARTED"
+        statuses[stage] = (
+            "PASS_REUSABLE" if _pass_model_report(report, "qualification_step1_single_seed") and model.exists() else "NOT_STARTED"
+        )
 
     gat_audit = qualification / "step2/QUALIFICATION_GAT_HISTORY_AUDIT.json"
-    statuses["09_causal_13frame_gat_history"] = "PASS_REUSABLE" if _pass_json(gat_audit) else "NOT_STARTED"
-    for seed, stage in ((17, "10_step2_seed17"), (42, "11_step2_seed42"), (73, "12_step2_seed73")):
+    target_audit = qualification / "step2/QUALIFICATION_STEP2_CONTROL_CORE_MANIFEST_TARGET_AUDIT.json"
+    statuses["09_causal_13frame_gat_history"] = (
+        "PASS_REUSABLE"
+        if _pass_json(gat_audit) and _pass_json(target_audit)
+        else "NOT_STARTED"
+    )
+    for seed, stage in (
+        (17, "10_step2_seed17"),
+        (42, "11_step2_seed42"),
+        (73, "12_step2_seed73"),
+    ):
         report = qualification / f"step2/models/seed_{seed}/qualification_step2_report.json"
         model = qualification / f"step2/models/seed_{seed}/best_model.pt"
-        statuses[stage] = "PASS_REUSABLE" if _pass_model_report(report, "qualification_step2_single_seed") and model.exists() else "NOT_STARTED"
+        statuses[stage] = (
+            "PASS_REUSABLE"
+            if _pass_model_report(report, "qualification_step2_single_seed") and model.exists()
+            else "NOT_STARTED"
+        )
 
     passed = [stage for stage in STAGES if statuses[stage] == "PASS_REUSABLE"]
-    next_stage = next((stage for stage in STAGES if statuses[stage] != "PASS_REUSABLE"), None)
+    next_stage = next(
+        (stage for stage in STAGES if statuses[stage] != "PASS_REUSABLE"), None
+    )
     payload = {
         "contract_id": QUALIFICATION_CONTRACT,
         "qualification_only": True,
@@ -145,17 +177,21 @@ def _status(root: Path, qualification: Path) -> dict[str, Any]:
         "stage_status": statuses,
         "passed_stage_count": len(passed),
         "next_stage": next_stage,
-        "qualification_core_complete": all(statuses[stage] == "PASS_REUSABLE" for stage in STAGES[:12]),
-        "formal_untouched_events_consumed": False,
+        "qualification_core_complete": all(
+            statuses[stage] == "PASS_REUSABLE" for stage in STAGES[:12]
+        ),
+        "step2_target_contract": "CONTROL_CORE",
+        "historical_status_is_split_gate": False,
         "formal_evidence_generated": False,
         "note": (
-            "Stages 13-28 must be implemented/executed as micro authoritative qualification stages under this root. "
-            "They must remain development-only and cannot satisfy Formal paper gates."
+            "Stages 13-28 require authoritative qualification micro-runners. "
+            "They remain development-only and cannot satisfy Formal paper gates."
         ),
     }
     qualification.mkdir(parents=True, exist_ok=True)
     (qualification / "QUALIFICATION_28_STAGE_STATUS.json").write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False, allow_nan=False), encoding="utf-8"
+        json.dumps(payload, indent=2, ensure_ascii=False, allow_nan=False),
+        encoding="utf-8",
     )
     return payload
 
@@ -170,11 +206,24 @@ def main() -> int:
     )
     parser.add_argument(
         "--stage",
-        choices=("prepare", "step1", "step2", "core", "core-primary", "core-multiseed", "status"),
+        choices=(
+            "prepare",
+            "step1",
+            "step2",
+            "core",
+            "core-primary",
+            "core-multiseed",
+            "status",
+        ),
         default="status",
     )
     parser.add_argument("--force", action="store_true")
-    parser.add_argument("--refresh", action="append", choices=("prepare", "gat", "step2", "all"), default=[])
+    parser.add_argument(
+        "--refresh",
+        action="append",
+        choices=("prepare", "gat", "step2", "all"),
+        default=[],
+    )
     args = parser.parse_args()
 
     config = _read_json(args.config)
@@ -185,8 +234,16 @@ def main() -> int:
     prepare_audit = qualification / "QUALIFICATION_PREPARE_AUDIT.json"
     step1_manifest = qualification / "QUALIFICATION_STEP1_WINDOW_MANIFEST.parquet"
     step2_raw = qualification / "QUALIFICATION_STEP2_RAW_MANIFEST.parquet"
-    history_source_manifest = qualification / "QUALIFICATION_GAT_HISTORY_SOURCE_MANIFEST.parquet"
+    history_source_manifest = (
+        qualification / "QUALIFICATION_GAT_HISTORY_SOURCE_MANIFEST.parquet"
+    )
     step2_gat = qualification / "step2/QUALIFICATION_STEP2_GAT_MANIFEST.parquet"
+    step2_control_core = (
+        qualification / "step2/QUALIFICATION_STEP2_CONTROL_CORE_MANIFEST.parquet"
+    )
+    target_audit = step2_control_core.with_name(
+        step2_control_core.stem + "_TARGET_AUDIT.json"
+    )
 
     def prepare() -> None:
         refresh_prepare = args.force or bool(set(args.refresh) & {"prepare", "all"})
@@ -218,7 +275,11 @@ def main() -> int:
         for seed in seeds:
             output = qualification / f"step1/seed_{seed}"
             report = output / "qualification_step1_report.json"
-            if not args.force and _pass_json(report) and (output / "best_model.pt").exists():
+            if (
+                not args.force
+                and _pass_model_report(report, "qualification_step1_single_seed")
+                and (output / "best_model.pt").exists()
+            ):
                 old = _read_json(report)
                 if old.get("input_manifest_sha256") == manifest_sha:
                     print(f"REUSE: qualification Step1 seed {seed}", flush=True)
@@ -253,14 +314,19 @@ def main() -> int:
             )
             payload = _read_json(report)
             payload["input_manifest_sha256"] = manifest_sha
-            report.write_text(json.dumps(payload, indent=2, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+            report.write_text(
+                json.dumps(payload, indent=2, ensure_ascii=False, allow_nan=False),
+                encoding="utf-8",
+            )
 
     def step2(primary_only: bool = False) -> None:
         step1(primary_only=primary_only)
         training = config["training"]
         primary = qualification / f"step1/seed_{training['primary_step1_seed']}"
         gat_audit = qualification / "step2/QUALIFICATION_GAT_HISTORY_AUDIT.json"
-        refresh_gat = args.force or bool(set(args.refresh) & {"prepare", "gat", "all"})
+        refresh_gat = args.force or bool(
+            set(args.refresh) & {"prepare", "gat", "all"}
+        )
         if refresh_gat or not (_pass_json(gat_audit) and step2_gat.exists()):
             _run(
                 [
@@ -289,14 +355,44 @@ def main() -> int:
         else:
             print("REUSE: qualification causal GAT history", flush=True)
 
-        gat_sha = _sha(step2_gat)
+        refresh_targets = args.force or bool(
+            set(args.refresh) & {"prepare", "gat", "step2", "all"}
+        )
+        if refresh_targets or not (_pass_json(target_audit) and step2_control_core.exists()):
+            _run(
+                [
+                    py,
+                    "-u",
+                    str(root / "scripts/materialize_v42_step2_target_contract.py"),
+                    "--project-root",
+                    str(root),
+                    "--input-manifest",
+                    str(step2_gat),
+                    "--output-manifest",
+                    str(step2_control_core),
+                    "--target-contract",
+                    "CONTROL_CORE",
+                    "--min-rainfall-groups",
+                    "65",
+                ],
+                root,
+            )
+        else:
+            print("REUSE: qualification CONTROL_CORE targets", flush=True)
+
+        target_sha = _sha(step2_control_core)
         seeds = [training["primary_step1_seed"]] if primary_only else training["seeds"]
+        refresh_models = args.force or bool(set(args.refresh) & {"step2", "all"})
         for seed in seeds:
             output = qualification / f"step2/models/seed_{seed}"
             report = output / "qualification_step2_report.json"
-            if not args.force and _pass_json(report) and (output / "best_model.pt").exists():
+            if (
+                not refresh_models
+                and _pass_model_report(report, "qualification_step2_single_seed")
+                and (output / "best_model.pt").exists()
+            ):
                 old = _read_json(report)
-                if old.get("input_manifest_sha256") == gat_sha:
+                if old.get("input_manifest_sha256") == target_sha:
                     print(f"REUSE: qualification Step2 seed {seed}", flush=True)
                     continue
             _run(
@@ -307,7 +403,7 @@ def main() -> int:
                     "--project-root",
                     str(root),
                     "--manifest",
-                    str(step2_gat),
+                    str(step2_control_core),
                     "--output-dir",
                     str(output),
                     "--seed",
@@ -322,8 +418,11 @@ def main() -> int:
                 root,
             )
             payload = _read_json(report)
-            payload["input_manifest_sha256"] = gat_sha
-            report.write_text(json.dumps(payload, indent=2, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+            payload["input_manifest_sha256"] = target_sha
+            report.write_text(
+                json.dumps(payload, indent=2, ensure_ascii=False, allow_nan=False),
+                encoding="utf-8",
+            )
 
     try:
         if args.stage == "prepare":
