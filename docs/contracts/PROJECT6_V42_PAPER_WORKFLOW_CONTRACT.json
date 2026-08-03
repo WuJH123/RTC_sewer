@@ -156,6 +156,7 @@
       "gat_integrated_closed_loop",
       "policy_lock",
       "challenge",
+      "locked_validation",
       "formal_blind"
     ],
     "v41_compact_gate_can_authorize": false,
@@ -163,9 +164,20 @@
     "old_locked_can_substitute_formal": false,
     "development_results_can_substitute_formal": false,
     "policy_lock_lineage": {
-      "challenge_and_formal_must_match_policy_sha256": true,
-      "challenge_and_formal_must_match_model_sha256": true,
-      "challenge_and_formal_must_match_fallback_contract_sha256": true
+      "challenge_locked_and_formal_must_match_policy_sha256": true,
+      "challenge_locked_and_formal_must_match_model_sha256": true,
+      "challenge_locked_and_formal_must_match_gat_model_sha256": true,
+      "challenge_locked_and_formal_must_match_fallback_contract_sha256": true
+    },
+    "locked_validation": {
+      "minimum_events": 16,
+      "new_rainfall_sha_required": true,
+      "explicit_unique_rainfall_sha_list_required": true,
+      "revealed_rainfall_overlap_count_required": 0,
+      "post_reveal_exclusion_allowed": false,
+      "policy_lock_required_before_reveal": true,
+      "used_for_retraining": false,
+      "one_shot": true
     },
     "formal_blind": {
       "minimum_events": 24,
@@ -173,7 +185,18 @@
       "explicit_unique_rainfall_sha_list_required": true,
       "revealed_rainfall_overlap_count_required": 0,
       "post_reveal_exclusion_allowed": false,
-      "policy_lock_required_before_reveal": true
+      "policy_lock_required_before_reveal": true,
+      "required_authoritative_strategies": [
+        "Proposed",
+        "EFD",
+        "Auto-RBC",
+        "All-close",
+        "No-control",
+        "Internal",
+        "Hold"
+      ],
+      "required_strategy_authority": "authoritative_swmm",
+      "each_strategy_event_count_must_equal_formal_event_count": true
     }
   },
   "scientific_stop_conditions": [
@@ -183,7 +206,7 @@
     "do_not_run closed loop until true-state offline validation passes",
     "do_not accept Step3 engineering/K/readback flags unless derived from actual projected/written/readback execution",
     "do_not lock policy until exact, surrogate, and GAT-integrated closed loops pass",
-    "do not use Challenge or Formal events for development or retraining",
-    "do not claim Formal Blind from development, Calibration, or historical Locked evidence"
+    "do not use Challenge, Locked Validation, or Formal events for development or retraining",
+    "do not claim Formal Blind from development, Calibration, historical Locked, or proxy-baseline evidence"
   ]
 }
