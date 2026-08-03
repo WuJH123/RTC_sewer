@@ -1,19 +1,15 @@
-"""Prepare Project6 V4.2 Formal F2 metadata and untouched evaluation ledger.
+"""Prepare Project6 V4.2 Formal F2 metadata and current-generation holdouts.
 
-The central invariant is that *data eligibility* and *historical contamination*
-are different concepts:
+The current split policy is deliberately simple and reproducible:
 
-- ``formal_step1_allowed`` / ``formal_step2_allowed`` say whether a source may be
-  used by a model after the F2 ledger has assigned roles;
-- ``historically_revealed`` says whether the rainfall itself has already been
-  exposed by prior development/evaluation and therefore cannot be selected as a
-  new F2 Calibration/Locked/Challenge/Blind rainfall;
-- current Step2 rows that are already admitted (or pending raw re-admission) are
-  always contamination because F2 training will consume them;
-- event_inventory is an evaluation-selection authority, not contamination;
-- opportunity_pool is pre-control checkpoint-selection metadata. Its rows may be
-  used only after the ledger is frozen; evaluation-role rainfalls must never be
-  promoted to Step1 auxiliary training.
+* rainfall SHA/fingerprint is the grouping authority;
+* the current generation freezes disjoint model-development and held-out
+  Calibration/Locked/Challenge/Test roles before model training;
+* historical reveal/reserved labels are retained only as lineage diagnostics;
+  they do not by themselves exclude otherwise valid data;
+* every held-out rainfall group is excluded from Step1/Step2 model-weight
+  training in this generation;
+* opportunity metadata is used only after the ledger is frozen.
 """
 from __future__ import annotations
 
@@ -59,7 +55,6 @@ def _write(frame: pd.DataFrame, path: Path) -> None:
 
 
 def _inventory(root: Path, registry: dict[str, Any]) -> tuple[pd.DataFrame, str]:
-    """Return the first event inventory that exposes a real rainfall identity."""
     spec = dict(registry.get("sources", {}).get("event_inventory", {}) or {})
     for path in resolve_source_files(root, spec):
         if path.suffix.lower() not in {".csv", ".parquet"}:
@@ -79,13 +74,7 @@ def _bool_column(frame: pd.DataFrame, name: str, default: bool = False) -> pd.Se
 
 
 def _historical_contamination(source_all: pd.DataFrame) -> pd.DataFrame:
-    """Rows whose rainfall must be excluded from new F2 evaluation.
-
-    A source being *eligible* for Step1 is not by itself evidence that every
-    rainfall in the source has already been consumed. Conversely, any row that
-    is already part of the Step2 training population is contamination even if a
-    registry author accidentally marks the source as not historically revealed.
-    """
+    """Diagnostic-only table of historically exposed/training-capable rows."""
     if source_all.empty:
         return source_all.copy()
     revealed = _bool_column(source_all, "historically_revealed")
@@ -93,18 +82,23 @@ def _historical_contamination(source_all: pd.DataFrame) -> pd.DataFrame:
     admitted = _bool_column(source_all, "step2_accepted_from_manifest")
     pending = _bool_column(source_all, "raw_readmission_required")
     step2_training_population = step2_allowed & (admitted | pending)
-    out = source_all.loc[revealed | step2_training_population].copy()
-    return out
+    return source_all.loc[revealed | step2_training_population].copy()
 
 
 def _groups_for_events(frame: pd.DataFrame, events: set[str]) -> set[str]:
     if frame.empty or not events:
         return set()
-    event_col = next((c for c in ("event_id", "rainfall_event_id") if c in frame.columns), None)
+    event_col = next(
+        (c for c in ("event_id", "rainfall_event_id") if c in frame.columns), None
+    )
     if event_col is None:
         return set()
     subset = frame.loc[frame[event_col].astype(str).isin(events)]
-    return {g for g in (canonical_rain_group(r) for r in subset.to_dict("records")) if g}
+    return {
+        g
+        for g in (canonical_rain_group(r) for r in subset.to_dict("records"))
+        if g
+    }
 
 
 def _reserved(
@@ -112,15 +106,11 @@ def _reserved(
     source_all: pd.DataFrame,
     inventory: pd.DataFrame,
 ) -> tuple[set[str], set[str], dict[str, Any]]:
-    """Resolve historical reserved event IDs to rainfall groups fail-closed.
-
-    The legacy Formal-Blind adapter stores event IDs.  The old implementation
-    tried to recover rainfall SHA only from the rainfall table/source rows and
-    could therefore report ``reserved_event_count=36`` with
-    ``reserved_rainfall_group_count=0``.  The event inventory is now an explicit
-    third authority for the event->rainfall mapping.
-    """
-    adapter = root / "outputs/rainfall_library_v8_storage_variablepump/rainfall_event_table.formal_adapter.json"
+    """Resolve old reserved labels for lineage diagnostics only."""
+    adapter = root / (
+        "outputs/rainfall_library_v8_storage_variablepump/"
+        "rainfall_event_table.formal_adapter.json"
+    )
     table = adapter.with_name("rainfall_event_table.csv")
     events: set[str] = set()
     groups: set[str] = set()
@@ -129,13 +119,16 @@ def _reserved(
         "adapter_found": adapter.exists(),
         "rainfall_table_path": str(table),
         "rainfall_table_found": table.exists(),
+        "historical_reserved_is_current_split_gate": False,
     }
     if adapter.exists():
         payload = json.loads(adapter.read_text(encoding="utf-8"))
         split = text(payload.get("split", "")).casefold()
         if any(token in split for token in ("blind", "reserved", "challenge")):
             events.update(str(x) for x in payload.get("event_ids", []) if text(x))
-        audit.update({"adapter_split": payload.get("split"), "reserved_event_count": len(events)})
+        audit.update(
+            {"adapter_split": payload.get("split"), "reserved_event_count": len(events)}
+        )
 
     mapping_paths: list[Path] = []
     if adapter.exists():
@@ -182,11 +175,19 @@ def _reserved(
     return events, groups, audit
 
 
-def _contamination_audit(source_all: pd.DataFrame, contamination: pd.DataFrame, ledger: pd.DataFrame) -> dict[str, Any]:
+def _contamination_audit(
+    source_all: pd.DataFrame, contamination: pd.DataFrame, ledger: pd.DataFrame
+) -> dict[str, Any]:
     def n_groups(frame: pd.DataFrame) -> int:
         if frame.empty or "rainfall_group_key" not in frame.columns:
             return 0
-        return int(frame.loc[frame.rainfall_group_key.astype(str).ne(""), "rainfall_group_key"].astype(str).nunique())
+        return int(
+            frame.loc[
+                frame.rainfall_group_key.astype(str).ne(""), "rainfall_group_key"
+            ]
+            .astype(str)
+            .nunique()
+        )
 
     by_source: dict[str, int] = {}
     if not contamination.empty and "source_id" in contamination.columns:
@@ -196,51 +197,69 @@ def _contamination_audit(source_all: pd.DataFrame, contamination: pd.DataFrame, 
     return {
         "all_source_rows": int(len(source_all)),
         "all_source_rainfall_groups": n_groups(source_all),
-        "historical_contamination_rows": int(len(contamination)),
-        "historical_contamination_rainfall_groups": n_groups(contamination),
-        "historical_contamination_groups_by_source": by_source,
-        "ledger_unused_untouched_groups": int(roles.eq("unused_untouched").sum()),
-        "ledger_auxiliary_historical_groups": int(roles.eq("auxiliary").sum()),
+        "historical_diagnostic_rows": int(len(contamination)),
+        "historical_diagnostic_rainfall_groups": n_groups(contamination),
+        "historical_diagnostic_groups_by_source": by_source,
+        "historical_status_is_split_gate": False,
+        "ledger_unused_holdout_groups": int(roles.eq("unused_holdout").sum()),
+        "ledger_auxiliary_groups": int(roles.eq("auxiliary").sum()),
     }
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--project-root", type=Path, default=PROJECT_ROOT)
-    ap.add_argument("--registry", type=Path, default=PROJECT_ROOT / "configs/v42_formal_source_registry_f2.yaml")
+    ap.add_argument(
+        "--registry",
+        type=Path,
+        default=PROJECT_ROOT / "configs/v42_formal_source_registry_f2.yaml",
+    )
     ap.add_argument(
         "--step1-window-manifest",
         type=Path,
-        default=PROJECT_ROOT / "outputs/project6_dual_reference_v4/final_v4/v42_paper/step1_gat/dataset/step1_window_manifest.parquet",
+        default=PROJECT_ROOT
+        / "outputs/project6_dual_reference_v4/final_v4/v42_paper/step1_gat/"
+        "dataset/step1_window_manifest.parquet",
     )
     ap.add_argument(
         "--output-dir",
         type=Path,
-        default=PROJECT_ROOT / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2/prepare",
+        default=PROJECT_ROOT
+        / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2/prepare",
     )
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--step1-validation-fraction", type=float, default=0.15)
-    ap.add_argument("--min-train-rainfall-groups", type=int, default=FORMAL_TRAIN_MIN_GROUPS)
-    ap.add_argument("--calibration-groups", type=int, default=DEFAULT_COUNTS["calibration"])
-    ap.add_argument("--locked-groups", type=int, default=DEFAULT_COUNTS["locked_validation"])
-    ap.add_argument("--challenge-groups", type=int, default=DEFAULT_COUNTS["challenge"])
-    ap.add_argument("--blind-groups", type=int, default=DEFAULT_COUNTS["formal_blind"])
+    ap.add_argument(
+        "--min-train-rainfall-groups", type=int, default=FORMAL_TRAIN_MIN_GROUPS
+    )
+    ap.add_argument(
+        "--calibration-groups", type=int, default=DEFAULT_COUNTS["calibration"]
+    )
+    ap.add_argument(
+        "--locked-groups", type=int, default=DEFAULT_COUNTS["locked_validation"]
+    )
+    ap.add_argument(
+        "--challenge-groups", type=int, default=DEFAULT_COUNTS["challenge"]
+    )
+    ap.add_argument(
+        "--blind-groups", type=int, default=DEFAULT_COUNTS["formal_blind"]
+    )
     args = ap.parse_args()
 
     registry = load_registry(args.registry)
     source_all, source_audits = manifest_source_rows(args.project_root, registry)
     inventory, inventory_path = _inventory(args.project_root, registry)
-    reserved_events, reserved_groups, reserved_audit = _reserved(args.project_root, source_all, inventory)
-
-    # Contamination is derived from actual historical reveal/training status, not
-    # from mere eligibility.  This is the bug fixed by this revision.
+    reserved_events, reserved_groups, reserved_audit = _reserved(
+        args.project_root, source_all, inventory
+    )
     contamination = _historical_contamination(source_all)
 
     ledger = build_event_ledger(
-        contamination,
+        source_all,
         inventory=inventory,
         historical_reserved_groups=sorted(reserved_groups),
         seed=args.seed,
+        minimum_train_groups=args.min_train_rainfall_groups,
         evaluation_counts={
             "calibration": args.calibration_groups,
             "locked_validation": args.locked_groups,
@@ -249,10 +268,6 @@ def main() -> int:
         },
     )
     assert_zero_split_overlap(ledger)
-
-    # Training metadata must be built from the full registry population after the
-    # ledger is frozen.  formal_step2_metadata_pool admits only role=train rows,
-    # so evaluation/unused rainfalls cannot leak into Step2.
     step2 = formal_step2_metadata_pool(source_all, ledger)
 
     if not args.step1_window_manifest.exists():
@@ -272,16 +287,14 @@ def main() -> int:
     )
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    # Keep the full registry rows for the subsequent Step1 expansion.  The
-    # Step1 builder uses the frozen ledger to exclude evaluation/unused rainfalls
-    # from model training; writing only contamination rows here previously made
-    # source eligibility and contamination inseparable.
     _write(source_all, args.output_dir / "FORMAL_F2_SOURCE_ROWS.parquet")
     _write(contamination, args.output_dir / "FORMAL_F2_CONTAMINATION_ROWS.parquet")
     _write(ledger, args.output_dir / "FORMAL_F2_EVENT_LEDGER.csv")
     _write(provisional, args.output_dir / "FORMAL_F2_STEP1_WINDOW_MANIFEST.parquet")
     _write(step2, args.output_dir / "FORMAL_F2_STEP2_METADATA_POOL.parquet")
-    pd.DataFrame(source_audits).to_csv(args.output_dir / "FORMAL_F2_SOURCE_AUDIT.csv", index=False)
+    pd.DataFrame(source_audits).to_csv(
+        args.output_dir / "FORMAL_F2_SOURCE_AUDIT.csv", index=False
+    )
 
     summary = pool_summary(provisional, step2, ledger)
     summary.update(
@@ -289,15 +302,23 @@ def main() -> int:
             "status": "pass",
             "development_only": False,
             "formal_mainline_authorized": False,
+            "split_policy": "current_generation_rainfall_group_holdout",
+            "historical_status_is_split_gate": False,
             "registry_path": str(args.registry),
             "event_inventory_path": inventory_path,
             "reserved_audit": reserved_audit,
-            "contamination_audit": _contamination_audit(source_all, contamination, ledger),
+            "contamination_audit": _contamination_audit(
+                source_all, contamination, ledger
+            ),
             "source_count": len(registry.get("sources", {})),
-            "resolved_manifest_count": sum(1 for x in source_audits if x.get("status") == "read"),
+            "resolved_manifest_count": sum(
+                1 for x in source_audits if x.get("status") == "read"
+            ),
             "required_min_train_rainfall_groups": args.min_train_rainfall_groups,
             "raw_readmission_pending_rows": int(
-                step2.get("raw_readmission_pending", pd.Series(dtype=bool)).astype(bool).sum()
+                step2.get("raw_readmission_pending", pd.Series(dtype=bool))
+                .astype(bool)
+                .sum()
             )
             if not step2.empty
             else 0,
@@ -310,7 +331,9 @@ def main() -> int:
     if summary["formal_train_ledger_groups"] < args.min_train_rainfall_groups:
         reasons.append("formal_train_ledger_groups_below_minimum")
     if summary["step1_target_train_groups"] < args.min_train_rainfall_groups:
-        warnings.append("provisional_step1_target_groups_below_minimum_expand_from_structured_physical_sources")
+        warnings.append(
+            "provisional_step1_target_groups_below_minimum_expand_from_structured_physical_sources"
+        )
     if summary["step2_train_rainfall_groups"] < args.min_train_rainfall_groups:
         reasons.append("step2_metadata_groups_below_minimum_before_raw_readmission")
     if any(int(v) for v in split_overlap_matrix(ledger).values()):
@@ -325,10 +348,12 @@ def main() -> int:
     for role, required in required_counts:
         actual = int(summary["evaluation_group_counts"].get(role, 0))
         if actual < required:
-            reasons.append(f"{role}_untouched_group_shortfall:{actual}<{required}")
+            reasons.append(f"{role}_holdout_group_shortfall:{actual}<{required}")
 
     if reserved_events and not reserved_groups:
-        reasons.append("historical_reserved_events_could_not_map_to_rainfall_groups")
+        warnings.append(
+            "historical_reserved_events_could_not_map_to_rainfall_groups_lineage_only"
+        )
     if reasons:
         summary["status"] = "fail"
     summary["reasons"] = reasons
@@ -338,13 +363,22 @@ def main() -> int:
         json.dumps(summary, indent=2, ensure_ascii=False, allow_nan=False),
         encoding="utf-8",
     )
-    for role in ("train", "calibration", "locked_validation", "challenge", "formal_blind"):
+    for role in (
+        "train",
+        "calibration",
+        "locked_validation",
+        "challenge",
+        "formal_blind",
+    ):
         (args.output_dir / f"{role}_groups.json").write_text(
             json.dumps(
                 {
                     "formal_generation_id": FORMAL_GENERATION_ID,
+                    "split_policy": "current_generation_rainfall_group_holdout",
                     "groups": sorted(
-                        ledger.loc[ledger.formal_f2_role.eq(role), "rainfall_group_key"].astype(str)
+                        ledger.loc[
+                            ledger.formal_f2_role.eq(role), "rainfall_group_key"
+                        ].astype(str)
                     ),
                 },
                 indent=2,
