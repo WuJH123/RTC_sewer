@@ -13,6 +13,7 @@
     "step1_windows_per_group": 64,
     "step1_windows_per_physical_run": 2,
     "step2_rainfall_groups": 69,
+    "step2_min_checkpoint_min": 120,
     "step2_states_per_rainfall": 1,
     "step2_candidates_per_state": 3,
     "qualification_calibration_groups": 2,

@@ -97,10 +97,27 @@ def _bool_all(frame: pd.DataFrame, column: str) -> bool:
     return column in frame.columns and bool(frame[column].fillna(False).astype(bool).all())
 
 
-def _choose_step2_state(group: pd.DataFrame, candidates: int, seed: int) -> pd.DataFrame | None:
+def _choose_step2_state(
+    group: pd.DataFrame,
+    candidates: int,
+    seed: int,
+    min_checkpoint_min: float = 120.0,
+) -> pd.DataFrame | None:
     viable: list[tuple[str, pd.DataFrame]] = []
     for state_key, state in group.groupby("state_key", sort=True):
         state = state.copy()
+        if "checkpoint_min" not in state:
+            continue
+        checkpoints = pd.to_numeric(state["checkpoint_min"], errors="coerce").dropna()
+        # All candidate branches in a state must share one warm-up-valid
+        # checkpoint.  A state at t<120 cannot supply the causal t-120 history.
+        if (
+            checkpoints.empty
+            or checkpoints.nunique() != 1
+            or float(checkpoints.iloc[0]) < float(min_checkpoint_min)
+        ):
+            continue
+        state["checkpoint_min"] = pd.to_numeric(state["checkpoint_min"], errors="coerce")
         state["qualification_candidate_action_sha256"] = state.apply(_action_hash, axis=1)
         state = state[state["qualification_candidate_action_sha256"].astype(bool)].copy()
         state = state.drop_duplicates("qualification_candidate_action_sha256", keep="first")
@@ -191,7 +208,7 @@ def main() -> int:
     selected_step1_path = out / "QUALIFICATION_STEP1_WINDOW_MANIFEST.parquet"
     selected_step1.to_parquet(selected_step1_path, index=False)
 
-    raw_required = {"split_group_key", "state_key", "event_id"}
+    raw_required = {"split_group_key", "state_key", "event_id", "checkpoint_min"}
     missing = sorted(raw_required - set(raw.columns))
     if missing:
         raise KeyError(f"Formal Raw Step2 manifest missing required columns: {missing}")
@@ -201,8 +218,14 @@ def main() -> int:
 
     candidates_per_state = int(selection["step2_candidates_per_state"])
     eligible_groups: dict[str, pd.DataFrame] = {}
+    min_checkpoint_min = float(selection.get("step2_min_checkpoint_min", 120.0))
     for group_key, group in raw.groupby("split_group_key", sort=True):
-        chosen = _choose_step2_state(group, candidates_per_state, seed)
+        chosen = _choose_step2_state(
+            group,
+            candidates_per_state,
+            seed,
+            min_checkpoint_min=min_checkpoint_min,
+        )
         if chosen is not None:
             eligible_groups[str(group_key)] = chosen
 

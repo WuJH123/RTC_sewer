@@ -40,6 +40,7 @@ def test_candidate_selection_uses_distinct_actual_h3_schedules() -> None:
     frame = pd.DataFrame(
         {
             "state_key": ["s1"] * 5,
+            "checkpoint_min": [120.0] * 5,
             "action_candidate_readback": [
                 _action(0.1),
                 _action(0.1),
@@ -53,6 +54,29 @@ def test_candidate_selection_uses_distinct_actual_h3_schedules() -> None:
     assert selected is not None
     assert len(selected) == 3
     assert selected["qualification_candidate_action_sha256"].nunique() == 3
+
+
+def test_step2_selection_rejects_states_before_causal_warmup() -> None:
+    frame = pd.DataFrame(
+        {
+            "state_key": ["early"] * 3 + ["warm"] * 3,
+            "checkpoint_min": [90.0] * 3 + [120.0] * 3,
+            "action_candidate_readback": [
+                _action(0.1),
+                _action(0.2),
+                _action(0.3),
+                _action(0.4),
+                _action(0.5),
+                _action(0.6),
+            ],
+        }
+    )
+    selected = builder._choose_step2_state(
+        frame, candidates=3, seed=42, min_checkpoint_min=120.0
+    )
+    assert selected is not None
+    assert selected["state_key"].unique().tolist() == ["warm"]
+    assert (selected["checkpoint_min"] >= 120.0).all()
 
 
 def test_pre_action_signature_ignores_checkpoint_transition(monkeypatch) -> None:
