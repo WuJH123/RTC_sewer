@@ -10,6 +10,7 @@ import pandas as pd
 from scripts import build_v42_qualification_first_pass as builder
 from scripts import materialize_v42_qualification_gat_history as gat_bridge
 from scripts import run_v42_qualification_first_pass as runner
+from scripts import train_v42_step1_qualification as step1_runner
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -98,6 +99,13 @@ def test_step1_selection_prefers_step2_eligible_groups() -> None:
         salt="step1-train",
     )
     assert set(ranked[:2]) == {"g3", "g4"}
+
+
+def test_step1_batch_size_uses_amp_safe_capacity_for_8gb_gpu() -> None:
+    eight_gib = 8 * 1024**3
+    assert step1_runner._effective_batch_size(128, eight_gib) == 64
+    assert step1_runner._effective_batch_size(4, eight_gib) == 4
+    assert step1_runner._effective_batch_size(128, 16 * 1024**3) == 128
 
 
 def test_prepare_reuse_requires_matching_config_hash(tmp_path: Path) -> None:

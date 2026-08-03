@@ -3,12 +3,33 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 QUALIFICATION_CONTRACT = "PROJECT6_V42_QUALIFICATION_FIRST_PASS_V1"
+EIGHT_GIB = 8 * 1024**3
+QUALIFICATION_BATCH_CAP_8GB = 64
+
+
+def _effective_batch_size(requested: int, total_memory_bytes: int | None) -> int:
+    requested = max(1, int(requested))
+    if total_memory_bytes is not None and int(total_memory_bytes) <= EIGHT_GIB:
+        return min(requested, QUALIFICATION_BATCH_CAP_8GB)
+    return requested
+
+
+def _cuda_total_memory_bytes() -> int | None:
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return int(torch.cuda.get_device_properties(0).total_memory)
+    except Exception:
+        pass
+    return None
 
 
 def main() -> int:
@@ -24,6 +45,16 @@ def main() -> int:
     parser.add_argument("--patience", type=int, default=1)
     parser.add_argument("--min-train-groups", type=int, default=65)
     args = parser.parse_args()
+
+    cuda_memory = _cuda_total_memory_bytes()
+    effective_batch_size = _effective_batch_size(args.batch_size, cuda_memory)
+    if effective_batch_size != int(args.batch_size):
+        print(
+            "QUALIFICATION_STEP1_BATCH_FALLBACK: "
+            f"requested={args.batch_size} effective={effective_batch_size} "
+            f"cuda_memory_gib={cuda_memory / 1024**3:.3f}",
+            flush=True,
+        )
 
     command = [
         sys.executable,
@@ -46,14 +77,16 @@ def main() -> int:
         "--aux-epochs",
         "0",
         "--batch-size",
-        str(args.batch_size),
+        str(effective_batch_size),
         "--patience",
         str(args.patience),
         "--min-train-groups",
         str(args.min_train_groups),
     ]
     print("RUN:", " ".join(command), flush=True)
-    subprocess.run(command, cwd=str(args.project_root), check=True)
+    child_env = os.environ.copy()
+    child_env["RTC_V42_STEP1_AMP"] = "1" if cuda_memory is not None else "0"
+    subprocess.run(command, cwd=str(args.project_root), check=True, env=child_env)
 
     report_path = args.output_dir / "formal_step1_report.json"
     report = json.loads(report_path.read_text(encoding="utf-8"))
@@ -65,6 +98,10 @@ def main() -> int:
     report["development_only"] = True
     report["formal_mainline_authorized"] = False
     report["formal_evidence_eligible"] = False
+    report["requested_batch_size"] = int(args.batch_size)
+    report["effective_batch_size"] = int(effective_batch_size)
+    report["cuda_total_memory_bytes"] = cuda_memory
+    report["mixed_precision_amp"] = bool(cuda_memory is not None)
     report["qualification_note"] = (
         "One-epoch qualification model used only to exercise downstream interfaces. "
         "It cannot substitute for Formal production training."
