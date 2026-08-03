@@ -2,7 +2,8 @@
 
 This script is intentionally unable to turn development artifacts into paper
 evidence. It requires three-seed formal training, new-rainfall calibration,
-causal GAT history, raw four-reference admission and zero rainfall overlap.
+causal GAT history, raw four-reference admission, full formal hydraulic target
+supervision and zero rainfall overlap.
 """
 from __future__ import annotations
 
@@ -18,6 +19,13 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from sewerrtc.v4.formal_f2 import FORMAL_GENERATION_ID, read_table, sha256_file
 from sewerrtc.v4.paper_workflow_v42 import CONTRACT_ID
+
+
+FULL_STEP2_SUPERVISION_FLAGS = (
+    "storage_supervised",
+    "facility_flow_supervised",
+    "outfall_supervised",
+)
 
 
 def _json(path: Path) -> dict:
@@ -39,6 +47,20 @@ def _assert_same_split(reports: list[dict], keys: tuple[str, ...]) -> None:
         values = {tuple(map(str, r.get(key, []))) for r in reports}
         if len(values) != 1:
             raise RuntimeError(f"formal model seeds do not share frozen {key}")
+
+
+def _assert_full_step2_target_supervision(reports: list[dict]) -> None:
+    missing: dict[str, list[int]] = {}
+    for flag in FULL_STEP2_SUPERVISION_FLAGS:
+        bad = [int(r.get("seed", -1)) for r in reports if r.get(flag) is not True]
+        if bad:
+            missing[flag] = bad
+    if missing:
+        raise RuntimeError(
+            "Formal Step2 cannot authorize paper evidence without full hydraulic "
+            f"target supervision: {missing}. Missing targets must not be zero-filled; "
+            "materialize authoritative storage/facility/outfall targets first."
+        )
 
 
 def main() -> int:
@@ -69,6 +91,7 @@ def main() -> int:
 
     if any(r.get("status") != "pass" for r in step1_reports + step2_reports):
         raise RuntimeError("one or more Formal F2 model seed reports are not pass")
+    _assert_full_step2_target_supervision(step2_reports)
     if step1_cal.get("status") != "pass" or step1_cal.get("uncertainty_calibrated") is not True or step1_cal.get("ood_calibrated") is not True:
         raise RuntimeError("Formal F2 Step1 uncertainty/OOD calibration has not passed on new calibration rainfalls")
     if step2_cal.get("status") != "pass" or step2_cal.get("safety_calibrated") is not True:
@@ -142,6 +165,10 @@ def main() -> int:
         "history_input_contract": "gat_compatible_causal_state",
         "rainfall_group_isolated_split": True,
         "formal_target_domain_only": True,
+        "formal_target_coverage_complete": True,
+        "storage_supervised": True,
+        "facility_flow_supervised": True,
+        "outfall_supervised": True,
         "sample_lineage_sha256": sample_lineage_sha,
         "surrogate_model_sha256": str(step2_primary["surrogate_model_sha256"]),
         "surrogate_ensemble_sha256": ensemble_surrogate_hash,
