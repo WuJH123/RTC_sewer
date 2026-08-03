@@ -254,6 +254,14 @@ def _run_epoch(
     peak_rss = _rss_mb()
     started = time.time()
 
+    amp_enabled = os.environ.get("RTC_V42_STEP1_AMP") == "1" and device.type == "cuda"
+    scaler = None
+    if amp_enabled and training:
+        try:
+            scaler = torch.amp.GradScaler("cuda", enabled=True)
+        except (AttributeError, TypeError):
+            scaler = torch.cuda.amp.GradScaler(enabled=True)
+
     context = torch.enable_grad() if training else torch.no_grad()
     with context:
         for batch in loader:
@@ -262,29 +270,41 @@ def _run_epoch(
             rain = batch["rainfall_history"].to(device, non_blocking=True)
             actions = batch["historical_actions"].to(device, non_blocking=True)
             target = batch["target_depth"].to(device, non_blocking=True)
-            out = model(
-                sparse_depth_history=sdh,
-                sensor_mask_history=smh,
-                rainfall_history=rain,
-                historical_actions=actions,
-                node_static=node_static,
-                link_static=link_static,
-                edge_index=edge_index,
-                action_node_map=action_map,
-            )
-            losses = step1_reconstruction_loss(
-                out,
-                target,
-                smh[:, -1, :],
-                pri_mask,
-                weights=weights,
-                wet_threshold_m=wet_threshold_m,
-            )
+            with torch.autocast(
+                device_type=device.type,
+                dtype=torch.float16,
+                enabled=amp_enabled,
+            ):
+                out = model(
+                    sparse_depth_history=sdh,
+                    sensor_mask_history=smh,
+                    rainfall_history=rain,
+                    historical_actions=actions,
+                    node_static=node_static,
+                    link_static=link_static,
+                    edge_index=edge_index,
+                    action_node_map=action_map,
+                )
+                losses = step1_reconstruction_loss(
+                    out,
+                    target,
+                    smh[:, -1, :],
+                    pri_mask,
+                    weights=weights,
+                    wet_threshold_m=wet_threshold_m,
+                )
             if training:
                 optimizer.zero_grad(set_to_none=True)
-                losses["total"].backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
-                optimizer.step()
+                if scaler is None:
+                    losses["total"].backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+                    optimizer.step()
+                else:
+                    scaler.scale(losses["total"]).backward()
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+                    scaler.step(optimizer)
+                    scaler.update()
 
             actual_batch = int(target.shape[0])
             windows_seen += actual_batch

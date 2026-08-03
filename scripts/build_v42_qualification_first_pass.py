@@ -13,11 +13,18 @@ import hashlib
 import json
 import math
 import sys
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
+
+from sewerrtc.v4.v42_qualification_history_resolver import (
+    build_history_index,
+    choose_history_compatible_state,
+)
+from sewerrtc.v4.v42_step1_dataset import _build_usecols, load_graph_assets
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -44,10 +51,32 @@ def _read(path: Path) -> pd.DataFrame:
     return frame
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def _rank(values: list[str], seed: int, salt: str) -> list[str]:
     return sorted(
         {str(v) for v in values},
         key=lambda value: (hashlib.sha256(f"{salt}:{seed}:{value}".encode()).hexdigest(), value),
+    )
+
+
+def _rank_preferred_groups(
+    values: list[str],
+    *,
+    preferred: set[str],
+    seed: int,
+    salt: str,
+) -> list[str]:
+    preferred = {str(value) for value in preferred}
+    values = {str(value) for value in values}
+    return _rank(sorted(values & preferred), seed, salt) + _rank(
+        sorted(values - preferred), seed, salt
     )
 
 
@@ -97,10 +126,58 @@ def _bool_all(frame: pd.DataFrame, column: str) -> bool:
     return column in frame.columns and bool(frame[column].fillna(False).astype(bool).all())
 
 
-def _choose_step2_state(group: pd.DataFrame, candidates: int, seed: int) -> pd.DataFrame | None:
+def _history_detail_loader(graph: Any, max_items: int = 12):
+    required = _build_usecols(graph.node_ids, graph.facility_ids)
+    cache: OrderedDict[str, pd.DataFrame] = OrderedDict()
+
+    def load(path: Path) -> pd.DataFrame:
+        key = str(Path(path).resolve())
+        if key in cache:
+            value = cache.pop(key)
+            cache[key] = value
+            return value
+        header = pd.read_csv(key, nrows=0)
+        missing = [column for column in required if column not in header.columns]
+        if missing:
+            raise KeyError(f"qualification history detail missing columns: {missing[:10]}")
+        value = pd.read_csv(key, usecols=required, low_memory=False).loc[:, required]
+        cache[key] = value
+        while len(cache) > max_items:
+            cache.popitem(last=False)
+        return value
+
+    return load
+
+
+def _signature_digest(signature: dict[str, np.ndarray]) -> str:
+    digest = hashlib.sha256()
+    for key in ("checkpoint_depth", "rainfall_history", "pre_action_history"):
+        digest.update(key.encode("utf-8"))
+        digest.update(np.ascontiguousarray(signature[key], dtype=np.float64).tobytes())
+    return digest.hexdigest()
+
+
+def _choose_step2_state(
+    group: pd.DataFrame,
+    candidates: int,
+    seed: int,
+    min_checkpoint_min: float = 120.0,
+) -> pd.DataFrame | None:
     viable: list[tuple[str, pd.DataFrame]] = []
     for state_key, state in group.groupby("state_key", sort=True):
         state = state.copy()
+        if "checkpoint_min" not in state:
+            continue
+        checkpoints = pd.to_numeric(state["checkpoint_min"], errors="coerce").dropna()
+        # All candidate branches in a state must share one warm-up-valid
+        # checkpoint.  A state at t<120 cannot supply the causal t-120 history.
+        if (
+            checkpoints.empty
+            or checkpoints.nunique() != 1
+            or float(checkpoints.iloc[0]) < float(min_checkpoint_min)
+        ):
+            continue
+        state["checkpoint_min"] = pd.to_numeric(state["checkpoint_min"], errors="coerce")
         state["qualification_candidate_action_sha256"] = state.apply(_action_hash, axis=1)
         state = state[state["qualification_candidate_action_sha256"].astype(bool)].copy()
         state = state.drop_duplicates("qualification_candidate_action_sha256", keep="first")
@@ -115,6 +192,26 @@ def _choose_step2_state(group: pd.DataFrame, candidates: int, seed: int) -> pd.D
     state = state.sort_values("qualification_candidate_action_sha256", kind="mergesort").head(candidates).copy()
     state["qualification_selected_state_key"] = state_key
     return state
+
+
+def _select_step2_groups(
+    eligible_groups: dict[str, pd.DataFrame],
+    *,
+    ranked_groups: list[str],
+    step1_history_groups: set[str],
+    required_groups: int,
+) -> list[str]:
+    selected = [
+        str(group)
+        for group in ranked_groups
+        if str(group) in eligible_groups and str(group) in step1_history_groups
+    ][: int(required_groups)]
+    if len(selected) < int(required_groups):
+        raise RuntimeError(
+            "qualification Step2 has fewer history-compatible groups than required: "
+            f"{len(selected)} < {int(required_groups)}"
+        )
+    return selected
 
 
 def main() -> int:
@@ -155,6 +252,86 @@ def main() -> int:
     if missing:
         raise KeyError(f"Formal Step1 manifest missing required columns: {missing}")
 
+    raw_required = {"split_group_key", "state_key", "event_id", "checkpoint_min"}
+    missing = sorted(raw_required - set(raw.columns))
+    if missing:
+        raise KeyError(f"Formal Raw Step2 manifest missing required columns: {missing}")
+    failed_gates = [column for column in RAW_REQUIRED_GATES if not _bool_all(raw, column)]
+    if failed_gates:
+        raise RuntimeError(f"Formal Raw Step2 input is not fully admitted: {failed_gates}")
+
+    candidates_per_state = int(selection["step2_candidates_per_state"])
+    history_index = build_history_index(step1_path)
+    graph = load_graph_assets(root)
+    load_detail = _history_detail_loader(graph)
+    eligible_groups: dict[str, pd.DataFrame] = {}
+    history_rows: list[dict[str, Any]] = []
+    min_checkpoint_min = float(selection.get("step2_min_checkpoint_min", 120.0))
+    for group_key, group in raw.groupby("split_group_key", sort=True):
+        chosen = choose_history_compatible_state(
+            group,
+            history_index=history_index,
+            load_detail=load_detail,
+            graph=graph,
+            required_candidates=candidates_per_state,
+            min_checkpoint_min=min_checkpoint_min,
+        )
+        if chosen is not None and chosen.get("compatible"):
+            selected_state = chosen["state"]
+            history = chosen["history"]
+            first = selected_state.iloc[0]
+            eligible_groups[str(group_key)] = selected_state
+            history_rows.append(
+                {
+                    "rainfall_sha256": str(group_key),
+                    "rainfall_group_key": str(group_key),
+                    "event_id": str(first.get("event_id", "")),
+                    "state_key": str(chosen["state_key"]),
+                    "checkpoint_min": float(first["checkpoint_min"]),
+                    "candidate_detail_path": str(first["source_detail_path_candidate"]),
+                    "history_detail_path": str(history["history_detail_path"]),
+                    "history_start_min": float(history["history_start_min"]),
+                    "history_end_min": float(history["history_end_min"]),
+                    "candidate_pre_action_signature": _signature_digest(history["candidate_pre_action_signature"]),
+                    "history_pre_action_signature": _signature_digest(history["history_pre_action_signature"]),
+                    "history_match_level": str(history["history_match_level"]),
+                    "compatible": True,
+                    "failure_reason": "",
+                    "candidate_count": int(len(selected_state)),
+                    "qualification_only": True,
+                    "development_only": True,
+                    "formal_mainline_authorized": False,
+                }
+            )
+        else:
+            history_rows.append(
+                {
+                    "rainfall_sha256": str(group_key),
+                    "rainfall_group_key": str(group_key),
+                    "event_id": "",
+                    "state_key": "",
+                    "checkpoint_min": math.nan,
+                    "candidate_detail_path": "",
+                    "history_detail_path": "",
+                    "history_start_min": math.nan,
+                    "history_end_min": math.nan,
+                    "candidate_pre_action_signature": "",
+                    "history_pre_action_signature": "",
+                    "history_match_level": "",
+                    "compatible": False,
+                    "failure_reason": "no_history_compatible_state",
+                    "candidate_count": 0,
+                    "qualification_only": True,
+                    "development_only": True,
+                    "formal_mainline_authorized": False,
+                }
+            )
+
+    history_source_path = out / "QUALIFICATION_GAT_HISTORY_SOURCE_MANIFEST.parquet"
+    pd.DataFrame(history_rows).to_parquet(history_source_path, index=False)
+    if not eligible_groups:
+        raise RuntimeError("qualification has no history-compatible Step2 states")
+
     target_train = step1[
         step1["step1_domain_role"].astype(str).eq("target_formal")
         & step1["formal_split"].astype(str).eq("train")
@@ -167,8 +344,19 @@ def main() -> int:
 
     train_group_count = int(selection["step1_train_rainfall_groups"])
     validation_group_count = int(selection["step1_validation_rainfall_groups"])
-    train_groups = _rank(target_train["split_group_key"].astype(str).unique().tolist(), seed, "step1-train")[:train_group_count]
-    validation_groups = _rank(target_validation["split_group_key"].astype(str).unique().tolist(), seed, "step1-validation")[:validation_group_count]
+    eligible_group_keys = set(eligible_groups)
+    train_groups = _rank_preferred_groups(
+        target_train["split_group_key"].astype(str).unique().tolist(),
+        preferred=eligible_group_keys,
+        seed=seed,
+        salt="step1-train",
+    )[:train_group_count]
+    validation_groups = _rank_preferred_groups(
+        target_validation["split_group_key"].astype(str).unique().tolist(),
+        preferred=eligible_group_keys,
+        seed=seed,
+        salt="step1-validation",
+    )[:validation_group_count]
     if len(train_groups) < train_group_count:
         raise RuntimeError(f"qualification Step1 has only {len(train_groups)} train groups; required {train_group_count}")
     if len(validation_groups) < validation_group_count:
@@ -191,28 +379,15 @@ def main() -> int:
     selected_step1_path = out / "QUALIFICATION_STEP1_WINDOW_MANIFEST.parquet"
     selected_step1.to_parquet(selected_step1_path, index=False)
 
-    raw_required = {"split_group_key", "state_key", "event_id"}
-    missing = sorted(raw_required - set(raw.columns))
-    if missing:
-        raise KeyError(f"Formal Raw Step2 manifest missing required columns: {missing}")
-    failed_gates = [column for column in RAW_REQUIRED_GATES if not _bool_all(raw, column)]
-    if failed_gates:
-        raise RuntimeError(f"Formal Raw Step2 input is not fully admitted: {failed_gates}")
-
-    candidates_per_state = int(selection["step2_candidates_per_state"])
-    eligible_groups: dict[str, pd.DataFrame] = {}
-    for group_key, group in raw.groupby("split_group_key", sort=True):
-        chosen = _choose_step2_state(group, candidates_per_state, seed)
-        if chosen is not None:
-            eligible_groups[str(group_key)] = chosen
-
     required_step2_groups = int(selection["step2_rainfall_groups"])
     ranked_groups = _rank(list(eligible_groups), seed, "step2-qualification")
-    train_step2_groups = ranked_groups[:required_step2_groups]
-    if len(train_step2_groups) < required_step2_groups:
-        raise RuntimeError(
-            f"qualification Step2 has only {len(train_step2_groups)} viable groups; required {required_step2_groups}"
-        )
+    step1_history_groups = set(selected_step1["split_group_key"].astype(str))
+    train_step2_groups = _select_step2_groups(
+        eligible_groups,
+        ranked_groups=ranked_groups,
+        step1_history_groups=step1_history_groups,
+        required_groups=required_step2_groups,
+    )
     selected_step2 = pd.concat([eligible_groups[group] for group in train_step2_groups], ignore_index=True)
     selected_step2["qualification_only"] = True
     selected_step2["development_only"] = True
@@ -261,6 +436,7 @@ def main() -> int:
     step1_group_counts = selected_step1.groupby(["formal_split", "step1_domain_role"])["split_group_key"].nunique().to_dict()
     audit = {
         "contract_id": QUALIFICATION_CONTRACT,
+        "config_sha256": _sha256_file(args.config),
         "status": "pass",
         "qualification_only": True,
         "development_only": True,
@@ -268,6 +444,10 @@ def main() -> int:
         "formal_outputs_overwritten": False,
         "source_formal_step1_manifest": str(step1_path),
         "source_formal_raw_step2_manifest": str(raw_path),
+        "history_source_manifest": str(history_source_path),
+        "history_index_rows": int(len(history_index)),
+        "history_compatible_groups": int(len(eligible_groups)),
+        "history_compatible_states": int(sum(1 for row in history_rows if row["compatible"])),
         "step1_manifest": str(selected_step1_path),
         "step1_rows": int(len(selected_step1)),
         "step1_train_groups": int(step1_group_counts.get(("train", "target_formal"), 0)),

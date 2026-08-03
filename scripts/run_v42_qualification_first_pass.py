@@ -64,12 +64,48 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 def _run(command: list[str], root: Path) -> None:
     print("\nRUN:", " ".join(command), flush=True)
-    subprocess.run(command, cwd=str(root), check=True)
+    try:
+        subprocess.run(command, cwd=str(root), check=True)
+    except subprocess.CalledProcessError as exc:
+        print(
+            json.dumps(
+                {
+                    "type": "SCIENTIFIC_GATE_FAIL" if exc.returncode == 3 else "CHILD_PROCESS_FAIL",
+                    "returncode": int(exc.returncode),
+                    "command": command,
+                },
+                ensure_ascii=False,
+            ),
+            flush=True,
+        )
+        raise
 
 
 def _pass_json(path: Path) -> bool:
     try:
         return path.exists() and _read_json(path).get("status") == "pass"
+    except Exception:
+        return False
+
+
+def _prepare_artifacts_reusable(
+    audit_path: Path,
+    step1_manifest: Path,
+    step2_raw: Path,
+    config_path: Path,
+) -> bool:
+    if not (_pass_json(audit_path) and step1_manifest.exists() and step2_raw.exists()):
+        return False
+    try:
+        return str(_read_json(audit_path).get("config_sha256", "")) == _sha(config_path)
+    except Exception:
+        return False
+
+
+def _pass_model_report(path: Path, stage: str) -> bool:
+    try:
+        payload = _read_json(path)
+        return payload.get("status") == "pass" or payload.get("stage") == stage
     except Exception:
         return False
 
@@ -97,7 +133,7 @@ def _status(root: Path, qualification: Path) -> dict[str, Any]:
     for seed, stage in ((17, "10_step2_seed17"), (42, "11_step2_seed42"), (73, "12_step2_seed73")):
         report = qualification / f"step2/models/seed_{seed}/qualification_step2_report.json"
         model = qualification / f"step2/models/seed_{seed}/best_model.pt"
-        statuses[stage] = "PASS_REUSABLE" if _pass_json(report) and model.exists() else "NOT_STARTED"
+        statuses[stage] = "PASS_REUSABLE" if _pass_model_report(report, "qualification_step2_single_seed") and model.exists() else "NOT_STARTED"
 
     passed = [stage for stage in STAGES if statuses[stage] == "PASS_REUSABLE"]
     next_stage = next((stage for stage in STAGES if statuses[stage] != "PASS_REUSABLE"), None)
@@ -132,8 +168,13 @@ def main() -> int:
         type=Path,
         default=PROJECT_ROOT / "configs/v42_qualification_first_pass.json",
     )
-    parser.add_argument("--stage", choices=("prepare", "step1", "step2", "core", "status"), default="status")
+    parser.add_argument(
+        "--stage",
+        choices=("prepare", "step1", "step2", "core", "core-primary", "core-multiseed", "status"),
+        default="status",
+    )
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--refresh", action="append", choices=("prepare", "gat", "step2", "all"), default=[])
     args = parser.parse_args()
 
     config = _read_json(args.config)
@@ -144,10 +185,14 @@ def main() -> int:
     prepare_audit = qualification / "QUALIFICATION_PREPARE_AUDIT.json"
     step1_manifest = qualification / "QUALIFICATION_STEP1_WINDOW_MANIFEST.parquet"
     step2_raw = qualification / "QUALIFICATION_STEP2_RAW_MANIFEST.parquet"
+    history_source_manifest = qualification / "QUALIFICATION_GAT_HISTORY_SOURCE_MANIFEST.parquet"
     step2_gat = qualification / "step2/QUALIFICATION_STEP2_GAT_MANIFEST.parquet"
 
     def prepare() -> None:
-        if not args.force and _pass_json(prepare_audit) and step1_manifest.exists() and step2_raw.exists():
+        refresh_prepare = args.force or bool(set(args.refresh) & {"prepare", "all"})
+        if not refresh_prepare and _prepare_artifacts_reusable(
+            prepare_audit, step1_manifest, step2_raw, args.config
+        ):
             print("REUSE: qualification prepare", flush=True)
             return
         _run(
@@ -165,11 +210,12 @@ def main() -> int:
             root,
         )
 
-    def step1() -> None:
+    def step1(primary_only: bool = False) -> None:
         prepare()
         training = config["training"]
         manifest_sha = _sha(step1_manifest)
-        for seed in training["seeds"]:
+        seeds = [training["primary_step1_seed"]] if primary_only else training["seeds"]
+        for seed in seeds:
             output = qualification / f"step1/seed_{seed}"
             report = output / "qualification_step1_report.json"
             if not args.force and _pass_json(report) and (output / "best_model.pt").exists():
@@ -209,12 +255,13 @@ def main() -> int:
             payload["input_manifest_sha256"] = manifest_sha
             report.write_text(json.dumps(payload, indent=2, ensure_ascii=False, allow_nan=False), encoding="utf-8")
 
-    def step2() -> None:
-        step1()
+    def step2(primary_only: bool = False) -> None:
+        step1(primary_only=primary_only)
         training = config["training"]
         primary = qualification / f"step1/seed_{training['primary_step1_seed']}"
         gat_audit = qualification / "step2/QUALIFICATION_GAT_HISTORY_AUDIT.json"
-        if args.force or not (_pass_json(gat_audit) and step2_gat.exists()):
+        refresh_gat = args.force or bool(set(args.refresh) & {"prepare", "gat", "all"})
+        if refresh_gat or not (_pass_json(gat_audit) and step2_gat.exists()):
             _run(
                 [
                     py,
@@ -226,6 +273,8 @@ def main() -> int:
                     str(step2_raw),
                     "--step1-window-manifest",
                     str(step1_manifest),
+                    "--history-source-manifest",
+                    str(history_source_manifest),
                     "--step1-model-dir",
                     str(primary),
                     "--output-manifest",
@@ -241,7 +290,8 @@ def main() -> int:
             print("REUSE: qualification causal GAT history", flush=True)
 
         gat_sha = _sha(step2_gat)
-        for seed in training["seeds"]:
+        seeds = [training["primary_step1_seed"]] if primary_only else training["seeds"]
+        for seed in seeds:
             output = qualification / f"step2/models/seed_{seed}"
             report = output / "qualification_step2_report.json"
             if not args.force and _pass_json(report) and (output / "best_model.pt").exists():
@@ -275,14 +325,22 @@ def main() -> int:
             payload["input_manifest_sha256"] = gat_sha
             report.write_text(json.dumps(payload, indent=2, ensure_ascii=False, allow_nan=False), encoding="utf-8")
 
-    if args.stage == "prepare":
-        prepare()
-    elif args.stage == "step1":
-        step1()
-    elif args.stage == "step2":
-        step2()
-    elif args.stage == "core":
-        step2()
+    try:
+        if args.stage == "prepare":
+            prepare()
+        elif args.stage == "step1":
+            step1()
+        elif args.stage == "step2":
+            step2()
+        elif args.stage == "core":
+            step2()
+        elif args.stage == "core-primary":
+            step2(primary_only=True)
+        elif args.stage == "core-multiseed":
+            step2(primary_only=False)
+    except subprocess.CalledProcessError:
+        _status(root, qualification)
+        raise
 
     status = _status(root, qualification)
     print(json.dumps(status, indent=2, ensure_ascii=False, allow_nan=False), flush=True)

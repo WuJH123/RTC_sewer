@@ -78,7 +78,10 @@ def main() -> int:
     _, val_f, _, val_groups = _split_groups(frame, args.seed)
     if val_f.empty:
         raise ValueError("no validation rows for replay")
-    report = json.loads((args.model_dir / "fast_step2_report.json").read_text(encoding="utf-8"))
+    report_path = args.model_dir / "fast_step2_report.json"
+    if not report_path.exists():
+        report_path = args.model_dir / "qualification_step2_report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
     cfg = report.get("config", {})
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     graph = _load_graph_topology(args.project_root)
