@@ -50,6 +50,14 @@ TARGET_NAMES = (
 )
 
 
+def _required_target_names(target_contract: str) -> tuple[str, ...]:
+    if target_contract == "FULL_HYDRAULIC":
+        return TARGET_NAMES
+    if target_contract == "CONTROL_CORE":
+        return TARGET_NAMES[:-1]
+    raise ValueError(f"unsupported step2 target contract: {target_contract}")
+
+
 def _nonempty(value: Any) -> str:
     return text(value)
 
@@ -444,7 +452,8 @@ def _history_compatible(root: Path, raw: pd.DataFrame, step1: pd.DataFrame, grap
     }
 
 
-def audit_targets(paths: dict[str, Path], raw: pd.DataFrame, root: Path, cache_items: int = 2) -> dict[str, Any]:
+def audit_targets(paths: dict[str, Path], raw: pd.DataFrame, root: Path, cache_items: int = 2, target_contract: str = "CONTROL_CORE") -> dict[str, Any]:
+    required_targets = _required_target_names(target_contract)
     graph = _load_graph_topology(root)
     nodes_df, _ = _parse_inp_topology(root / "data" / "wuhan_v8_storage_retrofit.inp")
     storage_ids = nodes_df.loc[nodes_df["node_type"].astype(str).str.casefold().eq("storage"), "node_id"].astype(str).tolist()
@@ -496,16 +505,22 @@ def audit_targets(paths: dict[str, Path], raw: pd.DataFrame, root: Path, cache_i
         for k in TARGET_NAMES:
             row_complete[k].append(all(per_file.get(str(row[f"source_detail_path_{role}"]), {}).get("complete", {}).get(k, False) for role in ROLES))
     group_complete = {k: sorted(set(raw.loc[row_complete[k], "rainfall_sha256"].astype(str))) for k in TARGET_NAMES}
-    all_formal = np.asarray([all(row_complete[k][i] for k in TARGET_NAMES) for i in range(len(raw))], dtype=bool)
+    all_formal = np.asarray([all(row_complete[k][i] for k in required_targets) for i in range(len(raw))], dtype=bool)
+    all_hydraulic = np.asarray([all(row_complete[k][i] for k in TARGET_NAMES) for i in range(len(raw))], dtype=bool)
+    supervised = {k: bool(per_file and all(per_file[p]["complete"][k] for p in per_file)) for k in TARGET_NAMES}
     return {
+        "target_contract": target_contract,
+        "required_targets": list(required_targets),
         "network_node_count": len(graph["node_ids"]), "storage_node_count": len(storage_ids), "facility_count": len(graph["facility_ids"]), "outfall_node_count": len(outfall_ids),
         "unique_detail_files": len(unique), "per_target": {k: {"complete_detail_count": complete_files[k], "finite_fraction_file_weighted": float(finite_values[k] / total_values[k]) if total_values[k] else 0.0, "complete_rows": int(sum(row_complete[k])), "complete_states": int(raw.loc[row_complete[k], "state_key"].nunique()), "complete_rainfall_groups": len(group_complete[k])} for k in TARGET_NAMES},
-        "formal_complete_detail_count": int(sum(all(per_file[p]["complete"][k] for k in TARGET_NAMES) for p in per_file)),
+        "formal_complete_detail_count": int(sum(all(per_file[p]["complete"][k] for k in required_targets) for p in per_file)),
         "formal_complete_rows": int(all_formal.sum()), "formal_complete_states": int(raw.loc[all_formal, "state_key"].nunique()), "formal_complete_rainfall_groups": int(raw.loc[all_formal, "rainfall_sha256"].nunique()),
+        "formal_complete_hydraulic_detail_count": int(sum(all(per_file[p]["complete"][k] for k in TARGET_NAMES) for p in per_file)),
+        "formal_complete_hydraulic_rows": int(all_hydraulic.sum()), "formal_complete_hydraulic_states": int(raw.loc[all_hydraulic, "state_key"].nunique()), "formal_complete_hydraulic_rainfall_groups": int(raw.loc[all_hydraulic, "rainfall_sha256"].nunique()),
         "missing_columns_top20": {k: Counter(c for p in per_file.values() for c in p.get("missing_columns", {}).get(k, [])).most_common(20) for k in TARGET_NAMES},
-        "storage_supervised": bool(all_formal.any() and all(per_file[p]["complete"]["storage_volume"] for p in per_file)),
-        "facility_flow_supervised": bool(all_formal.any() and all(per_file[p]["complete"]["managed_facility_flow"] for p in per_file)),
-        "outfall_supervised": bool(all_formal.any() and all(per_file[p]["complete"]["outfall_flow"] for p in per_file)),
+        "storage_supervised": supervised["storage_volume"],
+        "facility_flow_supervised": supervised["managed_facility_flow"],
+        "outfall_supervised": supervised["outfall_flow"],
         "outfall_schema_present": bool(outfall_ids) and any(bool(x.get("complete", {}).get("outfall_flow")) for x in per_file.values()),
     }
 
@@ -570,6 +585,7 @@ def main() -> int:
     ap.add_argument("--max-semantic-files", type=int, default=128)
     ap.add_argument("--history-cache-items", type=int, default=4)
     ap.add_argument("--target-cache-items", type=int, default=2)
+    ap.add_argument("--step2-target-contract", choices=("CONTROL_CORE", "FULL_HYDRAULIC"), default="CONTROL_CORE")
     args = ap.parse_args()
     root = args.project_root.resolve()
     formal = root / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2"
@@ -589,7 +605,7 @@ def main() -> int:
     print("[GAT_DRY_RUN] start", flush=True)
     gat = _history_compatible(root, raw_frame, step1_data["frame"], step1_data["graph"], args.history_cache_items)
     print("[TARGETS] start", flush=True)
-    targets = audit_targets(paths, raw_frame, root, args.target_cache_items)
+    targets = audit_targets(paths, raw_frame, root, args.target_cache_items, args.step2_target_contract)
     print("[EVALUATION] start", flush=True)
     evaluation = audit_evaluation(paths, identity, gat)
     print("[R0] start", flush=True)
@@ -611,12 +627,12 @@ def main() -> int:
         result["scientific_blockers"].append("causal GAT-compatible rainfall groups below 69")
     if targets["formal_complete_rainfall_groups"] < 69:
         result["scientific_blockers"].append("formal complete hydraulic target rainfall groups below 69")
-    if not targets["outfall_supervised"]:
+    if args.step2_target_contract == "FULL_HYDRAULIC" and not targets["outfall_supervised"]:
         result["scientific_blockers"].append("outfall flow supervision is not complete")
     if not evaluation["ready"]:
         result["scientific_blockers"].append("evaluation plan is not fully executable from existing precompute artifacts")
     result["READY_FOR_STEP1"] = bool(result["01_ledger_ready"] and result["02_step1_data_ready"] and result["03_raw_step2_ready"] and result["05_r0_adapter_ready"] and gat["compatible_rainfall_groups"] >= 69)
-    result["READY_FOR_STEP2"] = bool(result["READY_FOR_STEP1"] and targets["formal_complete_rainfall_groups"] >= 69 and targets["storage_supervised"] and targets["facility_flow_supervised"] and targets["outfall_supervised"])
+    result["READY_FOR_STEP2"] = bool(result["READY_FOR_STEP1"] and targets["formal_complete_rainfall_groups"] >= 69 and targets["storage_supervised"] and targets["facility_flow_supervised"] and (args.step2_target_contract != "FULL_HYDRAULIC" or targets["outfall_supervised"]))
     result["READY_FOR_CALIBRATION"] = bool(result["READY_FOR_STEP2"] and result["04_evaluation_plan_ready"])
     result["status"] = "pass" if result["READY_FOR_STEP1"] else "fail"
     path = out / "FORMAL_F2_PRECOMPUTE_READINESS.json"
