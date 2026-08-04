@@ -7,6 +7,7 @@ import pandas as pd
 
 from sewerrtc.v4.v42_formal_strict import (
     audit_calibration_completeness,
+    audit_closed_loop_execution_strict,
     audit_step2_evidence_strict,
     audit_step3_evidence_strict,
 )
@@ -109,6 +110,64 @@ def test_step3_strict_requires_budget_depth_and_peak_soft(tmp_path: Path):
     result = audit_step3_evidence_strict(paper)
     assert result["status"] == "fail"
     assert "peak_must_not_be_hard_gate" in result["reasons"]
+
+
+def test_closed_loop_strict_rejects_metadata_only_surrogate_stub(tmp_path: Path):
+    paper = tmp_path / "v42_paper"
+    _write_json(
+        paper / "exact_closed_loop/evidence.json",
+        {
+            "status": "pass",
+            "authoritative_engine": "SWMM",
+            "canonical_pfvfirst_mpc_v42": True,
+            "authoritative_reference_strategies": ["No-control", "Internal", "Hold"],
+            "event_count": 12,
+            "strategy_event_counts": {
+                "Proposed": 12,
+                "No-control": 12,
+                "Internal": 12,
+                "Hold": 12,
+            },
+            "no_control_all_open_authoritative": True,
+            "internal_native_rules_authoritative": True,
+        },
+    )
+    _write_json(
+        paper / "surrogate_closed_loop/evidence.json",
+        {
+            "status": "pass",
+            "surrogate_role": "hydraulic_surrogate_not_policy",
+            "pfvfirst_mpc_v42": True,
+            "event_count": 12,
+            "surrogate_closed_loop_executed": False,
+            "authoritative_hydraulic_truth_used_after_prefix": False,
+            "realized_future_rainfall_used_online": False,
+            "dynamic_internal_future_action_used_online": False,
+        },
+    )
+    _write_json(
+        paper / "gat_integrated_closed_loop/evidence.json",
+        {
+            "status": "pass",
+            "state_source": "gat_sparse_reconstruction",
+            "event_count": 12,
+            "authoritative_swmm_outcome": True,
+            "authoritative_swmm_history_used_as_online_input": False,
+            "current_frame_repetition_used": False,
+            "gat_uncertainty_used": True,
+            "ood_gate_used": True,
+        },
+    )
+    result = audit_closed_loop_execution_strict(paper)
+    assert result["status"] == "fail"
+    assert "stage22_metadata_only_stub_forbidden" in result["reasons"]
+
+    surrogate = json.loads(
+        (paper / "surrogate_closed_loop/evidence.json").read_text(encoding="utf-8")
+    )
+    surrogate["surrogate_closed_loop_executed"] = True
+    _write_json(paper / "surrogate_closed_loop/evidence.json", surrogate)
+    assert audit_closed_loop_execution_strict(paper)["status"] == "pass"
 
 
 def test_production_entrypoint_never_imports_qualification_controller():
