@@ -1,20 +1,22 @@
-"""Train a small development-only V4.2 Step-2 control-core surrogate.
+"""Train a development/qualification V4.2 Step-2 hydraulic surrogate.
 
-This runner is a fast scientific screen, not formal paper evidence.  It trains
-``MultiReferenceHydraulicSurrogate`` on the development-only four-reference
-source-domain core dataset produced by :mod:`v42_fast_feasibility`.
+The generic fast pilot can still run on depth/flood-only legacy development
+data.  When the input manifest has been materialised under the explicit
+``CONTROL_CORE`` target contract, storage-volume and managed-facility-flow
+trajectories are also mandatory and receive non-zero loss weights.  Explicit
+outfall discharge remains an optional ``FULL_HYDRAULIC`` extension.
 
-Only depth, node flooding-rate and trajectory-derived KPI deltas are supervised.
-Outfall/storage/facility-flow claims are deliberately disabled in this pilot.
+This module also exports tensorisation/evaluation helpers reused by the Formal
+F2 trainer; keep those helpers contract-aware and backward compatible.
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
-import math
 import sys
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -68,6 +70,10 @@ def _split_groups(frame: pd.DataFrame, seed: int) -> tuple[pd.DataFrame, pd.Data
     return train, val, train_groups, val_groups
 
 
+def _all_branch_columns(frame: pd.DataFrame, quantity: str) -> bool:
+    return all(f"trajectory_{quantity}_{branch}" in frame.columns for branch in BRANCHES)
+
+
 def _tensorise(frame: pd.DataFrame) -> dict[str, torch.Tensor]:
     data: dict[str, torch.Tensor] = {
         "history_depth": _stack(frame, "history_depth"),
@@ -81,6 +87,19 @@ def _tensorise(frame: pd.DataFrame) -> dict[str, torch.Tensor]:
         data[f"action_{branch}"] = _stack(frame, f"action_{branch}_readback")
         data[f"depth_{branch}"] = _stack(frame, f"trajectory_depth_{branch}")
         data[f"flood_{branch}"] = _stack(frame, f"trajectory_flood_{branch}")
+
+    optional = {
+        "storage_volume": "storage",
+        "facility_flow": "facility_flow",
+        "outfall_flow": "outfall_flow",
+    }
+    for quantity, tensor_prefix in optional.items():
+        if not _all_branch_columns(frame, quantity):
+            continue
+        for branch in BRANCHES:
+            data[f"{tensor_prefix}_{branch}"] = _stack(
+                frame, f"trajectory_{quantity}_{branch}"
+            )
     return data
 
 
@@ -105,7 +124,14 @@ def _batch_indices(n: int, batch: int, *, shuffle: bool, seed: int) -> list[np.n
 
 
 def _forward(model, batch, graph_tensors, priority_idx, device):
-    edge_index, node_static, action_map = graph_tensors
+    if len(graph_tensors) == 3:
+        edge_index, node_static, action_map = graph_tensors
+        storage_idx = None
+        outfall_idx = None
+    elif len(graph_tensors) == 5:
+        edge_index, node_static, action_map, storage_idx, outfall_idx = graph_tensors
+    else:
+        raise ValueError("graph_tensors must contain 3 or 5 tensors")
     return model(
         state_history=batch["history_depth"].to(device),
         historical_actions=batch["history_actions"].to(device),
@@ -118,8 +144,8 @@ def _forward(model, batch, graph_tensors, priority_idx, device):
         node_static=node_static,
         action_node_map=action_map,
         priority_node_indices=priority_idx,
-        storage_node_indices=None,
-        outfall_node_indices=None,
+        storage_node_indices=storage_idx,
+        outfall_node_indices=outfall_idx,
     )
 
 
@@ -128,6 +154,14 @@ def _targets(batch: dict[str, torch.Tensor], device: torch.device) -> dict[str, 
     for branch in BRANCHES:
         target[f"trajectory_depth_{branch}"] = batch[f"depth_{branch}"].to(device)
         target[f"trajectory_flood_{branch}"] = batch[f"flood_{branch}"].to(device)
+        for source_prefix, quantity in (
+            ("storage", "storage_volume"),
+            ("facility_flow", "facility_flow"),
+            ("outfall_flow", "outfall_flow"),
+        ):
+            key = f"{source_prefix}_{branch}"
+            if key in batch:
+                target[f"trajectory_{quantity}_{branch}"] = batch[key].to(device)
     for key in ("pfv_delta", "tfv_delta", "peak_delta"):
         target[key] = batch[key].to(device)
     return target
@@ -146,6 +180,12 @@ def _evaluate(model, data, graph_tensors, priority_idx, device, batch_size, loss
     depth_true: list[np.ndarray] = []
     flood_pred: list[np.ndarray] = []
     flood_true: list[np.ndarray] = []
+    optional_pred: dict[str, list[np.ndarray]] = {
+        "storage": [],
+        "facility_flow": [],
+        "outfall_flow": [],
+    }
+    optional_true: dict[str, list[np.ndarray]] = {k: [] for k in optional_pred}
     kp_pred = {k: [] for k in ("pfv_delta", "tfv_delta", "peak_delta")}
     kp_true = {k: [] for k in kp_pred}
     with torch.no_grad():
@@ -162,6 +202,17 @@ def _evaluate(model, data, graph_tensors, priority_idx, device, batch_size, loss
                 depth_true.append(batch[f"depth_{branch}"].numpy())
                 flood_pred.append(pred["branches"][branch]["node_flooding_rate"].cpu().numpy())
                 flood_true.append(batch[f"flood_{branch}"].numpy())
+                for source_prefix, output_key in (
+                    ("storage", "storage_volume"),
+                    ("facility_flow", "facility_flow"),
+                    ("outfall_flow", "outfall_flow"),
+                ):
+                    data_key = f"{source_prefix}_{branch}"
+                    if data_key in batch:
+                        optional_pred[source_prefix].append(
+                            pred["branches"][branch][output_key].cpu().numpy()
+                        )
+                        optional_true[source_prefix].append(batch[data_key].numpy())
             for key in kp_pred:
                 kp_pred[key].append(pred[key].detach().cpu().numpy())
                 kp_true[key].append(batch[key].numpy())
@@ -175,12 +226,26 @@ def _evaluate(model, data, graph_tensors, priority_idx, device, batch_size, loss
         "depth_rmse_m": float(np.sqrt(np.mean((dp - dt) ** 2))),
         "flood_mae_m3s": float(np.mean(np.abs(fp - ft))),
     }
+    for name in optional_pred:
+        if optional_pred[name]:
+            p = np.concatenate(optional_pred[name], axis=0)
+            y = np.concatenate(optional_true[name], axis=0)
+            report[f"{name}_mae"] = float(np.mean(np.abs(p - y)))
+            report[f"{name}_rmse"] = float(np.sqrt(np.mean((p - y) ** 2)))
     for key in kp_pred:
         p = np.concatenate(kp_pred[key])
         y = np.concatenate(kp_true[key])
         report[f"{key}_mae"] = float(np.mean(np.abs(p - y)))
         report[f"{key}_sign_accuracy"] = _sign_accuracy(p, y)
     return report
+
+
+def _graph_indices(graph: dict[str, Any], flag: str, device: torch.device) -> torch.Tensor:
+    cols = list(map(str, graph.get("node_static_cols", [])))
+    if flag not in cols:
+        return torch.empty(0, dtype=torch.long, device=device)
+    values = np.asarray(graph["node_static"], dtype=float)[:, cols.index(flag)]
+    return torch.as_tensor(np.flatnonzero(values > 0.5), dtype=torch.long, device=device)
 
 
 def main() -> int:
@@ -200,8 +265,23 @@ def main() -> int:
     frame = pd.read_parquet(args.manifest) if args.manifest.suffix.lower() == ".parquet" else pd.read_csv(args.manifest)
     if frame.empty:
         raise ValueError("fast Step2 manifest is empty")
-    if not bool(frame["development_only"].astype(bool).all()):
+    if "development_only" in frame.columns and not bool(frame["development_only"].astype(bool).all()):
         raise RuntimeError("fast trainer accepts development-only pilot data only")
+
+    target_contract = "LEGACY_DEPTH_FLOOD"
+    if "step2_target_contract" in frame.columns:
+        contracts = set(frame["step2_target_contract"].astype(str))
+        if len(contracts) != 1:
+            raise RuntimeError(f"mixed Step2 target contracts: {sorted(contracts)}")
+        target_contract = next(iter(contracts))
+    has_storage = _all_branch_columns(frame, "storage_volume")
+    has_facility = _all_branch_columns(frame, "facility_flow")
+    has_outfall = _all_branch_columns(frame, "outfall_flow")
+    if target_contract in {"CONTROL_CORE", "FULL_HYDRAULIC"} and not (has_storage and has_facility):
+        raise RuntimeError("CONTROL_CORE requires storage and managed-facility-flow targets")
+    if target_contract == "FULL_HYDRAULIC" and not has_outfall:
+        raise RuntimeError("FULL_HYDRAULIC requires explicit outfall-flow targets")
+
     train_f, val_f, train_groups, val_groups = _split_groups(frame, args.seed)
     train = _tensorise(train_f)
     val = _tensorise(val_f)
@@ -216,6 +296,9 @@ def main() -> int:
     node_static = torch.from_numpy(graph["node_static"].astype(np.float32)).to(device)
     action_map = torch.from_numpy(graph["action_node_map"].astype(np.float32)).to(device)
     priority_idx = torch.as_tensor(get_pfv_core_node_indices(list(graph["node_ids"])), dtype=torch.long, device=device)
+    storage_idx = _graph_indices(graph, "is_storage", device) if has_storage else torch.empty(0, dtype=torch.long, device=device)
+    outfall_idx = _graph_indices(graph, "is_outfall", device) if has_outfall else torch.empty(0, dtype=torch.long, device=device)
+    graph_tensors = (edge_index, node_static, action_map, storage_idx, outfall_idx)
 
     model = MultiReferenceHydraulicSurrogate(
         n_nodes=int(graph["n_nodes"]),
@@ -232,14 +315,14 @@ def main() -> int:
         HydraulicLossWeights(
             depth=0.5,
             node_flooding=2.0,
-            storage=0.0,
-            facility_flow=0.0,
-            outfall_flow=0.0,
+            storage=0.35 if has_storage else 0.0,
+            facility_flow=0.35 if has_facility else 0.0,
+            outfall_flow=0.35 if has_outfall and target_contract == "FULL_HYDRAULIC" else 0.0,
             kpi_consistency=0.5,
         ),
-        require_storage_targets=False,
-        require_facility_flow_targets=False,
-        require_outfall_flow_targets=False,
+        require_storage_targets=target_contract in {"CONTROL_CORE", "FULL_HYDRAULIC"},
+        require_facility_flow_targets=target_contract in {"CONTROL_CORE", "FULL_HYDRAULIC"},
+        require_outfall_flow_targets=target_contract == "FULL_HYDRAULIC",
     )
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -254,7 +337,7 @@ def main() -> int:
         for idx in _batch_indices(len(train_f), args.batch_size, shuffle=True, seed=args.seed + epoch):
             batch = _slice(train, idx)
             optimizer.zero_grad(set_to_none=True)
-            pred = _forward(model, batch, (edge_index, node_static, action_map), priority_idx, device)
+            pred = _forward(model, batch, graph_tensors, priority_idx, device)
             target = _targets(batch, device)
             losses = loss_fn(pred, target)
             loss = loss_fn.total(losses)
@@ -263,10 +346,10 @@ def main() -> int:
             optimizer.step()
             running += float(loss.detach().item()) * len(idx)
             seen += len(idx)
-        val_report = _evaluate(model, val, (edge_index, node_static, action_map), priority_idx, device, args.batch_size, loss_fn)
+        val_report = _evaluate(model, val, graph_tensors, priority_idx, device, args.batch_size, loss_fn)
         row = {"epoch": epoch, "train_loss": running / max(1, seen), "validation": val_report}
         history.append(row)
-        print(json.dumps(row, allow_nan=False))
+        print(json.dumps(row, allow_nan=False), flush=True)
         if val_report["loss"] < best:
             best = float(val_report["loss"])
             stale = 0
@@ -277,30 +360,43 @@ def main() -> int:
                 break
 
     model.load_state_dict(torch.load(best_path, map_location=device, weights_only=True))
-    train_report = _evaluate(model, train, (edge_index, node_static, action_map), priority_idx, device, args.batch_size, loss_fn)
-    val_report = _evaluate(model, val, (edge_index, node_static, action_map), priority_idx, device, args.batch_size, loss_fn)
+    train_report = _evaluate(model, train, graph_tensors, priority_idx, device, args.batch_size, loss_fn)
+    val_report = _evaluate(model, val, graph_tensors, priority_idx, device, args.batch_size, loss_fn)
     model_sha = _hash_model(model)
     report = {
         "contract_id": FAST_CONTRACT_ID,
-        "stage": "step2_fast_control_core",
+        "stage": "step2_fast_hydraulic_surrogate",
         "development_only": True,
         "formal_mainline_authorized": False,
         "formal_model": "MultiReferenceHydraulicSurrogate",
-        "outfall_supervised": False,
-        "storage_supervised": False,
-        "facility_flow_supervised": False,
+        "step2_target_contract": target_contract,
+        "control_core_target_coverage_complete": bool(has_storage and has_facility),
+        "full_hydraulic_target_coverage_complete": bool(has_storage and has_facility and has_outfall),
+        "outfall_supervised": bool(has_outfall and target_contract == "FULL_HYDRAULIC"),
+        "storage_supervised": bool(has_storage),
+        "facility_flow_supervised": bool(has_facility),
         "trajectory_first": True,
         "train_cases": int(len(train_f)),
         "validation_cases": int(len(val_f)),
         "train_rainfall_groups": train_groups,
         "validation_rainfall_groups": val_groups,
         "model_sha256": model_sha,
+        "config": {
+            "hidden_dim": int(args.hidden_dim),
+            "gat_layers": int(args.gat_layers),
+            "batch_size": int(args.batch_size),
+            "epochs_requested": int(args.epochs),
+        },
         "train": train_report,
         "validation": val_report,
         "history": history,
     }
-    (args.output_dir / "fast_step2_report.json").write_text(json.dumps(report, indent=2, allow_nan=False), encoding="utf-8")
-    (args.output_dir / "validation_groups.json").write_text(json.dumps({"groups": val_groups}, indent=2), encoding="utf-8")
+    (args.output_dir / "fast_step2_report.json").write_text(
+        json.dumps(report, indent=2, allow_nan=False), encoding="utf-8"
+    )
+    (args.output_dir / "validation_groups.json").write_text(
+        json.dumps({"groups": val_groups}, indent=2), encoding="utf-8"
+    )
     return 0
 
 
