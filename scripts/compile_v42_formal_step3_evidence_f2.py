@@ -1,8 +1,8 @@
-"""Compile Formal F2 Step3 PFV-first MPC evidence from real execution audit.
+"""Compile Formal F2 Step3 PFV-budgeted/TFV-first MPC evidence.
 
 No caller can assert engineering legality by setting booleans here. The supplied
-authoritative audit must come from executed/readback schedules and prove the
-Engineering36/H12/K<=8 contract plus calibrated GAT/surrogate lineage.
+authoritative audit must come from projected/written/readback schedules and prove
+Engineering36/H12/K<=8 plus calibrated GAT/surrogate lineage.
 """
 from __future__ import annotations
 
@@ -18,6 +18,8 @@ if str(PROJECT_ROOT) not in sys.path:
 from sewerrtc.v4.formal_f2 import FORMAL_GENERATION_ID, sha256_file
 from sewerrtc.v4.paper_workflow_v42 import CONTRACT_ID
 
+CONTROL_OBJECTIVE_CONTRACT = "PROJECT6_V42_PFV_BUDGETED_TFV_MPC_V1"
+
 
 def _json(path: Path) -> dict:
     obj = json.loads(path.read_text(encoding="utf-8"))
@@ -32,13 +34,14 @@ def main() -> int:
     ap.add_argument(
         "--engineering-audit",
         type=Path,
-        default=PROJECT_ROOT / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2/calibration/STEP3_AUTHORITATIVE_ENGINEERING_AUDIT.json",
-        help="Authoritative executed/readback MPC audit produced on F2 calibration/validation runs.",
+        default=PROJECT_ROOT
+        / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2/calibration/STEP3_AUTHORITATIVE_ENGINEERING_AUDIT.json",
     )
     ap.add_argument(
         "--paper-root",
         type=Path,
-        default=PROJECT_ROOT / "outputs/project6_dual_reference_v4/final_v4/v42_paper",
+        default=PROJECT_ROOT
+        / "outputs/project6_dual_reference_v4/final_v4/v42_paper",
     )
     args = ap.parse_args()
 
@@ -56,24 +59,42 @@ def main() -> int:
         "dwell_pass",
         "interlock_pass",
         "adaptive_k_pass",
+        "priority_depth_safety_applied",
+        "pfv_noninferiority_budget_applied",
     )
     missing = [key for key in required_true if audit.get(key) is not True]
     if missing:
-        raise RuntimeError(f"authoritative Step3 execution audit is not all-pass: {missing}")
+        raise RuntimeError(
+            f"authoritative Step3 execution audit is not all-pass: {missing}"
+        )
     if int(audit.get("facility_count", 0)) != 36:
         raise RuntimeError("Step3 execution audit does not prove Engineering36")
     if int(audit.get("horizon_steps", 0)) != 12:
         raise RuntimeError("Step3 execution audit does not prove H12")
     if int(audit.get("max_changed_facilities", 99)) > 8:
         raise RuntimeError("Step3 execution audit exceeds K<=8")
-    if audit.get("pfv_reference") != "no_control" or audit.get("peak_reference") != "dynamic_internal" or audit.get("tfv_reference") != "dynamic_internal":
+    if (
+        audit.get("pfv_reference") != "no_control"
+        or audit.get("tfv_reference") != "dynamic_internal"
+    ):
         raise RuntimeError("Step3 execution audit reference contract mismatch")
+    if audit.get("peak_reference") != "dynamic_internal":
+        raise RuntimeError("Step3 Peak penalty reference must be Dynamic Internal")
+    if audit.get("peak_is_hard_safety_constraint") is not False:
+        raise RuntimeError("Step3 audit still treats Peak as a hard zero-tolerance gate")
+    if float(audit.get("pfv_absolute_allowance_m3", -1.0)) != 100.0:
+        raise RuntimeError("Step3 PFV absolute allowance is not frozen at 100 m3")
+    if abs(float(audit.get("pfv_relative_allowance_fraction", -1.0)) - 0.05) > 1.0e-12:
+        raise RuntimeError("Step3 PFV relative allowance is not frozen at 5%")
+    if audit.get("control_objective_contract") != CONTROL_OBJECTIVE_CONTRACT:
+        raise RuntimeError("Step3 execution audit control-objective contract mismatch")
     if audit.get("uses_future_swmm_truth_online") is not False:
         raise RuntimeError("Step3 execution audit indicates future SWMM truth leakage")
     if audit.get("gat_model_sha256") != step1.get("gat_model_sha256"):
         raise RuntimeError("Step3 GAT hash does not match Formal Step1 evidence")
     if audit.get("surrogate_model_sha256") != step2.get("surrogate_model_sha256"):
         raise RuntimeError("Step3 surrogate hash does not match Formal Step2 evidence")
+
     payload = {
         "contract_id": CONTRACT_ID,
         "stage": "step3_pfvfirst_mpc",
@@ -81,9 +102,16 @@ def main() -> int:
         "development_only": False,
         "formal_generation_id": FORMAL_GENERATION_ID,
         "selector": "decide_pfvfirst_mpc",
+        "control_objective_contract": CONTROL_OBJECTIVE_CONTRACT,
         "pfv_reference": "no_control",
+        "pfv_absolute_allowance_m3": 100.0,
+        "pfv_relative_allowance_fraction": 0.05,
+        "priority_depth_safety": True,
         "peak_reference": "dynamic_internal",
+        "peak_is_hard_safety_constraint": False,
+        "peak_positive_excess_is_penalized": True,
         "tfv_reference": "dynamic_internal",
+        "tfv_is_primary_performance_objective": True,
         "max_changed_facilities": 8,
         "horizon_steps": 12,
         "controllable_prefix_steps": 3,
@@ -104,7 +132,9 @@ def main() -> int:
     }
     out = args.paper_root / "step3_mpc/evidence.json"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(payload, indent=2, allow_nan=False), encoding="utf-8")
+    out.write_text(
+        json.dumps(payload, indent=2, allow_nan=False), encoding="utf-8"
+    )
     print(json.dumps(payload, indent=2, allow_nan=False), flush=True)
     return 0
 

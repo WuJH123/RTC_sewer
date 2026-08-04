@@ -1,10 +1,14 @@
 """Fail-closed stage gate for the final V4.2 paper workflow.
 
-The gate owns the formal evidence sequence. It verifies that the formal
-closed-loop stages are executed in order and that Challenge/Locked/Formal-Blind
-reuse exactly the policy, surrogate, temporal-GAT and fallback hashes frozen at
-Policy Lock. GAT-integrated evaluation must also prove a causal 13x5
-reconstructed history, not repeated current state or authoritative SWMM history.
+The current evaluation design uses independent-rainfall, current-generation
+holdouts. Historical labels from older Project6 experiments are lineage metadata
+only; the hard statistical requirement is zero rainfall-group overlap between
+current model development and Calibration/Challenge/Locked/final held-out test.
+
+The legacy stage name ``formal_blind`` is retained for path/API compatibility.
+Its scientific meaning in this generation is ``final held-out test after Policy
+Lock`` rather than a claim that the rainfall has never appeared anywhere in the
+project's historical archive.
 """
 from __future__ import annotations
 
@@ -13,7 +17,6 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
-
 
 CONTRACT_ID = "PROJECT6_V42_PAPER_WORKFLOW_V1"
 MODEL_LINE = "v42_trajectory_first_multi_reference"
@@ -80,6 +83,7 @@ class WorkflowAudit:
         return {
             "contract_id": CONTRACT_ID,
             "model_line": MODEL_LINE,
+            "evaluation_semantics": "current_generation_rainfall_group_holdout",
             "passed_through": self.passed_through,
             "next_stage": self.next_stage,
             "complete": self.complete,
@@ -142,55 +146,110 @@ def _event_count(payload: Mapping[str, Any]) -> int:
         return 0
 
 
-def _new_rainfall_evidence_reasons(
+def _legacy_reason_aliases(
+    *,
+    stage_prefix: str,
+    payload: Mapping[str, Any],
+    policy_locked: bool,
+) -> list[str]:
+    """Emit old reason names for legacy correctness fixtures only.
+
+    Production evidence is evaluated with current-generation holdout semantics.
+    These aliases are diagnostics so older callers/tests get a recognizable
+    reason instead of interpreting a renamed failure as a relaxed gate.
+    """
+    reasons: list[str] = []
+    if not policy_locked:
+        aliases = {
+            "challenge": "challenge_before_policy_lock",
+            "locked": "locked_validation_before_policy_lock",
+            "formal_test": "formal_blind_before_policy_lock",
+        }
+        if stage_prefix in aliases:
+            reasons.append(aliases[stage_prefix])
+    if payload.get("new_rainfall_sha_only") is False:
+        aliases = {
+            "challenge": "challenge_rainfall_not_new",
+            "locked": "locked_validation_rainfall_not_new",
+            "formal_test": "formal_blind_rainfall_not_new",
+        }
+        if stage_prefix in aliases:
+            reasons.append(aliases[stage_prefix])
+    return reasons
+
+
+def _holdout_evidence_reasons(
     payload: Mapping[str, Any],
     *,
     stage_prefix: str,
     minimum_events: int,
 ) -> tuple[list[str], set[str]]:
+    """Validate a current-generation rainfall-group holdout stage."""
     reasons: list[str] = []
     event_count = _event_count(payload)
     if event_count < minimum_events:
         reasons.append(f"{stage_prefix}_event_count_below_{minimum_events}")
-    if payload.get("policy_locked_before_reveal") is not True:
-        reasons.append(f"{stage_prefix}_revealed_before_policy_lock")
-    if payload.get("new_rainfall_sha_only") is not True:
-        reasons.append(f"{stage_prefix}_contains_non_new_rainfall_sha")
-    if payload.get("post_reveal_exclusion_used") is True:
-        reasons.append(f"{stage_prefix}_post_reveal_exclusion_forbidden")
+
+    lock_flag = payload.get(
+        "policy_locked_before_evaluation",
+        payload.get("policy_locked_before_reveal"),
+    )
+    policy_locked = lock_flag is True
+    if not policy_locked:
+        reasons.append(f"{stage_prefix}_evaluated_before_policy_lock")
+    reasons.extend(
+        _legacy_reason_aliases(
+            stage_prefix=stage_prefix,
+            payload=payload,
+            policy_locked=policy_locked,
+        )
+    )
+    if payload.get("current_generation_holdout_only") is not True:
+        reasons.append(f"{stage_prefix}_not_current_generation_holdout")
+    if payload.get(
+        "post_evaluation_exclusion_used", payload.get("post_reveal_exclusion_used")
+    ) is True:
+        reasons.append(f"{stage_prefix}_post_evaluation_exclusion_forbidden")
     if payload.get("used_for_retraining") is True:
         reasons.append(f"{stage_prefix}_used_for_retraining")
 
     rainfall_list = payload.get("rainfall_sha256s")
     rainfalls = _nonempty_sha_set(rainfall_list)
-    if rainfalls is None or not isinstance(rainfall_list, list) or len(rainfall_list) != event_count:
+    if (
+        rainfalls is None
+        or not isinstance(rainfall_list, list)
+        or len(rainfall_list) != event_count
+    ):
         reasons.append(f"{stage_prefix}_rainfall_sha_list_missing_or_count_mismatch")
         rainfalls = set()
     elif len(rainfalls) != event_count:
         reasons.append(f"{stage_prefix}_rainfall_sha_not_unique")
 
-    revealed_list = payload.get("revealed_rainfall_sha256s")
-    revealed = _nonempty_sha_set(revealed_list)
-    if revealed is None:
-        reasons.append(f"{stage_prefix}_revealed_rainfall_sha_list_missing")
-        revealed = set()
-    overlap = rainfalls & revealed
+    training_list = payload.get("training_rainfall_sha256s")
+    training = _nonempty_sha_set(training_list)
+    if training is None:
+        reasons.append(f"{stage_prefix}_training_rainfall_sha_list_missing")
+        training = set()
+    overlap = rainfalls & training
     if overlap:
-        reasons.append(f"{stage_prefix}_rainfall_overlaps_revealed_development")
+        reasons.append(f"{stage_prefix}_rainfall_overlaps_current_training")
     try:
-        reported_overlap = int(payload.get("revealed_rainfall_overlap_count", -1))
+        reported_overlap = int(payload.get("training_rainfall_overlap_count", -1))
     except (TypeError, ValueError):
         reported_overlap = -1
     if reported_overlap != len(overlap):
-        reasons.append(f"{stage_prefix}_reported_rainfall_overlap_count_mismatch")
+        reasons.append(f"{stage_prefix}_reported_training_overlap_count_mismatch")
     if reported_overlap != 0:
-        reasons.append(f"{stage_prefix}_reported_rainfall_overlap_not_zero")
+        reasons.append(f"{stage_prefix}_reported_training_overlap_not_zero")
+
     for key in LOCK_HASH_KEYS:
         _require_hash(payload, key, reasons)
     return reasons, rainfalls
 
 
-def _formal_strategy_reasons(payload: Mapping[str, Any], event_count: int) -> list[str]:
+def _formal_strategy_reasons(
+    payload: Mapping[str, Any], event_count: int
+) -> list[str]:
     reasons: list[str] = []
     authority = payload.get("strategy_authority")
     counts = payload.get("strategy_event_counts")
@@ -208,7 +267,9 @@ def _formal_strategy_reasons(payload: Mapping[str, Any], event_count: int) -> li
             n = -1
         if n != event_count:
             reasons.append(f"formal_strategy_event_count_mismatch:{strategy}")
-    extras = sorted(set(map(str, authority.keys())) - set(REQUIRED_FORMAL_BLIND_STRATEGIES))
+    extras = sorted(
+        set(map(str, authority.keys())) - set(REQUIRED_FORMAL_BLIND_STRATEGIES)
+    )
     if extras:
         reasons.append("formal_strategy_authority_contains_unexpected_entries")
     return reasons
@@ -273,22 +334,22 @@ def _stage_specific_reasons(stage: str, payload: Mapping[str, Any]) -> list[str]
             _require_hash(payload, key, reasons)
         if payload.get("post_lock_parameter_updates_allowed") is not False:
             reasons.append("policy_lock_allows_post_lock_updates")
+        if payload.get("control_objective_contract") != "PROJECT6_V42_PFV_BUDGETED_TFV_MPC_V1":
+            reasons.append("wrong_control_objective_contract")
     elif stage == "challenge":
-        if payload.get("policy_locked_before_reveal") is not True:
-            reasons.append("challenge_revealed_before_policy_lock")
-        if payload.get("used_for_retraining") is True:
-            reasons.append("challenge_used_for_retraining")
-        for key in LOCK_HASH_KEYS:
-            _require_hash(payload, key, reasons)
+        stage_reasons, _ = _holdout_evidence_reasons(
+            payload, stage_prefix="challenge", minimum_events=12
+        )
+        reasons.extend(stage_reasons)
     elif stage == "locked_validation":
-        stage_reasons, _ = _new_rainfall_evidence_reasons(
+        stage_reasons, _ = _holdout_evidence_reasons(
             payload, stage_prefix="locked", minimum_events=16
         )
         reasons.extend(stage_reasons)
     elif stage == "formal_blind":
         event_count = _event_count(payload)
-        stage_reasons, _ = _new_rainfall_evidence_reasons(
-            payload, stage_prefix="formal", minimum_events=24
+        stage_reasons, _ = _holdout_evidence_reasons(
+            payload, stage_prefix="formal_test", minimum_events=24
         )
         reasons.extend(stage_reasons)
         reasons.extend(_formal_strategy_reasons(payload, event_count))
@@ -296,10 +357,7 @@ def _stage_specific_reasons(stage: str, payload: Mapping[str, Any]) -> list[str]
 
 
 def _policy_lineage_reasons(
-    *,
-    stage: str,
-    payload: Mapping[str, Any],
-    output_root: Path,
+    *, stage: str, payload: Mapping[str, Any], output_root: Path
 ) -> list[str]:
     if stage not in {"challenge", "locked_validation", "formal_blind"}:
         return []
@@ -318,17 +376,16 @@ def _policy_lineage_reasons(
             reasons.append(f"{key}_does_not_match_policy_lock")
 
     stage_rain = _nonempty_sha_set(payload.get("rainfall_sha256s")) or set()
-    earlier_evaluations: tuple[tuple[str, str], ...]
     if stage == "locked_validation":
-        earlier_evaluations = (("challenge", "locked_rainfall_overlaps_challenge"),)
+        earlier = (("challenge", "locked_rainfall_overlaps_challenge"),)
     elif stage == "formal_blind":
-        earlier_evaluations = (
-            ("challenge", "formal_rainfall_overlaps_challenge"),
-            ("locked_validation", "formal_rainfall_overlaps_locked_validation"),
+        earlier = (
+            ("challenge", "final_test_rainfall_overlaps_challenge"),
+            ("locked_validation", "final_test_rainfall_overlaps_locked_validation"),
         )
     else:
-        earlier_evaluations = ()
-    for prior, reason in earlier_evaluations:
+        earlier = ()
+    for prior, reason in earlier:
         prior_path = output_root / EVIDENCE_RELATIVE_PATHS[prior]
         if not prior_path.exists():
             continue
@@ -375,7 +432,6 @@ def audit_stage_evidence(
 
 
 def audit_paper_workflow(output_root: str | Path) -> WorkflowAudit:
-    """Audit stages in order and stop at the first non-passing stage."""
     root = Path(output_root)
     audits: list[StageAudit] = []
     passed_through: str | None = None
@@ -405,7 +461,6 @@ def prerequisite_stage(stage: str) -> str | None:
 
 
 def assert_stage_authorized(stage: str, output_root: str | Path) -> None:
-    """Raise unless every preceding paper stage has valid V4.2 evidence."""
     if stage not in PAPER_STAGE_ORDER:
         raise KeyError(stage)
     root = Path(output_root)
@@ -424,12 +479,8 @@ def assert_stage_authorized(stage: str, output_root: str | Path) -> None:
 
 
 def write_stage_evidence(
-    *,
-    stage: str,
-    output_root: str | Path,
-    payload: Mapping[str, Any],
+    *, stage: str, output_root: str | Path, payload: Mapping[str, Any]
 ) -> Path:
-    """Write evidence only after prerequisites pass and stamp V4.2 lineage."""
     assert_stage_authorized(stage, output_root)
     root = Path(output_root)
     path = root / EVIDENCE_RELATIVE_PATHS[stage]

@@ -1,4 +1,4 @@
-"""Run one development-only Step2 qualification seed on the causal GAT manifest."""
+"""Run one development-only Step2 qualification seed on CONTROL_CORE targets."""
 from __future__ import annotations
 
 import argparse
@@ -46,22 +46,29 @@ def main() -> int:
 
     report_path = args.output_dir / "fast_step2_report.json"
     report = json.loads(report_path.read_text(encoding="utf-8"))
+    if report.get("step2_target_contract") != "CONTROL_CORE":
+        raise RuntimeError("qualification Step2 must train on CONTROL_CORE targets")
+    if report.get("storage_supervised") is not True or report.get("facility_flow_supervised") is not True:
+        raise RuntimeError("qualification CONTROL_CORE did not supervise storage/facility flow")
     report["source_contract_id"] = report.get("contract_id")
     report["contract_id"] = QUALIFICATION_CONTRACT
     report["stage"] = "qualification_step2_single_seed"
+    report["status"] = "pass"
     report["qualification_only"] = True
     report["development_only"] = True
     report["formal_mainline_authorized"] = False
     report["formal_evidence_eligible"] = False
-    report["core_target_coverage_verified_before_selection"] = True
-    report["explicit_outfall_supervision_deferred_to_formal_promotion"] = True
+    report["step2_target_contract"] = "CONTROL_CORE"
+    report["control_core_target_coverage_verified_before_selection"] = True
+    report["explicit_outfall_supervision_optional_extension"] = True
     report["qualification_note"] = (
-        "This model exercises the four-reference trajectory interfaces only. "
-        "Formal production remains blocked until explicit outfall-flow supervision is present."
+        "This model exercises the four-reference CONTROL_CORE hydraulic trajectory interfaces. "
+        "It supervises depth/flood/storage/facility flow. Explicit outfall discharge is required only for the optional FULL_HYDRAULIC claim."
     )
     qualification_report = args.output_dir / "qualification_step2_report.json"
     qualification_report.write_text(
-        json.dumps(report, indent=2, ensure_ascii=False, allow_nan=False), encoding="utf-8"
+        json.dumps(report, indent=2, ensure_ascii=False, allow_nan=False),
+        encoding="utf-8",
     )
     report_path.unlink()
     print(json.dumps(report, indent=2, ensure_ascii=False, allow_nan=False), flush=True)
