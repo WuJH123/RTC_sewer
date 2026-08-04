@@ -1,11 +1,17 @@
 """Calibrate the Formal PFV-only one-sided UCB.
 
-Hard hydraulic safety quantities:
-1. PFV_delta_UCB <= 100 m3 + 5% * PFV_no_control.
-Priority-node depth and Peak remain diagnostic channels only.
-Three Step2 seeds provide epistemic uncertainty. The current-generation
-Calibration holdout is used only for uncertainty/safety calibration, not model
-weight training.
+The sole hydraulic admission quantity is the complete PFV budget metric
+
+    g = PFV_candidate - 1.05 * PFV_no_control,
+
+and Formal admission requires ``UCB(g) <= 100 m3``.  Calibrating ``g`` directly
+is important: the 5% No-control reference term is itself model-predicted and
+must not be treated as deterministic.
+
+Priority-node depth and global Peak remain diagnostic channels only. Three
+Step2 seeds provide epistemic uncertainty. The current-generation Calibration
+holdout is used only for uncertainty/safety calibration, not model-weight
+training.
 """
 from __future__ import annotations
 
@@ -94,6 +100,41 @@ def _actual_no_control_pfv(
         flood = _json_array(raw)
         values.append(float(flood[:, priority_idx].sum() * DT_SEC))
     return np.asarray(values, dtype=float)
+
+
+def _admission_risk(
+    frame: pd.DataFrame,
+    predicted_safe: np.ndarray,
+    actual_safe: np.ndarray,
+) -> dict[str, float | int | None]:
+    predicted_safe = np.asarray(predicted_safe, dtype=bool)
+    actual_safe = np.asarray(actual_safe, dtype=bool)
+    false_safe = predicted_safe & ~actual_safe
+    admitted = int(predicted_safe.sum())
+    false_count = int(false_safe.sum())
+    conditional = float(false_count / admitted) if admitted else None
+    marginal = float(false_safe.mean())
+
+    group_rates: list[float] = []
+    if "split_group_key" in frame.columns:
+        groups = frame["split_group_key"].astype(str).to_numpy()
+        for group in sorted(set(groups)):
+            mask = groups == group
+            group_admitted = int(predicted_safe[mask].sum())
+            if group_admitted:
+                group_rates.append(
+                    float(false_safe[mask].sum() / group_admitted)
+                )
+    return {
+        "predicted_safe_count": admitted,
+        "false_safe_count": false_count,
+        "false_safe_rate_marginal": marginal,
+        "false_safe_rate_among_admitted": conditional,
+        "event_balanced_false_safe_rate_among_admitted": (
+            float(np.mean(group_rates)) if group_rates else None
+        ),
+        "admitted_rainfall_group_count": len(group_rates),
+    }
 
 
 def main() -> int:
@@ -185,8 +226,6 @@ def main() -> int:
     action_map = torch.from_numpy(graph["action_node_map"].astype(np.float32)).to(device)
     priority_idx = get_pfv_core_node_indices(list(graph["node_ids"]))
     priority = torch.as_tensor(priority_idx, dtype=torch.long, device=device)
-    # Critical: node_static is standardized for ML. Physical safety thresholds
-    # must come from the raw frozen INP, never from standardized graph features.
     depth_limits = priority_depth_limits_m(
         args.project_root,
         priority_idx,
@@ -252,12 +291,21 @@ def main() -> int:
     ensemble = {
         key: np.stack(values, axis=0) for key, values in pred_by_seed.items()
     }
+    budget_metric_ensemble = (
+        ensemble["pfv_delta"]
+        - PFV_RELATIVE_ALLOWANCE_FRACTION
+        * np.maximum(ensemble["no_control_pfv"], 0.0)
+    )
     depth_ensemble = np.stack(priority_depth_by_seed, axis=0)
     actual_delta = {
         key: frame[key].to_numpy(dtype=float)
         for key in ("pfv_delta", "tfv_delta", "peak_delta")
     }
     actual_nc_pfv = _actual_no_control_pfv(frame, priority_idx)
+    actual_budget_metric = (
+        actual_delta["pfv_delta"]
+        - PFV_RELATIVE_ALLOWANCE_FRACTION * np.maximum(actual_nc_pfv, 0.0)
+    )
     actual_priority_depth = np.stack(
         [
             _json_array(value)[:, priority_idx]
@@ -268,37 +316,37 @@ def main() -> int:
 
     mean = {key: value.mean(axis=0) for key, value in ensemble.items()}
     std = {key: value.std(axis=0, ddof=1) for key, value in ensemble.items()}
+    budget_mean = budget_metric_ensemble.mean(axis=0)
+    budget_std = budget_metric_ensemble.std(axis=0, ddof=1)
     depth_mean = depth_ensemble.mean(axis=0)
     depth_std = depth_ensemble.std(axis=0, ddof=1)
     eps = 1.0e-6
 
-    pfv_std_resid = (
-        actual_delta["pfv_delta"] - mean["pfv_delta"]
-    ) / np.maximum(std["pfv_delta"], eps)
+    budget_std_resid = (
+        actual_budget_metric - budget_mean
+    ) / np.maximum(budget_std, eps)
     depth_std_resid = (
         actual_priority_depth - depth_mean
     ) / np.maximum(depth_std, eps)
-    z_pfv = max(0.0, _conformal_quantile(pfv_std_resid, args.alpha))
+    z_pfv = max(0.0, _conformal_quantile(budget_std_resid, args.alpha))
     z_depth = max(
         0.0, _conformal_quantile(depth_std_resid.reshape(-1), args.alpha)
     )
     confidence_z = float(z_pfv)
 
-    pfv_ucb = mean["pfv_delta"] + confidence_z * std["pfv_delta"]
-    predicted_allowance = (
-        PFV_ABSOLUTE_ALLOWANCE_M3
-        + PFV_RELATIVE_ALLOWANCE_FRACTION
-        * np.maximum(mean["no_control_pfv"], 0.0)
-    )
-    actual_allowance = (
-        PFV_ABSOLUTE_ALLOWANCE_M3
-        + PFV_RELATIVE_ALLOWANCE_FRACTION * np.maximum(actual_nc_pfv, 0.0)
-    )
-    predicted_pfv_safe = pfv_ucb <= predicted_allowance
-    actual_pfv_safe = actual_delta["pfv_delta"] <= actual_allowance
-    pfv_false_safe = float(np.mean(predicted_pfv_safe & ~actual_pfv_safe))
+    budget_metric_ucb = budget_mean + confidence_z * budget_std
+    predicted_pfv_safe = budget_metric_ucb <= PFV_ABSOLUTE_ALLOWANCE_M3
+    actual_pfv_safe = actual_budget_metric <= PFV_ABSOLUTE_ALLOWANCE_M3
+    admission_risk = _admission_risk(frame, predicted_pfv_safe, actual_pfv_safe)
+    pfv_false_safe = float(admission_risk["false_safe_rate_marginal"])
+    conditional_false_safe = admission_risk["false_safe_rate_among_admitted"]
+    event_balanced_false_safe = admission_risk[
+        "event_balanced_false_safe_rate_among_admitted"
+    ]
 
-    depth_ucb = depth_mean + confidence_z * depth_std
+    # Depth is strictly diagnostic. Use its own diagnostic conformal factor so
+    # PFV calibration is not contaminated by a removed safety objective.
+    depth_ucb = depth_mean + z_depth * depth_std
     predicted_depth_safe = np.all(
         depth_ucb <= depth_limits[None, None, :], axis=(1, 2)
     )
@@ -318,15 +366,21 @@ def main() -> int:
     tfv_mae = float(
         np.mean(np.abs(mean["tfv_delta"] - actual_delta["tfv_delta"]))
     )
-    uncertainty_score = np.abs(
-        std["pfv_delta"] / (np.std(actual_delta["pfv_delta"]) + eps)
-    )
+    metric_scale = max(float(np.std(actual_budget_metric)), eps)
+    uncertainty_score = np.abs(budget_std / metric_scale)
     uncertainty_limit = float(np.quantile(uncertainty_score, 0.99))
-    status = (
-        "pass"
-        if pfv_false_safe <= args.alpha + 1.0e-12
-        else "fail"
-    )
+
+    # Marginal false-safe frequency alone is insufficient: a selector that
+    # admits very few candidates could pass while nearly every admitted action
+    # is unsafe. Require non-empty admission and <= alpha risk among admitted
+    # candidates, both row-weighted and event-balanced.
+    status = "pass"
+    if int(admission_risk["predicted_safe_count"]) <= 0:
+        status = "fail"
+    if conditional_false_safe is None or float(conditional_false_safe) > args.alpha + 1.0e-12:
+        status = "fail"
+    if event_balanced_false_safe is None or float(event_balanced_false_safe) > args.alpha + 1.0e-12:
+        status = "fail"
 
     payload = {
         "formal_generation_id": FORMAL_GENERATION_ID,
@@ -347,6 +401,10 @@ def main() -> int:
         "alpha": float(args.alpha),
         "confidence_z": confidence_z,
         "pfv_standardized_conformal_z": z_pfv,
+        "pfv_budget_metric_standardized_conformal_z": z_pfv,
+        "pfv_safety_statistic": "candidate_minus_1p05_no_control",
+        "pfv_safety_inequality": "UCB(PFV_candidate-1.05*PFV_no_control)<=100m3",
+        "pfv_budget_metric_std_scale": metric_scale,
         "priority_depth_standardized_conformal_z": z_depth,
         "pfv_absolute_allowance_m3": PFV_ABSOLUTE_ALLOWANCE_M3,
         "pfv_relative_allowance_fraction": PFV_RELATIVE_ALLOWANCE_FRACTION,
@@ -357,12 +415,20 @@ def main() -> int:
             "priority_node_limits_m": depth_limits.tolist(),
         },
         "pfv_false_safe_rate": pfv_false_safe,
+        "pfv_false_safe_rate_marginal": pfv_false_safe,
+        "pfv_false_safe_rate_among_admitted": conditional_false_safe,
+        "pfv_event_balanced_false_safe_rate_among_admitted": event_balanced_false_safe,
+        "pfv_predicted_safe_count": admission_risk["predicted_safe_count"],
+        "pfv_false_safe_count": admission_risk["false_safe_count"],
+        "pfv_admitted_rainfall_group_count": admission_risk[
+            "admitted_rainfall_group_count"
+        ],
         "priority_depth_false_safe_rate": priority_depth_false_safe,
-        "joint_false_safe_rate": joint_false_safe,
+        "joint_false_safe_rate_diagnostic_only": joint_false_safe,
         "peak_is_hard_safety_constraint": False,
         "peak_delta_ensemble_mae_m3s": peak_mae,
         "tfv_delta_ensemble_mae_m3": tfv_mae,
-        "uncertainty_score_contract": "normalized_step2_ensemble_std_pfv_only_diagnostic",
+        "uncertainty_score_contract": "normalized_step2_ensemble_std_complete_pfv_budget_metric_diagnostic",
         "uncertainty_limit_99": uncertainty_limit,
         "safety_calibrated": status == "pass",
         "control_objective_contract": "PROJECT6_V42_PFV_ONLY_TFV_MIN_MPC_V2",
@@ -370,7 +436,7 @@ def main() -> int:
         "priority_depth_hard_gate": False,
         "global_peak_hard_gate": False,
         "global_peak_objective_term": False,
-        "uncertainty_role": "PFV_UCB_only",
+        "uncertainty_role": "PFV_budget_UCB_only",
         "OOD_role": "diagnostic_only",
         "independent_OOD_gate": False,
         "independent_uncertainty_gate": False,
