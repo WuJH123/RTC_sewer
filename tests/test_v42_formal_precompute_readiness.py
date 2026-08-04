@@ -5,6 +5,7 @@ import pandas as pd
 
 from scripts.audit_v42_formal_precompute_readiness import (
     _hash_json_array,
+    _required_target_names,
     _stats,
     _target_columns,
     _weighted_group_stats,
@@ -31,6 +32,13 @@ def test_target_columns_keep_outfall_as_explicit_required_family():
     assert result["storage_volume"] == ["storage_volume:S1"]
     assert result["managed_facility_flow"] == ["flow:ADD301.2"]
     assert result["outfall_flow"] == ["outfall_flow:O1"]
+
+
+def test_control_core_does_not_require_outfall_supervision():
+    assert _required_target_names("CONTROL_CORE") == (
+        "node_depth", "node_flooding_rate", "storage_volume", "managed_facility_flow"
+    )
+    assert "outfall_flow" in _required_target_names("FULL_HYDRAULIC")
 
 
 def test_formal_gat_history_signature_excludes_checkpoint_transition(monkeypatch):
