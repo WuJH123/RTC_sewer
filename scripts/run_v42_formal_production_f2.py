@@ -2,8 +2,9 @@
 
 This entrypoint injects the rule-free-plant/native-Internal-shadow runtime,
 requires execution-derived dwell/target-write evidence, replaces the
-metadata-only stage22 stub with an actual surrogate-feedback closed loop, and
-expands Policy-Lock hashing to every executable Formal module.
+metadata-only stage22 stub with an actual surrogate-feedback closed loop,
+requires quantitative model acceptance before Policy Lock, and expands frozen
+lineage to every executable Formal module and the model-acceptance evidence.
 """
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 import scripts.run_v42_formal_paper_f2 as orchestrator
+import sewerrtc.v4.paper_workflow_v42 as workflow_contract
 from sewerrtc.v4 import v42_formal_runtime as base_runtime
 from sewerrtc.v4 import v42_formal_runtime_safe as safe_runtime
 from sewerrtc.v4 import v42_formal_surrogate_closed_loop as surrogate_runtime
@@ -27,17 +29,38 @@ from sewerrtc.v4.v42_formal_runtime_safe import (
 from sewerrtc.v4.v42_formal_surrogate_closed_loop import (
     run_surrogate_closed_loop_event,
 )
+from sewerrtc.v4.v42_model_acceptance import audit_model_acceptance
 from sewerrtc.v4.v42_pfv_tfv_runtime_patch import (
     predict_and_decide as corrected_predict_and_decide,
 )
 
 # The authoritative production path must use the corrected global-search PFV
-# selector in all three closed-loop implementations.  The underlying modules
+# selector in all three closed-loop implementations. The underlying modules
 # import ``predict_and_decide`` by name, so update their module globals before
 # any Formal stage can execute.
 base_runtime.predict_and_decide = corrected_predict_and_decide
 safe_runtime.predict_and_decide = corrected_predict_and_decide
 surrogate_runtime.predict_and_decide = corrected_predict_and_decide
+
+# Extend the in-process frozen lineage without changing legacy callers of the
+# shared workflow module. Both the orchestration holdout guard and the workflow
+# auditor resolve these module globals at runtime, so the exact model-acceptance
+# evidence hash becomes immutable after Policy Lock in production.
+MODEL_ACCEPTANCE_LOCK_KEY = "model_acceptance_evidence_sha256"
+if MODEL_ACCEPTANCE_LOCK_KEY not in workflow_contract.LOCK_HASH_KEYS:
+    workflow_contract.LOCK_HASH_KEYS = tuple(workflow_contract.LOCK_HASH_KEYS) + (
+        MODEL_ACCEPTANCE_LOCK_KEY,
+    )
+orchestrator.LOCK_HASH_KEYS = workflow_contract.LOCK_HASH_KEYS
+
+_base_stage_lock = orchestrator.stage_lock
+
+
+def _model_acceptance_path(project_root: Path) -> Path:
+    return (
+        project_root
+        / "outputs/project6_dual_reference_v4/final_v4/v42_paper/model_acceptance/evidence.json"
+    )
 
 
 def _production_policy_sha(project_root: Path) -> str:
@@ -47,6 +70,7 @@ def _production_policy_sha(project_root: Path) -> str:
         project_root / "sewerrtc/v4/v42_formal_runtime_safe.py",
         project_root / "sewerrtc/v4/v42_pfv_tfv_runtime_patch.py",
         project_root / "sewerrtc/v4/v42_formal_surrogate_closed_loop.py",
+        project_root / "sewerrtc/v4/v42_model_acceptance.py",
         project_root / "scripts/run_v42_formal_paper_f2.py",
         project_root / "scripts/run_v42_formal_production_f2.py",
         project_root / "configs/v42_formal_fallback_contract.json",
@@ -58,8 +82,9 @@ def _production_policy_sha(project_root: Path) -> str:
 
 
 def _production_policy_lock_payload(project_root: str | Path):
-    payload = base_runtime.policy_lock_payload(project_root)
-    payload["policy_sha256"] = _production_policy_sha(Path(project_root))
+    root = Path(project_root)
+    payload = base_runtime.policy_lock_payload(root)
+    payload["policy_sha256"] = _production_policy_sha(root)
     payload["production_runtime"] = "scripts/run_v42_formal_production_f2.py"
     payload["corrected_selector_runtime"] = "sewerrtc/v4/v42_pfv_tfv_runtime_patch.py"
     payload["candidate_search_scope"] = "global_engineering36_plus_priority_local"
@@ -70,6 +95,10 @@ def _production_policy_lock_payload(project_root: str | Path):
     payload["surrogate_closed_loop_is_executed_not_metadata_only"] = True
     payload["runtime_cross_decision_dwell_enforced"] = True
     payload["target_setting_write_readback_required"] = True
+    acceptance_path = _model_acceptance_path(root)
+    payload[MODEL_ACCEPTANCE_LOCK_KEY] = (
+        base_runtime.sha256_file(acceptance_path) if acceptance_path.exists() else ""
+    )
     return payload
 
 
@@ -282,6 +311,24 @@ def _production_stage_surrogate(
     )
 
 
+def _production_stage_lock(project_root: Path) -> dict[str, object]:
+    """Refuse Policy Lock until quantitative model validity is pre-frozen."""
+    acceptance = audit_model_acceptance(orchestrator.PAPER_ROOT)
+    if acceptance.get("status") != "pass":
+        raise RuntimeError(
+            "Policy Lock blocked: quantitative Step1/Step2 model acceptance has not "
+            f"passed on frozen Calibration evidence: {acceptance.get('reasons', [])}"
+        )
+    payload = _base_stage_lock(project_root)
+    # _base_stage_lock writes evidence using the patched policy_lock_payload;
+    # assert the accepted evidence hash was actually frozen into that record.
+    if str(payload.get(MODEL_ACCEPTANCE_LOCK_KEY, "")) != str(
+        acceptance.get("evidence_sha256", "")
+    ):
+        raise RuntimeError("Policy Lock did not freeze model-acceptance evidence hash")
+    return payload
+
+
 orchestrator.run_baseline_event = run_baseline_event
 orchestrator.run_proposed_event = run_proposed_event
 orchestrator._policy_sha = _production_policy_sha
@@ -289,6 +336,7 @@ orchestrator.policy_lock_payload = _production_policy_lock_payload
 orchestrator.stage_engineering = _production_stage_engineering
 orchestrator.stage_exact = _production_stage_exact
 orchestrator.stage_surrogate = _production_stage_surrogate
+orchestrator.stage_lock = _production_stage_lock
 orchestrator.PRODUCTION_RUNTIME_INJECTED = True
 
 
