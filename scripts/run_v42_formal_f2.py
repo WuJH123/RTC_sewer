@@ -139,6 +139,12 @@ def main() -> int:
         choices=("CONTROL_CORE", "FULL_HYDRAULIC"),
         default="CONTROL_CORE",
     )
+    ap.add_argument("--step1-cache-dir", type=Path, default=None)
+    ap.add_argument("--step1-num-workers", type=int, default=0)
+    ap.add_argument("--step1-persistent-workers", action=argparse.BooleanOptionalAction, default=False)
+    ap.add_argument("--step1-prefetch-factor", type=int, default=2)
+    ap.add_argument("--step1-pin-memory", action=argparse.BooleanOptionalAction, default=True)
+    ap.add_argument("--step1-runtime-status-dir", type=Path, default=None)
     args = ap.parse_args()
     root = args.project_root
     py = str(Path(sys.executable))
@@ -227,26 +233,40 @@ def main() -> int:
 
     def step1() -> None:
         for seed in args.seeds:
+            runtime_status = None
+            if args.step1_runtime_status_dir is not None:
+                runtime_status = args.step1_runtime_status_dir / f"step1_seed_{seed}.json"
+            step1_command = [
+                py,
+                "-u",
+                str(root / "scripts/train_v42_step1_formal_f2.py"),
+                "--project-root",
+                str(root),
+                "--manifest",
+                str(prep / "FORMAL_F2_STEP1_WINDOW_MANIFEST.parquet"),
+                "--output-dir",
+                str(step1_root / f"seed_{seed}"),
+                "--model-seed",
+                str(seed),
+                "--split-seed",
+                str(args.split_seed),
+                "--sensor-layout-seed",
+                str(args.sensor_layout_seed),
+                "--min-train-groups",
+                "65",
+                "--num-workers",
+                str(args.step1_num_workers),
+                "--prefetch-factor",
+                str(args.step1_prefetch_factor),
+                "--pin-memory" if args.step1_pin_memory else "--no-pin-memory",
+                "--persistent-workers" if args.step1_persistent_workers else "--no-persistent-workers",
+            ]
+            if args.step1_cache_dir is not None:
+                step1_command.extend(["--cache-dir", str(args.step1_cache_dir)])
+            if runtime_status is not None:
+                step1_command.extend(["--runtime-status-file", str(runtime_status)])
             _run(
-                [
-                    py,
-                    "-u",
-                    str(root / "scripts/train_v42_step1_formal_f2.py"),
-                    "--project-root",
-                    str(root),
-                    "--manifest",
-                    str(prep / "FORMAL_F2_STEP1_WINDOW_MANIFEST.parquet"),
-                    "--output-dir",
-                    str(step1_root / f"seed_{seed}"),
-                    "--model-seed",
-                    str(seed),
-                    "--split-seed",
-                    str(args.split_seed),
-                    "--sensor-layout-seed",
-                    str(args.sensor_layout_seed),
-                    "--min-train-groups",
-                    "65",
-                ],
+                step1_command,
                 root,
             )
 
