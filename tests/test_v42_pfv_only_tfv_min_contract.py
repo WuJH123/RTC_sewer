@@ -19,6 +19,7 @@ def _candidate(
     name: str,
     *,
     pfv: float = 0.0,
+    pfv_budget_metric: float | None = None,
     tfv: float = 0.0,
     peak: float = 0.0,
     priority: float = 0.0,
@@ -45,6 +46,7 @@ def _candidate(
         pfv_no_control_m3=1000.0,
         priority_depth_ucb_m=(priority,),
         priority_depth_limit_m=(1.0,),
+        pfv_budget_metric_ucb_m3=pfv_budget_metric,
     )
 
 
@@ -63,6 +65,35 @@ def test_pfv_violation_cannot_be_compensated_by_tfv() -> None:
     )
     assert d.selected_id == "safe"
     assert "PFV_budget_exceeded_vs_no_control" in d.audits[0].rejection_reasons
+
+
+def test_complete_pfv_budget_metric_is_authoritative_when_present() -> None:
+    # Legacy delta-UCB arithmetic would admit this because the allowance is
+    # 100 + 5% * 1000 = 150 m3. The complete calibrated statistic says the
+    # budget margin UCB is 100.01 m3, so Formal V2 must reject it.
+    d = decide_pfvfirst_mpc(
+        candidates=[
+            _candidate(
+                "unsafe_complete_budget",
+                pfv=0.0,
+                pfv_budget_metric=100.01,
+                tfv=-10000.0,
+            )
+        ],
+        fallback=_fallback(),
+    )
+    assert d.used_fallback
+    assert d.audits[0].pfv_budget_metric_ucb_m3 == 100.01
+    assert "PFV_budget_exceeded_vs_no_control" in d.audits[0].rejection_reasons
+
+
+def test_complete_pfv_budget_metric_at_100_is_admitted() -> None:
+    d = decide_pfvfirst_mpc(
+        candidates=[_candidate("edge", pfv=999.0, pfv_budget_metric=100.0, tfv=-2.0)],
+        fallback=_fallback(),
+    )
+    assert not d.used_fallback
+    assert d.selected_id == "edge"
 
 
 def test_priority_depth_is_not_an_admission_gate() -> None:
@@ -117,6 +148,7 @@ def test_empty_pfv_safe_set_falls_back() -> None:
     )
     assert d.used_fallback
     assert d.selected_id == "hold"
+    assert d.metadata["fallback_is_engineering_fail_safe_not_pfv_certificate"] is True
 
 
 def test_tfv_tie_uses_candidate_id() -> None:
