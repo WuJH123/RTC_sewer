@@ -147,6 +147,14 @@ def _job(job: dict) -> dict:
     paths = {name: detail_dir / f"{event}__{name}.csv" for name in ("no_control", "dynamic_internal", "candidate_1", "candidate_2", "candidate_3")}
     completion_dir = event_dir / "completions"
     result_path = event_dir / "event_result.json"
+    endpoint_repair = bool(
+        job["resume"]
+        and any(
+            not _covers_duration(path, float(job["simulation_duration_min"]))
+            for path in paths.values()
+            if path.exists() and path.stat().st_size > 0
+        )
+    )
     if job["resume"] and result_path.exists() and all(
         path.exists() and path.stat().st_size > 0 and _covers_duration(path, float(job["simulation_duration_min"]))
         for path in paths.values()
@@ -158,11 +166,11 @@ def _job(job: dict) -> dict:
     native_raw = event_dir / f"{event}__native_rules_raw.inp"
     native = event_dir / f"{event}__native_rules.inp"
     no_controls = event_dir / f"{event}__no_controls.inp"
-    if not no_controls.exists() or job["force"]:
+    if not no_controls.exists() or job["force"] or endpoint_repair:
         mutate_inp_for_event(base_inp, rainfall, no_controls, int(job["simulation_duration_min"]), strip_controls=True)
-    if not native_raw.exists() or job["force"]:
+    if not native_raw.exists() or job["force"] or endpoint_repair:
         mutate_inp_for_event(base_inp, rainfall, native_raw, int(job["simulation_duration_min"]), strip_controls=False)
-    if not native.exists() or job["force"]:
+    if not native.exists() or job["force"] or endpoint_repair:
         _delay_native_rules(native_raw, native, float(job["checkpoint_min"]))
     actuators = pd.DataFrame(job["actuators"])
     ids = actuators["actuator_id"].astype(str).tolist()
