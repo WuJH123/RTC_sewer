@@ -176,6 +176,17 @@ def _status(root: Path, qualification: Path) -> dict[str, Any]:
         except Exception:
             pass
 
+    micro_status = qualification / "QUALIFICATION_MICRO_STAGE_STATUS.json"
+    if micro_status.exists():
+        try:
+            micro_payload = _read_json(micro_status)
+            micro_stages = micro_payload.get("stage_status", {})
+            for stage in STAGES[12:]:
+                if micro_stages.get(stage) == "PASS_REUSABLE":
+                    statuses[stage] = "PASS_REUSABLE"
+        except Exception:
+            pass
+
     passed = [stage for stage in STAGES if statuses[stage] == "PASS_REUSABLE"]
     next_stage = next(
         (stage for stage in STAGES if statuses[stage] != "PASS_REUSABLE"), None
