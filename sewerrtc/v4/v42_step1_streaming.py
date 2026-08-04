@@ -396,12 +396,45 @@ class Step1StreamingDataset(IterableDataset):
                 source_identity=source_identity,
             )
             try:
+                # Prepare file-level arrays once.  Without this, every window
+                # rescans elapsed_min and repeats pandas conversions over the
+                # same physical trajectory.
+                elapsed_values = pd.to_numeric(
+                    detail["elapsed_min"], errors="coerce"
+                ).to_numpy(np.float64)
+                elapsed_index: dict[float, int] = {}
+                duplicate_times: set[float] = set()
+                for index, value in enumerate(elapsed_values):
+                    key = round(float(value), 6)
+                    if key in elapsed_index:
+                        duplicate_times.add(key)
+                    else:
+                        elapsed_index[key] = index
+                for key in duplicate_times:
+                    elapsed_index.pop(key, None)
+                depth_cols = [f"h:{node_id}" for node_id in self.graph.node_ids]
+                setting_cols = [f"setting:{facility_id}" for facility_id in self.graph.facility_ids]
+                depth_values = detail[depth_cols].apply(
+                    pd.to_numeric, errors="coerce"
+                ).to_numpy(dtype=np.float32)
+                rain_values = pd.to_numeric(
+                    detail["rainfall_mm_h"], errors="coerce"
+                ).to_numpy(dtype=np.float32)
+                action_values = detail[setting_cols].apply(
+                    pd.to_numeric, errors="coerce"
+                ).to_numpy(dtype=np.float32)
+                prepared_detail = None
                 for row in rows.itertuples(index=False):
                     extracted = _detail_extract_window(
-                        detail,
+                        prepared_detail,
                         float(row.anchor_min),
                         self.graph.node_ids,
                         self.graph.facility_ids,
+                        elapsed_values=elapsed_values,
+                        elapsed_index=elapsed_index,
+                        depth_values=depth_values,
+                        rain_values=rain_values,
+                        action_values=action_values,
                     )
                     if extracted is None:
                         raise RuntimeError(

@@ -245,21 +245,32 @@ def _build_usecols(node_ids: list[str], facility_ids: list[str]) -> list[str]:
 
 
 def _detail_extract_window(
-    detail: pd.DataFrame,
+    detail: pd.DataFrame | None,
     anchor_min: float,
     node_ids: list[str],
     facility_ids: list[str],
+    *,
+    elapsed_values: np.ndarray | None = None,
+    elapsed_index: dict[float, int] | None = None,
+    depth_values: np.ndarray | None = None,
+    rain_values: np.ndarray | None = None,
+    action_values: np.ndarray | None = None,
 ) -> dict[str, np.ndarray] | None:
     """Extract exact 13-frame causal input and anchor-time depth target."""
     required = ["elapsed_min", "rainfall_mm_h"]
     required.extend(f"h:{nid}" for nid in node_ids)
     required.extend(f"setting:{fid}" for fid in facility_ids)
-    missing = [col for col in required if col not in detail.columns]
-    if missing:
-        raise KeyError(f"formal Step1 detail missing required columns: {missing[:10]}")
+    if detail is not None:
+        missing = [col for col in required if col not in detail.columns]
+        if missing:
+            raise KeyError(f"formal Step1 detail missing required columns: {missing[:10]}")
+    elif any(x is None for x in (elapsed_values, depth_values, rain_values, action_values)):
+        raise ValueError("prepared window extraction requires all projected arrays")
 
-    elapsed = pd.to_numeric(detail["elapsed_min"], errors="coerce").to_numpy(
-        np.float64
+    elapsed = (
+        pd.to_numeric(detail["elapsed_min"], errors="coerce").to_numpy(np.float64)  # type: ignore[index]
+        if elapsed_values is None
+        else elapsed_values
     )
     if not np.isfinite(elapsed).all():
         return None
@@ -269,25 +280,48 @@ def _detail_extract_window(
     ]
     indices: list[int] = []
     for t in history_times:
-        matches = np.flatnonzero(
-            np.isclose(elapsed, t, atol=TIME_ATOL_MIN, rtol=0.0)
-        )
-        if len(matches) != 1:
-            return None
-        indices.append(int(matches[0]))
+        if elapsed_index is not None:
+            candidate = elapsed_index.get(round(float(t), 6))
+            if candidate is None:
+                matches = np.flatnonzero(
+                    np.isclose(elapsed, t, atol=TIME_ATOL_MIN, rtol=0.0)
+                )
+                if len(matches) != 1:
+                    return None
+                candidate = int(matches[0])
+            elif abs(float(elapsed[candidate]) - float(t)) > TIME_ATOL_MIN:
+                return None
+            indices.append(int(candidate))
+        else:
+            matches = np.flatnonzero(
+                np.isclose(elapsed, t, atol=TIME_ATOL_MIN, rtol=0.0)
+            )
+            if len(matches) != 1:
+                return None
+            indices.append(int(matches[0]))
     idx = np.asarray(indices, dtype=np.int64)
 
     depth_cols = [f"h:{nid}" for nid in node_ids]
     setting_cols = [f"setting:{fid}" for fid in facility_ids]
-    depth = detail.iloc[idx][depth_cols].apply(
-        pd.to_numeric, errors="coerce"
-    ).to_numpy(dtype=np.float32)
-    rain = pd.to_numeric(
-        detail.iloc[idx]["rainfall_mm_h"], errors="coerce"
-    ).to_numpy(dtype=np.float32)
-    actions = detail.iloc[idx][setting_cols].apply(
-        pd.to_numeric, errors="coerce"
-    ).to_numpy(dtype=np.float32)
+    depth = (
+        detail.iloc[idx][depth_cols]  # type: ignore[union-attr]
+        .apply(pd.to_numeric, errors="coerce")
+        .to_numpy(dtype=np.float32)
+        if depth_values is None
+        else depth_values[idx]
+    )
+    rain = (
+        pd.to_numeric(detail.iloc[idx]["rainfall_mm_h"], errors="coerce").to_numpy(dtype=np.float32)  # type: ignore[union-attr]
+        if rain_values is None
+        else rain_values[idx]
+    )
+    actions = (
+        detail.iloc[idx][setting_cols]  # type: ignore[union-attr]
+        .apply(pd.to_numeric, errors="coerce")
+        .to_numpy(dtype=np.float32)
+        if action_values is None
+        else action_values[idx]
+    )
     if not (
         np.isfinite(depth).all()
         and np.isfinite(rain).all()
