@@ -115,9 +115,14 @@ def compare_pre_action_signatures(
     return result
 
 
-def _load_detail(load_detail: Callable[[Path], pd.DataFrame], path: str) -> pd.DataFrame:
+def _load_detail(
+    load_detail: Callable[..., pd.DataFrame],
+    path: str,
+    start_min: float | None = None,
+    end_min: float | None = None,
+) -> pd.DataFrame:
     try:
-        return load_detail(Path(path))
+        return load_detail(Path(path), start_min, end_min)
     except (KeyError, TypeError):
         return load_detail(path)  # type: ignore[arg-type]
 
@@ -158,7 +163,12 @@ def resolve_compatible_history(
     for row in candidates.to_dict("records"):
         path = str(row["detail_path"])
         try:
-            detail = _load_detail(load_detail, path)
+            detail = _load_detail(
+                load_detail,
+                path,
+                float(checkpoint_min) - 120.0,
+                float(checkpoint_min),
+            )
             comparison = compare_pre_action_signatures(
                 candidate_signature,
                 pre_action_signature_components(detail, checkpoint_min, graph),
@@ -244,7 +254,7 @@ def choose_history_compatible_state(
         checkpoint = float(checkpoints.iloc[0])
         try:
             candidate_signature = pre_action_signature_components(
-                _load_detail(load_detail, candidate_path), checkpoint, graph
+                _load_detail(load_detail, candidate_path, checkpoint - 60.0, checkpoint), checkpoint, graph
             )
             history = resolve_compatible_history(
                 history_index=history_index,

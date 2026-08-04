@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 from collections import OrderedDict
 from pathlib import Path
@@ -24,12 +25,61 @@ from sewerrtc.v4.v42_step1_dataset import (
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _detail(path: Path, required: list[str]) -> pd.DataFrame:
+_RAW_MANIFEST_LARGE_COLUMNS = frozenset(
+    {
+        # These are diagnostic/raw copies.  ``history_depth`` and
+        # ``rainfall_forecast`` are replaced by this materializer; the SWMM
+        # truth history must never be carried into the online input.
+        "history_depth_swmm_truth_diagnostic",
+        "history_depth",
+        "rainfall_forecast",
+    }
+)
+
+
+def _read_input_manifest(path: Path) -> tuple[pd.DataFrame, list[str]]:
+    """Read the raw manifest without loading duplicated large JSON columns."""
+    if path.suffix.lower() != ".parquet":
+        return read_table(path), []
+    import pyarrow.parquet as pq
+
+    names = list(pq.ParquetFile(path).schema.names)
+    columns = [name for name in names if name not in _RAW_MANIFEST_LARGE_COLUMNS]
+    return pd.read_parquet(path, columns=columns), sorted(
+        set(names) - set(columns)
+    )
+
+
+def _detail(
+    path: Path,
+    required: list[str],
+    start_min: float | None = None,
+    end_min: float | None = None,
+) -> pd.DataFrame:
     header = pd.read_csv(path, nrows=0)
     missing = [c for c in required if c not in set(map(str, header.columns))]
     if missing:
         raise KeyError(f"formal GAT history detail missing required columns: {missing[:10]}")
-    return pd.read_csv(path, usecols=required, low_memory=False).loc[:, required]
+    if start_min is None or end_min is None:
+        return pd.read_csv(path, usecols=required, low_memory=False).loc[:, required]
+    elapsed = pd.to_numeric(
+        pd.read_csv(path, usecols=["elapsed_min"])["elapsed_min"], errors="coerce"
+    ).to_numpy(np.float64)
+    valid = np.flatnonzero(
+        np.isfinite(elapsed)
+        & (elapsed >= float(start_min) - 1.0e-6)
+        & (elapsed <= float(end_min) + 1.0e-6)
+    )
+    if valid.size == 0:
+        return pd.DataFrame(columns=required)
+    first, last = int(valid[0]), int(valid[-1])
+    return pd.read_csv(
+        path,
+        usecols=required,
+        skiprows=range(1, first + 1),
+        nrows=last - first + 1,
+        low_memory=False,
+    ).loc[:, required]
 
 
 def _cached_detail(
@@ -37,16 +87,21 @@ def _cached_detail(
     path: Path,
     required: list[str],
     max_items: int,
+    start_min: float | None = None,
+    end_min: float | None = None,
 ) -> pd.DataFrame:
-    key = str(path.resolve())
+    resolved = str(path.resolve())
+    key = f"{resolved}::{start_min}::{end_min}"
     if key in cache:
         value = cache.pop(key)
         cache[key] = value
         return value
-    value = _detail(path, required)
+    value = _detail(path, required, start_min, end_min)
     cache[key] = value
     while len(cache) > max_items:
-        cache.popitem(last=False)
+        _, evicted = cache.popitem(last=False)
+        del evicted
+        gc.collect()
     return value
 
 
@@ -92,7 +147,9 @@ def _validate_history(
         raise ValueError("history source coverage starts after checkpoint-120")
     if upper < checkpoint - 1.0e-6:
         raise ValueError("history source coverage ends before checkpoint")
-    detail = _cached_detail(cache, path, required, cache_items)
+    detail = _cached_detail(
+        cache, path, required, cache_items, checkpoint - 120.0, checkpoint
+    )
     if not _same(candidate_signature, _signature(detail, checkpoint, graph)):
         raise ValueError("history source pre-action signature mismatch")
     for anchor in (checkpoint - 60.0 + 5.0 * i for i in range(13)):
@@ -154,11 +211,14 @@ def main() -> int:
     ap.add_argument("--gat-layers", type=int, default=3)
     ap.add_argument("--detail-cache-items", type=int, default=12)
     args = ap.parse_args()
-    if args.detail_cache_items < 2:
-        raise ValueError("detail-cache-items must be >=2")
+    if args.detail_cache_items < 1:
+        raise ValueError("detail-cache-items must be >=1")
 
-    frame_all = read_table(args.input_manifest)
+    frame_all, projected_out = _read_input_manifest(args.input_manifest)
     frame = frame_all[pd.to_numeric(frame_all["checkpoint_min"], errors="coerce") >= 120.0].copy()
+    input_rows_before_checkpoint_gate = len(frame_all)
+    del frame_all
+    gc.collect()
     if frame.empty:
         raise RuntimeError("Formal GAT materialisation has no checkpoint >=120 min states")
     required_source = {"state_key", "history_detail_path", "compatible", "formal_generation_id"}
@@ -195,14 +255,21 @@ def main() -> int:
     output: list[pd.Series] = []
     failures: list[dict[str, Any]] = []
     successful_groups: set[str] = set()
-    groups = list(frame.groupby("state_key", sort=True))
-    for index, (state, group) in enumerate(groups, start=1):
+    total_states = int(frame["state_key"].astype(str).nunique())
+    for index, (state, group) in enumerate(frame.groupby("state_key", sort=True), start=1):
         first = group.iloc[0]
         rainfall = str(first["split_group_key"])
         checkpoint = float(first["checkpoint_min"])
         candidate_path = Path(str(first["source_detail_path_candidate"]))
         try:
-            candidate = _cached_detail(cache, candidate_path, required, args.detail_cache_items)
+            candidate = _cached_detail(
+                cache,
+                candidate_path,
+                required,
+                args.detail_cache_items,
+                checkpoint - 60.0,
+                checkpoint,
+            )
             candidate_signature = _signature(candidate, checkpoint, graph)
             source = source_by_state.get(str(state))
             if source is None:
@@ -248,7 +315,7 @@ def main() -> int:
                 "error": f"{type(exc).__name__}: {exc}",
             })
         if index % 25 == 0:
-            print(json.dumps({"stage": "formal_f2_step2_gat_history", "processed_states": index, "total_states": len(groups), "output_rows": len(output), "failed_states": len(failures), "detail_cache_items": len(cache)}, allow_nan=False), flush=True)
+            print(json.dumps({"stage": "formal_f2_step2_gat_history", "processed_states": index, "total_states": total_states, "output_rows": len(output), "failed_states": len(failures), "detail_cache_items": len(cache)}, allow_nan=False), flush=True)
 
     result = pd.DataFrame(output)
     args.output_manifest.parent.mkdir(parents=True, exist_ok=True)
@@ -260,7 +327,7 @@ def main() -> int:
         "status": "pass" if len(successful_groups) >= args.min_rainfall_groups else "fail",
         "development_only": False,
         "formal_mainline_authorized": False,
-        "input_rows_before_checkpoint_gate": int(len(frame_all)),
+        "input_rows_before_checkpoint_gate": input_rows_before_checkpoint_gate,
         "input_rows": int(len(frame)),
         "output_rows": int(len(result)),
         "input_states": int(frame["state_key"].astype(str).nunique()),
@@ -281,6 +348,7 @@ def main() -> int:
         "sensor_count": len(indices),
         "sensor_layout_sha256": sensor_sha,
         "detail_cache_limit": args.detail_cache_items,
+        "raw_manifest_columns_projected_out": projected_out,
     }
     audit_path = args.output_manifest.parent / "FORMAL_F2_STEP2_GAT_HISTORY_AUDIT.json"
     audit_path.write_text(json.dumps(audit, indent=2, ensure_ascii=False, allow_nan=False), encoding="utf-8")
