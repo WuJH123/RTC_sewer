@@ -33,6 +33,7 @@ from sewerrtc.v4.v42_step1_dataset import load_graph_assets
 
 
 _DURATION = re.compile(r"_D(\d+)(?:_|$)")
+CHECKPOINT_MIN = 125.0
 
 
 def _delay_native_rules(source: Path, target: Path, checkpoint: float) -> None:
@@ -147,15 +148,26 @@ def _job(job: dict) -> dict:
     paths = {name: detail_dir / f"{event}__{name}.csv" for name in ("no_control", "dynamic_internal", "candidate_1", "candidate_2", "candidate_3")}
     completion_dir = event_dir / "completions"
     result_path = event_dir / "event_result.json"
+    existing_result = None
+    if result_path.exists():
+        try:
+            existing_result = json.loads(result_path.read_text(encoding="utf-8"))
+        except Exception:
+            existing_result = None
+    checkpoint_repair = bool(
+        existing_result is not None
+        and float(existing_result.get("checkpoint_min", -1.0)) != CHECKPOINT_MIN
+    )
     endpoint_repair = bool(
         job["resume"]
+        and checkpoint_repair
         and any(
             not _covers_duration(path, float(job["simulation_duration_min"]))
             for path in paths.values()
             if path.exists() and path.stat().st_size > 0
         )
     )
-    if job["resume"] and result_path.exists() and all(
+    if job["resume"] and existing_result is not None and not checkpoint_repair and all(
         path.exists() and path.stat().st_size > 0 and _covers_duration(path, float(job["simulation_duration_min"]))
         for path in paths.values()
     ):
@@ -338,7 +350,7 @@ def main() -> int:
         duration = int(duration_match.group(1)) if duration_match else int(math.ceil(float(row["duration_min"])))
         # The final 5-minute report row is stamped at end-5; add one interval
         # so the exact checkpoint+120 row exists for Formal H120 selection.
-        simulation_duration = max(245, duration + 120)
+        simulation_duration = max(CHECKPOINT_MIN + 120.0 + 5.0, duration + CHECKPOINT_MIN)
         jobs.append(
             {
                 "project_root": str(args.project_root.resolve()),
@@ -347,7 +359,7 @@ def main() -> int:
                 "rainfall_sha256": str(row["rainfall_sha256"]),
                 "rain_duration_min": duration,
                 "simulation_duration_min": simulation_duration,
-                "checkpoint_min": 120.0,
+                "checkpoint_min": CHECKPOINT_MIN,
                 "event_dir": str(output / event),
                 "actuators": actuators.to_dict(orient="list"),
                 "priority_nodes": priority,
@@ -394,8 +406,8 @@ def main() -> int:
         "case_rows": len(rows),
         "swmm_runs": sum(int(x["swmm_runs"]) for x in results),
         "shared_hold_reference": True,
-        "checkpoint_min": 120.0,
-        "h120_future_end_min": 240.0,
+        "checkpoint_min": CHECKPOINT_MIN,
+        "h120_future_end_min": CHECKPOINT_MIN + 120.0,
         "manifest": str(manifest.resolve()),
         "manifest_sha256": sha256_file(manifest),
         "network_sha256": network_sha,
