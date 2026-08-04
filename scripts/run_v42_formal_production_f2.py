@@ -18,6 +18,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import scripts.run_v42_formal_paper_f2 as orchestrator
 from sewerrtc.v4 import v42_formal_runtime as base_runtime
+from sewerrtc.v4 import v42_formal_runtime_safe as safe_runtime
+from sewerrtc.v4 import v42_formal_surrogate_closed_loop as surrogate_runtime
 from sewerrtc.v4.v42_formal_runtime_safe import (
     run_baseline_event,
     run_proposed_event,
@@ -25,6 +27,17 @@ from sewerrtc.v4.v42_formal_runtime_safe import (
 from sewerrtc.v4.v42_formal_surrogate_closed_loop import (
     run_surrogate_closed_loop_event,
 )
+from sewerrtc.v4.v42_pfv_tfv_runtime_patch import (
+    predict_and_decide as corrected_predict_and_decide,
+)
+
+# The authoritative production path must use the corrected global-search PFV
+# selector in all three closed-loop implementations.  The underlying modules
+# import ``predict_and_decide`` by name, so update their module globals before
+# any Formal stage can execute.
+base_runtime.predict_and_decide = corrected_predict_and_decide
+safe_runtime.predict_and_decide = corrected_predict_and_decide
+surrogate_runtime.predict_and_decide = corrected_predict_and_decide
 
 
 def _production_policy_sha(project_root: Path) -> str:
@@ -32,6 +45,7 @@ def _production_policy_sha(project_root: Path) -> str:
         project_root / "sewerrtc/control/pfvfirst_mpc_v42.py",
         project_root / "sewerrtc/v4/v42_formal_runtime.py",
         project_root / "sewerrtc/v4/v42_formal_runtime_safe.py",
+        project_root / "sewerrtc/v4/v42_pfv_tfv_runtime_patch.py",
         project_root / "sewerrtc/v4/v42_formal_surrogate_closed_loop.py",
         project_root / "scripts/run_v42_formal_paper_f2.py",
         project_root / "scripts/run_v42_formal_production_f2.py",
@@ -47,6 +61,10 @@ def _production_policy_lock_payload(project_root: str | Path):
     payload = base_runtime.policy_lock_payload(project_root)
     payload["policy_sha256"] = _production_policy_sha(Path(project_root))
     payload["production_runtime"] = "scripts/run_v42_formal_production_f2.py"
+    payload["corrected_selector_runtime"] = "sewerrtc/v4/v42_pfv_tfv_runtime_patch.py"
+    payload["candidate_search_scope"] = "global_engineering36_plus_priority_local"
+    payload["candidate_cap_applied_after_projection"] = True
+    payload["pfv_safety_statistic"] = "candidate_minus_1p05_no_control"
     payload["rule_free_proposed_plant"] = True
     payload["native_internal_causal_shadow"] = True
     payload["surrogate_closed_loop_is_executed_not_metadata_only"] = True
@@ -152,6 +170,9 @@ def _production_stage_exact(
             "strategy_event_counts": counts,
             "no_control_all_open_authoritative": True,
             "internal_native_rules_authoritative": True,
+            "candidate_search_scope": "global_engineering36_plus_priority_local",
+            "candidate_cap_applied_after_projection": True,
+            "pfv_safety_statistic": "candidate_minus_1p05_no_control",
         }
     )
     orchestrator.write_stage_evidence(
@@ -249,6 +270,9 @@ def _production_stage_surrogate(
             "result_paths": [str(x["detail_path"]) for x in results],
             "execution_ledger_path": str(ledger_path),
             "state_source": "surrogate_feedback_from_authoritative_prefix",
+            "candidate_search_scope": "global_engineering36_plus_priority_local",
+            "candidate_cap_applied_after_projection": True,
+            "pfv_safety_statistic": "candidate_minus_1p05_no_control",
         }
     )
     orchestrator.write_stage_evidence(
