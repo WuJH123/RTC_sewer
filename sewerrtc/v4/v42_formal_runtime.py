@@ -319,7 +319,12 @@ def load_actuators(project_root: str | Path) -> pd.DataFrame:
     return frame
 
 
-def load_model_bundle(project_root: str | Path, device_name: str = "auto") -> FormalModelBundle:
+def load_model_bundle(
+    project_root: str | Path,
+    device_name: str = "auto",
+    *,
+    step2_calibration_path: str | Path | None = None,
+) -> FormalModelBundle:
     root = Path(project_root)
     formal = root / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2"
     graph = load_graph_assets(root)
@@ -372,9 +377,20 @@ def load_model_bundle(project_root: str | Path, device_name: str = "auto") -> Fo
     step1_calibration = _read_json(
         formal / "calibration/STEP1_UNCERTAINTY_OOD_CALIBRATION.json"
     )
-    step2_calibration = _read_json(
+    calibration_path = (
         formal / "calibration/PFV_ONLY_SAFETY_CALIBRATION.json"
+        if step2_calibration_path is None
+        else Path(step2_calibration_path)
     )
+    step2_calibration = _read_json(calibration_path)
+    if step2_calibration_path is not None and (
+        step2_calibration.get("development_only") is not True
+        or step2_calibration.get("formal_mainline_authorized") is True
+    ):
+        raise RuntimeError(
+            "an explicit Step2 calibration override must be marked development_only "
+            "and cannot authorize Formal mainline"
+        )
     if step1_calibration.get("status") != "pass" or step2_calibration.get("status") != "pass":
         raise RuntimeError("Formal runtime requires passed Step1 and Step2 calibration")
     if int(step1_calibration.get("calibration_rainfall_group_count", 0)) != 12:
@@ -995,6 +1011,7 @@ def run_proposed_event(
     state_source: str = "gat_sparse_reconstruction",
     device: str = "auto",
     max_candidate_sequences: int = 64,
+    step2_calibration_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Run the canonical V4.2 policy against an authoritative SWMM plant.
 
@@ -1008,7 +1025,7 @@ def run_proposed_event(
 
     root = Path(project_root)
     actuators = load_actuators(root)
-    bundle = load_model_bundle(root, device)
+    bundle = load_model_bundle(root, device, step2_calibration_path=step2_calibration_path)
     ids = actuators["actuator_id"].astype(str).tolist()
     if ids != [str(x) for x in bundle.graph.facility_ids]:
         raise RuntimeError("Formal Proposed actuator order differs from trained graph")

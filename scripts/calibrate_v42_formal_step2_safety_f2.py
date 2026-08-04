@@ -127,6 +127,7 @@ def main() -> int:
     ap.add_argument("--alpha", type=float, default=0.05)
     ap.add_argument("--min-calibration-groups", type=int, default=8)
     ap.add_argument("--batch-size", type=int, default=4)
+    ap.add_argument("--development-only", action="store_true")
     args = ap.parse_args()
 
     if not (0.0 < args.alpha < 0.5):
@@ -332,9 +333,13 @@ def main() -> int:
         "formal_generation_id": FORMAL_GENERATION_ID,
         "stage": "formal_f2_pfv_only_safety_calibration",
         "status": status,
-        "development_only": False,
+        "development_only": bool(args.development_only),
         "formal_mainline_authorized": False,
-        "calibration_authority": "current_generation_calibration_holdout",
+        "calibration_authority": (
+            "revealed_diagnostic_calibration"
+            if args.development_only
+            else "current_generation_calibration_holdout"
+        ),
         "calibration_manifest": str(args.calibration_manifest),
         "calibration_manifest_sha256": sha256_file(args.calibration_manifest),
         "calibration_rainfall_groups": calibration_groups,

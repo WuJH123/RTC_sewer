@@ -236,6 +236,7 @@ def run_proposed_event(
     state_source: str = "gat_sparse_reconstruction",
     device: str = "auto",
     max_candidate_sequences: int = 64,
+    step2_calibration_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Run rule-free Proposed plant plus causal native-rule Internal shadow."""
     from pyswmm import Links, Nodes, RainGages, Simulation
@@ -245,7 +246,7 @@ def run_proposed_event(
     out_dir.mkdir(parents=True, exist_ok=True)
     runtime_event = _runtime_event(event, out_dir)
     actuators = load_actuators(root)
-    bundle = load_model_bundle(root, device)
+    bundle = load_model_bundle(root, device, step2_calibration_path=step2_calibration_path)
     ids = actuators["actuator_id"].astype(str).tolist()
     if ids != [str(x) for x in bundle.graph.facility_ids]:
         raise RuntimeError("Formal Proposed actuator order differs from trained graph")
@@ -261,41 +262,54 @@ def run_proposed_event(
     runtime_dwell_fallback_count = 0
     started = time.time()
 
-    with Simulation(str(runtime_event.inp_path)) as sim, Simulation(str(event.inp_path)) as internal_sim:
+    # PySWMM cannot host two Simulation objects in one Python process. Run the
+    # native Internal shadow to completion first, then expose only its current
+    # readback row while the rule-free Proposed plant advances.
+    shadow_dir = out_dir / "_internal_shadow"
+    shadow_result = _run_baseline_event(
+        event,
+        strategy="Internal",
+        project_root=root,
+        output_dir=shadow_dir,
+    )
+    shadow = pd.read_csv(shadow_result["detail_path"], low_memory=False)
+    shadow_setting_cols = [f"setting:{aid}" for aid in ids]
+    missing_shadow = [c for c in shadow_setting_cols if c not in shadow.columns]
+    if missing_shadow:
+        raise KeyError(f"native Internal shadow detail missing readback columns: {missing_shadow[:5]}")
+    shadow_times = pd.to_numeric(shadow["elapsed_min"], errors="coerce").to_numpy(float)
+    shadow_actions = shadow[shadow_setting_cols].apply(pd.to_numeric, errors="coerce").to_numpy(float)
+    if not np.isfinite(shadow_times).all() or not np.isfinite(shadow_actions).all():
+        raise RuntimeError("native Internal shadow contains nonfinite elapsed/readback values")
+    if len(np.unique(shadow_times)) != len(shadow_times):
+        raise RuntimeError("native Internal shadow has duplicate elapsed_min rows")
+    shadow_by_time = {round(float(t), 6): shadow_actions[i].astype(np.float32) for i, t in enumerate(shadow_times)}
+    shadow_initial = shadow_by_time[min(shadow_by_time)]
+
+    with Simulation(str(runtime_event.inp_path)) as sim:
         sim.step_advance(STATE_STEP_SEC)
-        internal_sim.step_advance(STATE_STEP_SEC)
         sim.start()
-        internal_sim.start()
         nodes = Nodes(sim)
         links = Links(sim)
         gages = RainGages(sim)
-        internal_links = Links(internal_sim)
         node_ids = _ids_from_container(nodes, "nodeid")
         node_objs = {nid: nodes[nid] for nid in node_ids}
         actuator_ids, link_objs = _get_existing_links(links, ids)
-        internal_ids, internal_link_objs = _get_existing_links(internal_links, ids)
-        if actuator_ids != ids or internal_ids != ids:
-            raise RuntimeError("Formal Proposed plant/shadow do not expose Engineering36")
+        if actuator_ids != ids:
+            raise RuntimeError("Formal Proposed plant does not expose Engineering36")
         rain_ids = _ids_from_container(gages, "raingageid")
         rain_obj = gages[rain_ids[0]] if rain_ids else None
         current_action = _observed_action_from_links(link_objs, ids, actuators)
-        internal_initial = _observed_action_from_links(internal_link_objs, ids, actuators)
-        command = internal_initial.copy()
+        command = shadow_initial.copy()
         _write_and_verify_target(link_objs, ids, command)
-        shadow_iter = iter(internal_sim)
         for _ in sim:
-            try:
-                next(shadow_iter)
-            except StopIteration as exc:
-                raise RuntimeError(
-                    "Dynamic-Internal causal shadow ended before Proposed plant"
-                ) from exc
             pre = _frame(sim, node_objs, rain_obj, link_objs, ids, actuators)
             frames.append(pre)
             elapsed = float(pre["elapsed_min"])
-            internal_current = _observed_action_from_links(
-                internal_link_objs, ids, actuators
-            )
+            shadow_key = round(elapsed, 6)
+            if shadow_key not in shadow_by_time:
+                raise RuntimeError(f"native Internal shadow lacks causal row at elapsed_min={elapsed}")
+            internal_current = shadow_by_time[shadow_key].copy()
             if elapsed < 120.0 - 1.0e-6:
                 command = internal_current.copy()
                 _write_and_verify_target(link_objs, ids, command)
@@ -425,6 +439,7 @@ def run_proposed_event(
         "plant_native_controls_disabled": True,
         "internal_shadow_native_controls_preserved": True,
         "internal_shadow_future_state_used_online": False,
+        "internal_shadow_detail_path": str(shadow_result["detail_path"]),
         "target_write_verified_count": target_write_verified_count,
         "target_write_all_decisions_verified": bool(
             decisions and target_write_verified_count == len(decisions)
