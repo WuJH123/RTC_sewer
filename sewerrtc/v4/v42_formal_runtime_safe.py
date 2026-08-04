@@ -9,8 +9,9 @@ shadow advanced only to the current decision time.
 
 Before the first decision (120 min, required by the 13 causal GAT anchors), the
 rule-free Proposed plant replays the *current* native-Internal readback from the
-causal shadow at every 5-min step.  This provides a deterministic common prefix
-instead of letting the rule-free plant sit at a stale initial setting.
+causal shadow at every 5-min step. Runtime execution additionally enforces the
+cross-decision minimum dwell guard and verifies every PySWMM ``target_setting``
+write before accepting it as Formal evidence.
 """
 from __future__ import annotations
 
@@ -26,6 +27,7 @@ import pandas as pd
 
 from sewerrtc.simulation.kpi_metrics import compute_kpis
 from sewerrtc.simulation.pyswmm_runner import (
+    _as_float,
     _get_existing_links,
     _ids_from_container,
     _observed_action_from_links,
@@ -106,6 +108,95 @@ def _runtime_event(event: FormalEventInput, output_dir: Path) -> FormalEventInpu
     return replace(event, inp_path=runtime_inp)
 
 
+def _target_readback(link_objs: dict[str, Any], ids: list[str]) -> np.ndarray:
+    return np.asarray(
+        [
+            _as_float(getattr(link_objs[aid], "target_setting", np.nan), np.nan)
+            for aid in ids
+        ],
+        dtype=np.float32,
+    )
+
+
+def _write_and_verify_target(
+    link_objs: dict[str, Any], ids: list[str], command: np.ndarray
+) -> np.ndarray:
+    command = np.asarray(command, dtype=np.float32).reshape(-1)
+    if command.size != len(ids) or not np.isfinite(command).all():
+        raise RuntimeError("Formal target command is not a finite Engineering36 vector")
+    for i, aid in enumerate(ids):
+        link_objs[aid].target_setting = float(command[i])
+    written = _target_readback(link_objs, ids)
+    if not np.isfinite(written).all() or not np.allclose(
+        written, command, atol=1.0e-6, rtol=0.0
+    ):
+        raise RuntimeError(
+            "PySWMM target_setting write/readback mismatch; refusing Formal execution"
+        )
+    return written
+
+
+def _runtime_dwell_guard(
+    command: np.ndarray,
+    current: np.ndarray,
+    ids: list[str],
+    *,
+    decision_step: int,
+    last_change_step: dict[str, int],
+) -> tuple[np.ndarray, bool, list[str]]:
+    """Enforce >=2 control-step dwell across rolling-MPC decisions.
+
+    The two binary pumps and the verified variable-speed pump are the devices
+    with explicit minimum dwell in the frozen Engineering36 controller lineage.
+    If any proposed first-step change violates dwell, the complete action falls
+    back to the current readback rather than partially executing a differently
+    scored candidate.
+    """
+    command = np.asarray(command, dtype=np.float32).copy()
+    current = np.asarray(current, dtype=np.float32).copy()
+    protected = {"ADD301.2", "ADD301.3", "add350.1"}
+    violations: list[str] = []
+    changed = np.abs(command - current) > 1.0e-6
+    for i, aid in enumerate(ids):
+        if aid not in protected or not changed[i]:
+            continue
+        if int(decision_step) - int(last_change_step.get(aid, -1000)) < 2:
+            violations.append(aid)
+    if violations:
+        return current, False, violations
+    for i, aid in enumerate(ids):
+        if changed[i] and aid in protected:
+            last_change_step[aid] = int(decision_step)
+    return command, True, []
+
+
+def _record_row_with_target(
+    *,
+    frame: dict[str, Any],
+    event_id: str,
+    strategy: str,
+    command: np.ndarray,
+    readback: np.ndarray,
+    node_objs: dict[str, Any],
+    link_objs: dict[str, Any],
+    actuator_ids: list[str],
+) -> dict[str, Any]:
+    row = _record_row(
+        frame=frame,
+        event_id=event_id,
+        strategy=strategy,
+        command=command,
+        readback=readback,
+        node_objs=node_objs,
+        link_objs=link_objs,
+        actuator_ids=actuator_ids,
+    )
+    written = _target_readback(link_objs, actuator_ids)
+    for i, aid in enumerate(actuator_ids):
+        row[f"target:{aid}"] = float(written[i])
+    return row
+
+
 def run_baseline_event(
     event: FormalEventInput,
     *,
@@ -164,6 +255,10 @@ def run_proposed_event(
     records: list[dict[str, Any]] = []
     decisions: list[dict[str, Any]] = []
     frames: list[dict[str, Any]] = []
+    last_change_step: dict[str, int] = {}
+    decision_step = 0
+    target_write_verified_count = 0
+    runtime_dwell_fallback_count = 0
     started = time.time()
 
     with Simulation(str(runtime_event.inp_path)) as sim, Simulation(str(event.inp_path)) as internal_sim:
@@ -185,10 +280,8 @@ def run_proposed_event(
         rain_obj = gages[rain_ids[0]] if rain_ids else None
         current_action = _observed_action_from_links(link_objs, ids, actuators)
         internal_initial = _observed_action_from_links(internal_link_objs, ids, actuators)
-        # Align the first rule-free interval with the native reference prefix.
         command = internal_initial.copy()
-        for i, aid in enumerate(ids):
-            link_objs[aid].target_setting = float(command[i])
+        _write_and_verify_target(link_objs, ids, command)
         shadow_iter = iter(internal_sim)
         for _ in sim:
             try:
@@ -204,11 +297,8 @@ def run_proposed_event(
                 internal_link_objs, ids, actuators
             )
             if elapsed < 120.0 - 1.0e-6:
-                # Deterministic prefix replay: the external plant receives only
-                # the shadow's *current* readback for the next 5-min interval.
                 command = internal_current.copy()
-                for i, aid in enumerate(ids):
-                    link_objs[aid].target_setting = float(command[i])
+                _write_and_verify_target(link_objs, ids, command)
             elif _is_decision_time(elapsed):
                 history, uncertainty, ood_score = reconstruct_history(
                     frames, bundle, state_source=state_source
@@ -230,6 +320,21 @@ def run_proposed_event(
                     gat_ood_score=ood_score,
                     max_candidate_sequences=max_candidate_sequences,
                 )
+                command, dwell_pass, dwell_violations = _runtime_dwell_guard(
+                    command,
+                    current_action,
+                    ids,
+                    decision_step=decision_step,
+                    last_change_step=last_change_step,
+                )
+                if not dwell_pass:
+                    runtime_dwell_fallback_count += 1
+                    info["used_fallback"] = True
+                    info["selected_id"] = "frozen_hold_readback"
+                    info["reason"] = "runtime_cross_decision_dwell_guard"
+                    info["runtime_dwell_violations"] = dwell_violations
+                written = _write_and_verify_target(link_objs, ids, command)
+                target_write_verified_count += 1
                 info.update(
                     {
                         "event_id": event.event_id,
@@ -255,15 +360,18 @@ def run_proposed_event(
                         "internal_shadow_native_controls_preserved": True,
                         "internal_shadow_future_state_used_online": False,
                         "precontrol_prefix_contract": "causal_internal_readback_replay",
+                        "runtime_cross_decision_dwell_pass": dwell_pass,
+                        "target_write_verified": bool(
+                            np.allclose(written, command, atol=1.0e-6, rtol=0.0)
+                        ),
                     }
                 )
                 decisions.append(info)
-                for i, aid in enumerate(ids):
-                    link_objs[aid].target_setting = float(command[i])
+                decision_step += 1
             readback = _observed_action_from_links(link_objs, ids, actuators)
             current_action = readback.copy()
             records.append(
-                _record_row(
+                _record_row_with_target(
                     frame=pre,
                     event_id=event.event_id,
                     strategy="Proposed",
@@ -316,6 +424,12 @@ def run_proposed_event(
         "plant_native_controls_disabled": True,
         "internal_shadow_native_controls_preserved": True,
         "internal_shadow_future_state_used_online": False,
+        "target_write_verified_count": target_write_verified_count,
+        "target_write_all_decisions_verified": bool(
+            decisions and target_write_verified_count == len(decisions)
+        ),
+        "runtime_dwell_fallback_count": runtime_dwell_fallback_count,
+        "runtime_cross_decision_dwell_enforced": True,
         "runtime_sec": time.time() - started,
     }
     (out_dir / "run_result.json").write_text(
