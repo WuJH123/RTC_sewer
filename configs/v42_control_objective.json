@@ -46,8 +46,8 @@
     "target_write_readback": true
   },
   "max_changed_facilities": 8,
-  "fallback": {
-    "action": "execute_frozen_hold_on_empty_admitted_set",
+  "fallback": "execute_frozen_hold_on_empty_admitted_set",
+  "fallback_semantics": {
     "role": "engineering_fail_safe",
     "pfv_certificate": false,
     "report_infeasible_pfv_safe_set": true
