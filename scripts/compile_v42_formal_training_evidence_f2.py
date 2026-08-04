@@ -114,7 +114,7 @@ def main() -> int:
         args.formal_root / "calibration" / "STEP1_UNCERTAINTY_OOD_CALIBRATION.json"
     )
     step2_cal = _json(
-        args.formal_root / "calibration" / "STEP2_SAFETY_CALIBRATION.json"
+        args.formal_root / "calibration" / "PFV_ONLY_SAFETY_CALIBRATION.json"
     )
     raw_audit = _json(
         args.formal_root / "step2" / "FORMAL_F2_STEP2_RAW_ADMISSION_AUDIT.json"
@@ -277,8 +277,17 @@ def main() -> int:
         "model_seeds": args.seeds,
         "train_rainfall_group_count": int(step2_primary["train_rainfall_group_count"]),
         "safety_calibrated": True,
+        "control_objective_contract": "PROJECT6_V42_PFV_ONLY_TFV_MIN_MPC_V2",
+        "pfv_budget_applied": True,
+        "objective": "minimize_TFV_subject_to_PFV_budget",
+        "priority_depth_hard_gate": False,
+        "global_peak_objective_term": False,
+        "uncertainty_role": "PFV_UCB_only",
+        "OOD_role": "diagnostic_only",
+        "independent_OOD_gate": False,
+        "independent_uncertainty_gate": False,
         "safety_calibration_sha256": sha256_file(
-            args.formal_root / "calibration" / "STEP2_SAFETY_CALIBRATION.json"
+            args.formal_root / "calibration" / "PFV_ONLY_SAFETY_CALIBRATION.json"
         ),
         "confidence_z": step2_cal.get("confidence_z"),
         "pfv_false_safe_rate_calibration": step2_cal.get("pfv_false_safe_rate"),

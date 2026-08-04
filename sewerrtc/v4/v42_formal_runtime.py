@@ -4,8 +4,8 @@ This module is deliberately separate from the development/qualification micro
 runner.  It uses the frozen V4.2 contracts directly:
 
 * sparse-GAT (or true-state diagnostic) causal history;
-* shared four-reference trajectory surrogate;
-* canonical ``decide_pfvfirst_mpc`` PFV-budgeted/priority-depth safe selector;
+ * shared four-reference trajectory surrogate;
+ * canonical ``decide_pfvfirst_mpc`` PFV-constrained TFV-minimising selector;
 * Engineering36 projected/read-back execution;
 * explicit Formal baselines: No-control=all-open, All-close=all-zero,
   Internal=native SWMM rules, Hold=initial readback, EFD and Auto-RBC;
@@ -47,6 +47,7 @@ from sewerrtc.control.pfvfirst_mpc_v42 import (
     SafetyMargins,
     decide_pfvfirst_mpc,
 )
+from sewerrtc.network.influence_domain import build_priority_influence_domains
 from sewerrtc.models.temporal_sparse_gat_v42 import TemporalSparseGATReconstructorV42
 from sewerrtc.simulation.kpi_metrics import compute_kpis
 from sewerrtc.simulation.pyswmm_runner import (
@@ -61,10 +62,10 @@ from sewerrtc.v4.models_v42.hydraulic_multi_reference import MultiReferenceHydra
 from sewerrtc.v4.v42_fast_e2e import make_causal_rainfall_forecast
 from sewerrtc.v4.v42_node_safety import priority_depth_limits_m
 from sewerrtc.v4.v42_priority_contract import get_pfv_core_node_indices
-from sewerrtc.v4.v42_step1_dataset import _sensor_layout, load_graph_assets
+from sewerrtc.v4.v42_step1_dataset import _parse_inp_topology, _sensor_layout, load_graph_assets
 
 
-FORMAL_OBJECTIVE_CONTRACT = "PROJECT6_V42_PFV_BUDGETED_TFV_MPC_V1"
+FORMAL_OBJECTIVE_CONTRACT = "PROJECT6_V42_PFV_ONLY_TFV_MIN_MPC_V2"
 FORMAL_FALLBACK_CONTRACT = "configs/v42_formal_fallback_contract.json"
 FORMAL_STRATEGIES = (
     "Proposed",
@@ -162,6 +163,7 @@ class FormalModelBundle:
     sensor_indices: np.ndarray
     sensor_layout_sha256: str
     priority_indices: list[int]
+    priority_to_actuators: pd.DataFrame
     priority_depth_limits: np.ndarray
     edge_index: torch.Tensor
     node_static: torch.Tensor
@@ -181,6 +183,48 @@ class FormalModelBundle:
             self.step2_reports[0],
         )
         return str(primary["surrogate_model_sha256"])
+
+
+def _build_priority_influence_map(
+    project_root: str | Path, graph: Any, actuators: pd.DataFrame
+) -> pd.DataFrame:
+    """Use only physically local actuator domains for Formal candidate generation."""
+    inp_path = Path(project_root) / "data/wuhan_v8_storage_retrofit.inp"
+    _, links = _parse_inp_topology(inp_path)
+    endpoint_by_link = {
+        str(row["link_id"]).casefold(): {
+            "from_node": str(row["from_node"]),
+            "to_node": str(row["to_node"]),
+        }
+        for _, row in links.iterrows()
+        if str(row.get("link_id", "")).strip()
+    }
+    enriched = actuators.copy()
+    for column in ("from_node", "to_node"):
+        values = []
+        for _, row in enriched.iterrows():
+            current = str(row.get(column, ""))
+            if current and current.casefold() not in {"nan", "none"}:
+                values.append(current)
+                continue
+            link_id = str(row.get("link_id", row.get("actuator_id", ""))).casefold()
+            values.append(str(endpoint_by_link.get(link_id, {}).get(column, "")))
+        enriched[column] = values
+    priority_nodes = [
+        str(graph.node_ids[i])
+        for i in get_pfv_core_node_indices(list(graph.node_ids))
+    ]
+    _, influence = build_priority_influence_domains(
+        links,
+        enriched,
+        priority_nodes,
+        include_global_storage_controls=False,
+        include_global_regulators=False,
+        include_global_pumps=False,
+    )
+    if influence.empty:
+        raise RuntimeError("Formal candidate generation requires a non-empty priority influence map")
+    return influence.reset_index(drop=True)
 
 
 def load_formal_event_inputs(
@@ -328,7 +372,9 @@ def load_model_bundle(project_root: str | Path, device_name: str = "auto") -> Fo
     step1_calibration = _read_json(
         formal / "calibration/STEP1_UNCERTAINTY_OOD_CALIBRATION.json"
     )
-    step2_calibration = _read_json(formal / "calibration/STEP2_SAFETY_CALIBRATION.json")
+    step2_calibration = _read_json(
+        formal / "calibration/PFV_ONLY_SAFETY_CALIBRATION.json"
+    )
     if step1_calibration.get("status") != "pass" or step2_calibration.get("status") != "pass":
         raise RuntimeError("Formal runtime requires passed Step1 and Step2 calibration")
     if int(step1_calibration.get("calibration_rainfall_group_count", 0)) != 12:
@@ -342,6 +388,7 @@ def load_model_bundle(project_root: str | Path, device_name: str = "auto") -> Fo
     if str(step1_report.get("sensor_layout_sha256", "")) != sensor_sha:
         raise RuntimeError("Formal runtime sensor layout differs from Formal Step1")
     priority_indices = get_pfv_core_node_indices(list(graph.node_ids))
+    priority_to_actuators = _build_priority_influence_map(root, graph, load_actuators(root))
     limits = priority_depth_limits_m(root, priority_indices)
     fallback_path = root / FORMAL_FALLBACK_CONTRACT
     if not fallback_path.exists():
@@ -359,6 +406,7 @@ def load_model_bundle(project_root: str | Path, device_name: str = "auto") -> Fo
         sensor_indices=sensor_indices,
         sensor_layout_sha256=sensor_sha,
         priority_indices=priority_indices,
+        priority_to_actuators=priority_to_actuators,
         priority_depth_limits=np.asarray(limits, dtype=np.float64),
         edge_index=torch.as_tensor(graph.edge_index, dtype=torch.long, device=device),
         node_static=torch.as_tensor(graph.node_static, dtype=torch.float32, device=device),
@@ -613,6 +661,7 @@ def predict_and_decide(
         max_sequences=max_candidate_sequences,
         group_limit=8,
         reference_sequence=np.repeat(base[None, :], HORIZON_STEPS, axis=0),
+        priority_to_actuators=bundle.priority_to_actuators,
     )
     projected: list[tuple[str, np.ndarray, EngineeringStatus, int, bool]] = []
     for item in generated:
@@ -678,15 +727,11 @@ def predict_and_decide(
     if not np.isfinite(z):
         raise RuntimeError("Formal Step2 calibration confidence_z is not finite")
     scales = _uncertainty_normalizers(bundle)
-    uncertainty_score = np.sqrt(
-        np.square(std["pfv_delta"] / scales[0])
-        + np.square(std["tfv_delta"] / scales[1])
-        + np.square(std["peak_delta"] / scales[2])
-    )
+    # V2 uses uncertainty only for the one-sided PFV UCB. TFV/Peak uncertainty
+    # remains available as diagnostic output but cannot reject or rank actions.
+    uncertainty_score = np.abs(std["pfv_delta"] / scales[0])
     uncertainty_limit = float(bundle.step2_calibration.get("uncertainty_limit_99", np.nan))
     ood_limit = float(bundle.step1_calibration.get("ood_limit_99", np.nan))
-    if not np.isfinite(uncertainty_limit) or not np.isfinite(ood_limit):
-        raise RuntimeError("Formal calibrated uncertainty/OOD limits are not finite")
 
     candidates: list[MPCandidate] = []
     for i, (label, seq, engineering, k_count, executable) in enumerate(projected):
@@ -729,7 +774,7 @@ def predict_and_decide(
             contract_hash=bundle.fallback_contract_sha256,
             legal=True,
         ),
-        margins=SafetyMargins(require_priority_depth=True),
+        margins=SafetyMargins(),
         weights=MPCWeights(),
         expected_fallback_contract_hash=bundle.fallback_contract_sha256,
     )
@@ -748,13 +793,25 @@ def predict_and_decide(
         "selected_id": decision.selected_id,
         "used_fallback": decision.used_fallback,
         "reason": decision.reason,
-        "objective": decision.objective,
+        "selected_objective_score": decision.objective,
         "candidate_audits": audit_rows,
         "gat_ood_score": float(gat_ood_score),
         "ood_limit_99": ood_limit,
         "uncertainty_limit_99": uncertainty_limit,
         "canonical_pfvfirst_mpc_v42": True,
         "control_objective_contract": FORMAL_OBJECTIVE_CONTRACT,
+        "pfv_budget_applied": True,
+        "uncertainty_used_for_pfv_ucb": True,
+        "priority_depth_hard_gate": False,
+        "global_peak_hard_gate": False,
+        "global_peak_objective_term": False,
+        "peak_penalty_weight": 0.0,
+        "action_penalty_weight": 0.0,
+        "terminal_penalty_weight": 0.0,
+        "uncertainty_penalty_weight": 0.0,
+        "independent_OOD_gate": False,
+        "independent_uncertainty_gate": False,
+        "objective": "minimize_TFV_subject_to_PFV_budget",
         "future_hydraulic_truth_used_online": False,
         "realized_future_rainfall_used_online": False,
         "dynamic_internal_future_truth_used_online": False,
@@ -1031,7 +1088,8 @@ def run_proposed_event(
                         "current_frame_repetition_used": False,
                         "authoritative_swmm_history_used_as_online_input": state_source == "true_state",
                         "gat_uncertainty_used": state_source == "gat_sparse_reconstruction",
-                        "ood_gate_used": state_source == "gat_sparse_reconstruction",
+                        "ood_gate_used": False,
+                        "ood_diagnostic_used": state_source == "gat_sparse_reconstruction",
                         "sensor_layout_sha256": bundle.sensor_layout_sha256,
                     }
                 )
@@ -1122,6 +1180,14 @@ def policy_lock_payload(project_root: str | Path) -> dict[str, Any]:
         training_groups.update(map(str, report.get("validation_rainfall_groups", [])))
         training_groups.update(map(str, report.get("calibration_rainfall_groups", [])))
     fallback = root / FORMAL_FALLBACK_CONTRACT
+    objective_contract = root / "configs/v42_control_objective.json"
+    candidate_generator = root / "sewerrtc/control/action_sequence_generator.py"
+    engineering_projector = root / "sewerrtc/v4/v42_formal_runtime.py"
+    production_runtime = root / "scripts/run_v42_formal_production_f2.py"
+    surrogate_loop = root / "sewerrtc/v4/v42_formal_surrogate_closed_loop.py"
+    pfv_calibration = formal / "calibration/PFV_ONLY_SAFETY_CALIBRATION.json"
+    rainfall_forecast = root / "sewerrtc/v4/v42_formal_runtime.py"
+    sensor_layout = root / "sewerrtc/v4/v42_step1_dataset.py"
     return {
         "policy_sha256": policy_sha,
         "model_sha256": str(step2["surrogate_model_sha256"]),
@@ -1129,4 +1195,14 @@ def policy_lock_payload(project_root: str | Path) -> dict[str, Any]:
         "fallback_contract_sha256": sha256_file(fallback),
         "training_rainfall_sha256s": sorted(training_groups),
         "control_objective_contract": FORMAL_OBJECTIVE_CONTRACT,
+        "control_objective_contract_sha256": sha256_file(objective_contract),
+        "candidate_generator_sha256": sha256_file(candidate_generator),
+        "engineering_projector_sha256": sha256_file(engineering_projector),
+        "production_runtime_sha256": sha256_file(production_runtime),
+        "surrogate_loop_sha256": sha256_file(surrogate_loop),
+        # Empty is intentional before the new PFV-only calibration exists;
+        # Policy Lock must fail closed until this field is populated.
+        "pfv_calibration_sha256": sha256_file(pfv_calibration) if pfv_calibration.exists() else "",
+        "rainfall_forecast_sha256": sha256_file(rainfall_forecast),
+        "sensor_layout_sha256": sha256_file(sensor_layout),
     }

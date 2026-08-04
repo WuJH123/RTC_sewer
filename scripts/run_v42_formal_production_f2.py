@@ -202,9 +202,37 @@ def _production_stage_surrogate(
         results.append(result)
     if len(results) != len(events) or not results:
         raise RuntimeError("stage22 surrogate closed loop did not complete every frozen Calibration event")
+    ledger_path = orchestrator.FORMAL_ROOT / "paper_execution/surrogate_closed_loop/FORMAL_EXECUTION_LEDGER.csv"
+    step1 = orchestrator._read_json(orchestrator.PAPER_ROOT / "step1_gat/evidence.json")
     step2 = orchestrator._read_json(
         orchestrator.PAPER_ROOT / "step2_surrogate/evidence.json"
     )
+    runtime_sha = orchestrator.sha256_file(Path(__file__).resolve())
+    for result in results:
+        detail_path = Path(str(result["detail_path"]))
+        decision_path = Path(str(result["decision_path"]))
+        orchestrator.append_csv(
+            ledger_path,
+            {
+                "stage": "surrogate_closed_loop",
+                "role": "calibration",
+                "event_id": str(result["event_id"]),
+                "rainfall_sha256": str(result["rainfall_sha256"]),
+                "strategy": "Proposed",
+                "state_source": "surrogate_feedback_from_authoritative_prefix",
+                "input_sha256": next(e.input_sha256 for e in events if e.event_id == result["event_id"]),
+                "physical_network_sha256": next(e.input_sha256 for e in events if e.event_id == result["event_id"]),
+                "policy_sha256": _production_policy_sha(project_root),
+                "runtime_sha256": runtime_sha,
+                "step1_sha256": str(step1["gat_model_sha256"]),
+                "step2_sha256": str(step2["surrogate_model_sha256"]),
+                "detail_path": str(detail_path),
+                "detail_sha256": orchestrator.sha256_file(detail_path),
+                "decision_path": str(decision_path),
+                "decision_sha256": orchestrator.sha256_file(decision_path),
+                "status": "pass",
+            },
+        )
     payload = orchestrator._base_evidence_payload()
     payload.update(
         {
@@ -219,6 +247,8 @@ def _production_stage_surrogate(
             "realized_future_rainfall_used_online": False,
             "dynamic_internal_future_action_used_online": False,
             "result_paths": [str(x["detail_path"]) for x in results],
+            "execution_ledger_path": str(ledger_path),
+            "state_source": "surrogate_feedback_from_authoritative_prefix",
         }
     )
     orchestrator.write_stage_evidence(
@@ -235,6 +265,7 @@ orchestrator.policy_lock_payload = _production_policy_lock_payload
 orchestrator.stage_engineering = _production_stage_engineering
 orchestrator.stage_exact = _production_stage_exact
 orchestrator.stage_surrogate = _production_stage_surrogate
+orchestrator.PRODUCTION_RUNTIME_INJECTED = True
 
 
 if __name__ == "__main__":

@@ -26,6 +26,7 @@ from .paper_workflow_v42 import (
 
 
 MAINLINE_ID = "PROJECT6_V42_MAINLINE_V2"
+CONTROL_OBJECTIVE_CONTRACT = "PROJECT6_V42_PFV_ONLY_TFV_MIN_MPC_V2"
 MAINLINE_STAGES = (
     "phase_r0",
     "step1_sparse_state",
@@ -286,8 +287,16 @@ def _audit_step3(output_root: Path) -> MainlineStageAudit:
             reasons.append("wrong_step3_selector")
         if p.get("pfv_reference") != "no_control":
             reasons.append("step3_wrong_pfv_reference")
-        if p.get("peak_reference") != "dynamic_internal":
-            reasons.append("step3_wrong_peak_reference")
+        if p.get("control_objective_contract") != CONTROL_OBJECTIVE_CONTRACT:
+            reasons.append("step3_wrong_control_objective_contract")
+        if p.get("peak_reference") != "reporting_only":
+            reasons.append("step3_peak_must_be_reporting_only")
+        if p.get("objective") != "minimize_TFV_subject_to_PFV_budget":
+            reasons.append("step3_wrong_tfv_objective")
+        if p.get("priority_depth_hard_gate") is not False:
+            reasons.append("step3_priority_depth_must_be_diagnostic_only")
+        if p.get("global_peak_objective_term") is not False:
+            reasons.append("step3_global_peak_must_not_enter_objective")
         if p.get("tfv_reference") != "dynamic_internal":
             reasons.append("step3_wrong_tfv_reference")
         if int(p.get("max_changed_facilities", -1)) != 8:

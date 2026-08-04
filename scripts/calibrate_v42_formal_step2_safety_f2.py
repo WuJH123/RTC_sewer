@@ -1,10 +1,8 @@
-"""Calibrate Formal F2 uncertainty for PFV-budget and priority-depth safety.
+"""Calibrate the Formal PFV-only one-sided UCB.
 
 Hard hydraulic safety quantities:
 1. PFV_delta_UCB <= 100 m3 + 5% * PFV_no_control.
-2. Priority-node depth_UCB <= node-specific raw-INP depth limit.
-
-Peak relative to Dynamic Internal is a performance penalty, not a hard gate.
+Priority-node depth and Peak remain diagnostic channels only.
 Three Step2 seeds provide epistemic uncertainty. The current-generation
 Calibration holdout is used only for uncertainty/safety calibration, not model
 weight training.
@@ -123,7 +121,7 @@ def main() -> int:
         "--output",
         type=Path,
         default=PROJECT_ROOT
-        / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2/calibration/STEP2_SAFETY_CALIBRATION.json",
+        / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2/calibration/PFV_ONLY_SAFETY_CALIBRATION.json",
     )
     ap.add_argument("--seeds", type=int, nargs="+", default=[17, 42, 73])
     ap.add_argument("--alpha", type=float, default=0.05)
@@ -284,7 +282,7 @@ def main() -> int:
     z_depth = max(
         0.0, _conformal_quantile(depth_std_resid.reshape(-1), args.alpha)
     )
-    confidence_z = float(max(z_pfv, z_depth))
+    confidence_z = float(z_pfv)
 
     pfv_ucb = mean["pfv_delta"] + confidence_z * std["pfv_delta"]
     predicted_allowance = (
@@ -320,28 +318,19 @@ def main() -> int:
     tfv_mae = float(
         np.mean(np.abs(mean["tfv_delta"] - actual_delta["tfv_delta"]))
     )
-    uncertainty_score = np.sqrt(
-        np.square(
-            std["pfv_delta"] / (np.std(actual_delta["pfv_delta"]) + eps)
-        )
-        + np.square(
-            std["tfv_delta"] / (np.std(actual_delta["tfv_delta"]) + eps)
-        )
-        + np.square(
-            std["peak_delta"] / (np.std(actual_delta["peak_delta"]) + eps)
-        )
+    uncertainty_score = np.abs(
+        std["pfv_delta"] / (np.std(actual_delta["pfv_delta"]) + eps)
     )
     uncertainty_limit = float(np.quantile(uncertainty_score, 0.99))
     status = (
         "pass"
-        if max(pfv_false_safe, priority_depth_false_safe, joint_false_safe)
-        <= args.alpha + 1.0e-12
+        if pfv_false_safe <= args.alpha + 1.0e-12
         else "fail"
     )
 
     payload = {
         "formal_generation_id": FORMAL_GENERATION_ID,
-        "stage": "formal_f2_step2_safety_calibration",
+        "stage": "formal_f2_pfv_only_safety_calibration",
         "status": status,
         "development_only": False,
         "formal_mainline_authorized": False,
@@ -373,9 +362,18 @@ def main() -> int:
         "peak_is_hard_safety_constraint": False,
         "peak_delta_ensemble_mae_m3s": peak_mae,
         "tfv_delta_ensemble_mae_m3": tfv_mae,
-        "uncertainty_score_contract": "normalized_step2_ensemble_std_pfv_tfv_peak",
+        "uncertainty_score_contract": "normalized_step2_ensemble_std_pfv_only_diagnostic",
         "uncertainty_limit_99": uncertainty_limit,
         "safety_calibrated": status == "pass",
+        "control_objective_contract": "PROJECT6_V42_PFV_ONLY_TFV_MIN_MPC_V2",
+        "pfv_budget_applied": True,
+        "priority_depth_hard_gate": False,
+        "global_peak_hard_gate": False,
+        "global_peak_objective_term": False,
+        "uncertainty_role": "PFV_UCB_only",
+        "OOD_role": "diagnostic_only",
+        "independent_OOD_gate": False,
+        "independent_uncertainty_gate": False,
         "future_truth_used_for_online_decision": False,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

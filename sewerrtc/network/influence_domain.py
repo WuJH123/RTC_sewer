@@ -209,6 +209,15 @@ def build_priority_influence_domains(
             ),
         )
         if int(max_candidates_per_priority) > 0:
-            priority_candidates = priority_candidates[: int(max_candidates_per_priority)]
+            cap = int(max_candidates_per_priority)
+            pump_rows = [
+                row for row in priority_candidates
+                if _role_group(str(row.get("asset_role", ""))) == "pump"
+            ]
+            other_rows = [
+                row for row in priority_candidates
+                if _role_group(str(row.get("asset_role", ""))) != "pump"
+            ]
+            priority_candidates = (pump_rows + other_rows)[:cap]
         candidates.extend(priority_candidates)
     return pd.DataFrame(domains), pd.DataFrame(candidates).drop_duplicates()

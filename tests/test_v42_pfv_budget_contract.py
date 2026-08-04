@@ -46,31 +46,31 @@ def test_pfv_budget_is_100_plus_five_percent_of_no_control() -> None:
     assert audit_candidate_safety(_candidate(pfv_delta_ucb_m3=105.0), margins=margins).safe
     audit = audit_candidate_safety(_candidate(pfv_delta_ucb_m3=105.0001), margins=margins)
     assert not audit.safe
-    assert "pfv_noninferiority_budget_exceeded_vs_no_control" in audit.rejection_reasons
+    assert "PFV_budget_exceeded_vs_no_control" in audit.rejection_reasons
 
 
-def test_priority_depth_is_hard_but_peak_is_performance_only() -> None:
+def test_priority_depth_and_peak_are_diagnostic_only() -> None:
     margins = SafetyMargins(require_priority_depth=True)
     depth_bad = audit_candidate_safety(
         _candidate(priority_depth_ucb_m=(1.01, 1.0)), margins=margins
     )
-    assert not depth_bad.safe
-    assert "priority_depth_safety_violation" in depth_bad.rejection_reasons
+    assert depth_bad.safe
+    assert depth_bad.rejection_reasons == ()
     peak_high = audit_candidate_safety(_candidate(peak_delta_ucb_m3s=99.0), margins=margins)
     assert peak_high.safe
 
 
-def test_positive_peak_excess_is_penalized_without_becoming_hard_gate() -> None:
+def test_positive_peak_does_not_change_objective() -> None:
     no_peak = performance_objective(
         _candidate(peak_delta_ucb_m3s=-1.0), weights=MPCWeights(peak=600.0)
     )
     positive_peak = performance_objective(
         _candidate(peak_delta_ucb_m3s=1.0), weights=MPCWeights(peak=600.0)
     )
-    assert positive_peak - no_peak == 600.0
+    assert positive_peak == no_peak
 
 
-def test_selector_minimizes_tfv_plus_peak_inside_safe_set() -> None:
+def test_selector_minimizes_tfv_inside_safe_set() -> None:
     a = _candidate(candidate_id="a", tfv_delta_di_m3=-300.0, peak_delta_ucb_m3s=0.0)
     b = _candidate(candidate_id="b", tfv_delta_di_m3=-400.0, peak_delta_ucb_m3s=1.0)
     fallback = FrozenFallback("hold", np.ones((12, 36)), "hash")
@@ -80,7 +80,7 @@ def test_selector_minimizes_tfv_plus_peak_inside_safe_set() -> None:
         margins=SafetyMargins(require_priority_depth=True),
         weights=MPCWeights(peak=600.0, action=0.0, terminal=0.0, uncertainty=0.0),
     )
-    assert decision.selected_id == "a"
+    assert decision.selected_id == "b"
     assert not decision.used_fallback
 
 

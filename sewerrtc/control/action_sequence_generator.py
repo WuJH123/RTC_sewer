@@ -3,6 +3,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+BINARY_ACTUATOR_IDS = {"ADD301.2", "ADD301.3"}
+
 
 def generate_action_sequences(
     native_action: np.ndarray,
@@ -156,6 +158,20 @@ def generate_action_sequences(
             return profile
         return np.full(h, magnitude, dtype=float)
 
+    def _append_binary_toggle_sequence(priority_node: str, aid: str, idx: int) -> None:
+        """Generate a real 0->1 or 1->0 transition, never a fractional pump delta."""
+        current_value = float(reference[0, idx])
+        target = 0.0 if current_value >= 0.5 else 1.0
+        prefix = min(3, horizon_steps)
+        seq = reference.copy()
+        seq[:prefix, idx] = target
+        _append_sequence(
+            f"binary_toggle|priority={priority_node}|actuator={aid}|target={int(target)}",
+            seq,
+            "Explicit binary pump toggle over the executable H3 prefix.",
+            aid,
+        )
+
     def _append_profile_sequence(label: str, indices: list[int], profile: np.ndarray, rationale: str) -> None:
         if not indices:
             return
@@ -177,6 +193,14 @@ def generate_action_sequences(
     grouped_by_priority: dict[str, list[int]] = {}
     grouped_by_priority_role: dict[str, dict[str, list[int]]] = {}
 
+    # Ensure max_sequences cannot hide the only physically valid binary move.
+    for row in influence_rows:
+        aid = str(row.get("actuator_id", "")).strip()
+        if aid in BINARY_ACTUATOR_IDS and aid in id_to_idx:
+            _append_binary_toggle_sequence(
+                str(row.get("priority_node", "priority")), aid, id_to_idx[aid]
+            )
+
     def _role_family(role_text: str) -> str:
         role = str(role_text or "").lower()
         if "storage" in role or "inlet" in role or "outlet" in role:
@@ -196,6 +220,9 @@ def generate_action_sequences(
         grouped_by_priority.setdefault(priority_node, []).append(idx)
         family = _role_family(role_text)
         grouped_by_priority_role.setdefault(priority_node, {}).setdefault(family, []).append(idx)
+        if aid in BINARY_ACTUATOR_IDS:
+            _append_binary_toggle_sequence(priority_node, aid, idx)
+            continue
         # Exact local replay data normally represent a relative setting change
         # held for a fixed number of control intervals and then restored. Keep
         # that temporal meaning explicit. These candidates are the only ones

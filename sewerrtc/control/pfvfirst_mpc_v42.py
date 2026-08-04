@@ -1,4 +1,4 @@
-"""Canonical PFV-budgeted rolling MPC for the V4.2 paper line.
+"""Canonical PFV-constrained TFV-minimising rolling MPC.
 
 The controller separates *admission* from *performance*.
 
@@ -8,16 +8,15 @@ A Candidate must satisfy:
 
 * priority flooding non-inferiority relative to No-control with a frozen budget
   ``100 m3 + 5% * PFV_no_control`` (evaluated on a one-sided UCB);
-* node-specific priority-depth safety when depth limits are supplied;
 * Engineering36 K/bounds/rate/ramp/dwell/interlock constraints;
-* uncertainty/OOD/executability gates.
+* finite PFV/TFV prediction and executability.
 
 Performance inside the admitted set
 -----------------------------------
 The primary objective is total flooding volume relative to Dynamic Internal.
-System peak is no longer a zero-tolerance hard gate; only its positive excess
-relative to Dynamic Internal is penalised. Action movement, terminal risk and
-model uncertainty are also penalised.
+Global peak and priority-node depth are reporting/diagnostic channels only.
+Uncertainty is already consumed by the one-sided PFV UCB and is not an
+independent rejection gate or objective penalty.
 
 If the admitted set is empty, or candidate selection fails, the frozen fallback
 is executed. A performance improvement can never compensate a hard admission
@@ -33,8 +32,8 @@ import numpy as np
 
 @dataclass(frozen=True)
 class MPCWeights:
-    # Convert a positive peak-rate excess into an interpretable volume-equivalent
-    # penalty. 600 s is one control interval.
+    """Legacy-compatible fields; V2 selection intentionally ignores them."""
+
     peak: float = 600.0
     action: float = 0.05
     terminal: float = 0.10
@@ -46,9 +45,8 @@ class SafetyMargins:
     pfv_absolute_allowance_m3: float = 100.0
     pfv_relative_allowance_fraction: float = 0.05
     max_changed_facilities: int = 8
-    # Backward-compatible API: legacy callers that do not yet provide predicted
-    # priority-depth arrays can opt out. Formal/qualification V4.2 runners must
-    # set this True and supply per-node UCB/limit arrays on every Candidate.
+    # Backward-compatible API. V2 keeps the field for old evidence readers but
+    # priority depth is never an admission gate.
     require_priority_depth: bool = False
 
     def pfv_allowance_m3(self, no_control_pfv_m3: float) -> float:
@@ -97,7 +95,7 @@ class MPCandidate:
     uncertainty_pass: bool
     ood_pass: bool
     executable: bool
-    # Additional inputs for the PFV budget and priority-depth hard safety.
+    # Additional diagnostic inputs retained for schema compatibility.
     pfv_no_control_m3: float = 0.0
     priority_depth_ucb_m: tuple[float, ...] = field(default_factory=tuple)
     priority_depth_limit_m: tuple[float, ...] = field(default_factory=tuple)
@@ -169,26 +167,21 @@ def audit_candidate_safety(
 
     allowance: float | None = None
     if not np.isfinite(float(candidate.pfv_no_control_m3)):
-        reasons.append("no_control_pfv_not_finite")
+        reasons.append("nonfinite_PFV_prediction")
     else:
         allowance = margins.pfv_allowance_m3(float(candidate.pfv_no_control_m3))
 
     if not np.isfinite(float(candidate.pfv_delta_ucb_m3)):
-        reasons.append("pfv_uncertainty_not_finite")
+        reasons.append("nonfinite_PFV_prediction")
     elif allowance is not None and float(candidate.pfv_delta_ucb_m3) > allowance:
-        reasons.append("pfv_noninferiority_budget_exceeded_vs_no_control")
-        # Keep the pre-budget diagnostic alias for downstream audit readers.
-        reasons.append("pfv_safety_violation_vs_no_control")
+        reasons.append("PFV_budget_exceeded_vs_no_control")
 
     depth_exceedance: float | None = None
     try:
         depth_exceedance = _priority_depth_exceedance(candidate)
-        if margins.require_priority_depth and depth_exceedance is None:
-            reasons.append("priority_depth_safety_missing")
-        elif depth_exceedance is not None and depth_exceedance > 0.0:
-            reasons.append("priority_depth_safety_violation")
-    except ValueError as exc:
-        reasons.append(f"priority_depth_safety_invalid:{exc}")
+    except ValueError:
+        # Diagnostic-only data cannot reject a candidate in V2.
+        depth_exceedance = None
 
     if int(candidate.changed_facilities) < 0:
         reasons.append("negative_changed_facility_count")
@@ -197,12 +190,10 @@ def audit_candidate_safety(
 
     for name in candidate.engineering.failed_names():
         reasons.append(f"engineering_{name}_violation")
-    if not candidate.uncertainty_pass:
-        reasons.append("uncertainty_gate_failed")
-    if not candidate.ood_pass:
-        reasons.append("ood_gate_failed")
     if not candidate.executable:
         reasons.append("candidate_not_executable")
+    if not np.isfinite(float(candidate.tfv_delta_di_m3)):
+        reasons.append("nonfinite_TFV_prediction")
 
     return CandidateAudit(
         candidate_id=str(candidate.candidate_id),
@@ -215,24 +206,12 @@ def audit_candidate_safety(
 
 
 def performance_objective(candidate: MPCandidate, *, weights: MPCWeights) -> float:
-    """Evaluate TFV-first performance only after hard-safety admission."""
-    terms = (
-        float(candidate.tfv_delta_di_m3),
-        float(candidate.peak_delta_ucb_m3s),
-        float(candidate.action_cost),
-        float(candidate.terminal_cost),
-        float(candidate.uncertainty_cost),
-    )
-    if not all(np.isfinite(v) for v in terms):
-        raise ValueError(f"candidate {candidate.candidate_id} has non-finite objective term")
-    positive_peak_excess = max(0.0, terms[1])
-    return float(
-        terms[0]
-        + float(weights.peak) * positive_peak_excess
-        + float(weights.action) * terms[2]
-        + float(weights.terminal) * terms[3]
-        + float(weights.uncertainty) * terms[4]
-    )
+    """Return only predicted TFV; ``weights`` remains for old callers."""
+    del weights
+    value = float(candidate.tfv_delta_di_m3)
+    if not np.isfinite(value):
+        raise ValueError(f"candidate {candidate.candidate_id} has non-finite TFV prediction")
+    return value
 
 
 def select_safe_candidate(
@@ -255,7 +234,7 @@ def select_safe_candidate(
                 CandidateAudit(
                     candidate_id=candidate.candidate_id,
                     safe=False,
-                    rejection_reasons=("objective_not_finite", str(exc)),
+                    rejection_reasons=("nonfinite_TFV_prediction", str(exc)),
                     objective=None,
                     pfv_allowance_m3=audit.pfv_allowance_m3,
                     maximum_priority_depth_exceedance_m=audit.maximum_priority_depth_exceedance_m,
@@ -305,7 +284,7 @@ def execute_frozen_fallback(
         metadata={
             "fallback_contract_hash": fallback.contract_hash,
             "safety_and_performance_separated": True,
-            "control_objective_contract": "PROJECT6_V42_PFV_BUDGETED_TFV_MPC_V1",
+            "control_objective_contract": "PROJECT6_V42_PFV_ONLY_TFV_MIN_MPC_V2",
         },
     )
 
@@ -349,33 +328,37 @@ def decide_pfvfirst_mpc(
         execute_action=sequence[0].copy(),
         selected_sequence=sequence.copy(),
         used_fallback=False,
-        reason="minimum_tfv_objective_within_pfv_budget_and_depth_safe_set",
+        reason="minimum_tfv_objective_within_pfv_budget_and_engineering_safe_set",
         objective=objective,
         audits=audits,
         metadata={
-            "objective": (
-                "delta_tfv_di + lambda_peak*positive(delta_peak_di) + "
-                "lambda_action*J_action + lambda_terminal*J_terminal + "
-                "lambda_uncertainty*J_uncertainty"
-            ),
+            "objective": "minimize_TFV_subject_to_PFV_budget",
             "hard_constraints": [
                 "PFV_budget_vs_no_control",
-                "priority_depth_safety_when_required",
                 "K",
                 "bounds",
                 "rate",
                 "ramp",
                 "dwell",
                 "interlock",
-                "uncertainty",
-                "OOD",
                 "executability",
             ],
             "pfv_absolute_allowance_m3": margins.pfv_absolute_allowance_m3,
             "pfv_relative_allowance_fraction": margins.pfv_relative_allowance_fraction,
-            "peak_is_performance_penalty_not_hard_gate": True,
+            "peak_role": "reporting_only",
+            "priority_depth_role": "diagnostic_only",
+            "uncertainty_role": "PFV_UCB_only",
+            "OOD_role": "diagnostic_only",
+            "peak_is_hard_safety_constraint": False,
+            "global_peak_objective_term": False,
+            "peak_penalty_weight": 0.0,
+            "action_penalty_weight": 0.0,
+            "terminal_penalty_weight": 0.0,
+            "uncertainty_penalty_weight": 0.0,
+            "independent_OOD_gate": False,
+            "independent_uncertainty_gate": False,
             "tfv_is_hard_safety_constraint": False,
             "safety_and_performance_separated": True,
-            "control_objective_contract": "PROJECT6_V42_PFV_BUDGETED_TFV_MPC_V1",
+            "control_objective_contract": "PROJECT6_V42_PFV_ONLY_TFV_MIN_MPC_V2",
         },
     )
