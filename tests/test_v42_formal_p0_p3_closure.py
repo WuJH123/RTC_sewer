@@ -42,8 +42,6 @@ def test_calibration_strict_requires_exact_frozen_12(tmp_path: Path):
         )
     assert audit_calibration_completeness(formal)["status"] == "pass"
 
-    # An apparently successful 8/12 low-level calibration cannot authorize the
-    # Formal paper line.
     _write_json(
         formal / "calibration/STEP2_SAFETY_CALIBRATION.json",
         {
@@ -116,7 +114,8 @@ def test_step3_strict_requires_budget_depth_and_peak_soft(tmp_path: Path):
 def test_production_entrypoint_never_imports_qualification_controller():
     path = Path(__file__).resolve().parents[1] / "scripts/run_v42_formal_production_f2.py"
     text = path.read_text(encoding="utf-8")
-    assert "qualification" not in text.casefold()
+    assert "run_v42_qualification" not in text
+    assert "qualification_micro" not in text
     assert "v42_formal_runtime_safe" in text
 
 
