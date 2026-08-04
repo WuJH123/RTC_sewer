@@ -1,20 +1,18 @@
 """Defense-in-depth audit helpers for the Project6 V4.2 Formal F2 line.
 
-The legacy/mainline auditors deliberately remain backwards compatible.  This
-module adds the final paper-generation checks that must not be bypassed by a
-hand-written evidence JSON:
+The final paper-generation checks must not be bypassed by hand-written evidence:
 
-* current Calibration is the complete frozen 12-rainfall holdout, not an
-  arbitrary >=8 subset;
-* CONTROL_CORE really supervises depth/flood/storage/facility flow and verifies
-  all-open No-control; FULL_HYDRAULIC additionally supervises outfall flow;
-* Step3 uses the PFV budget + priority-depth hard-safe contract, TFV as the
-  primary performance objective, Peak as a soft positive-excess penalty, and
+* current Calibration is the complete frozen 12-rainfall holdout;
+* CONTROL_CORE/FULL_HYDRAULIC supervision semantics are explicit;
+* Step3 is PFV-budget + priority-depth hard-safe, TFV-primary, Peak-soft, with
   execution-derived Engineering36/readback evidence;
-* paper-workflow evidence passes the frozen current-generation holdout auditor.
+* stage21 contains authoritative SWMM Proposed/No-control/Internal/Hold runs;
+* stage22 is an actually executed surrogate-state-feedback closed loop, not a
+  metadata-only evidence stub;
+* stage23 is the sparse-GAT-integrated authoritative SWMM loop;
+* Policy-Lock and current-generation held-out evidence pass the frozen workflow.
 
-Nothing here fabricates scientific evidence.  Missing or inconsistent inputs
-fail closed.
+Missing or inconsistent inputs fail closed.
 """
 from __future__ import annotations
 
@@ -40,7 +38,11 @@ def _read_json(path: Path) -> dict[str, Any]:
 def _read_table(path: Path) -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(path)
-    return pd.read_parquet(path) if path.suffix.lower() == ".parquet" else pd.read_csv(path, low_memory=False)
+    return (
+        pd.read_parquet(path)
+        if path.suffix.lower() == ".parquet"
+        else pd.read_csv(path, low_memory=False)
+    )
 
 
 def _calibration_group_set(ledger: pd.DataFrame) -> set[str]:
@@ -191,6 +193,88 @@ def audit_step3_evidence_strict(paper_root: Path) -> dict[str, Any]:
     }
 
 
+def audit_closed_loop_execution_strict(paper_root: Path) -> dict[str, Any]:
+    """Require real execution semantics for Formal attribution stages 21-23."""
+    reasons: list[str] = []
+    paths = {
+        "exact": paper_root / "exact_closed_loop/evidence.json",
+        "surrogate": paper_root / "surrogate_closed_loop/evidence.json",
+        "gat": paper_root / "gat_integrated_closed_loop/evidence.json",
+    }
+    payloads: dict[str, dict[str, Any]] = {}
+    for name, path in paths.items():
+        try:
+            payloads[name] = _read_json(path)
+        except Exception as exc:
+            payloads[name] = {}
+            reasons.append(f"{name}_closed_loop_evidence_unreadable:{type(exc).__name__}")
+
+    exact = payloads["exact"]
+    if exact:
+        if exact.get("status") != "pass" or exact.get("authoritative_engine") != "SWMM":
+            reasons.append("stage21_not_authoritative_swmm")
+        if exact.get("canonical_pfvfirst_mpc_v42") is not True:
+            reasons.append("stage21_canonical_mpc_not_proven")
+        refs = set(map(str, exact.get("authoritative_reference_strategies", [])))
+        if refs != {"No-control", "Internal", "Hold"}:
+            reasons.append("stage21_reference_strategy_set_mismatch")
+        counts = exact.get("strategy_event_counts", {})
+        event_count = int(exact.get("event_count", 0))
+        if event_count != EXPECTED_CALIBRATION_GROUPS:
+            reasons.append("stage21_must_cover_calibration12")
+        if not isinstance(counts, dict) or any(
+            int(counts.get(strategy, -1)) != event_count
+            for strategy in ("Proposed", "No-control", "Internal", "Hold")
+        ):
+            reasons.append("stage21_reference_event_counts_incomplete")
+        if exact.get("no_control_all_open_authoritative") is not True:
+            reasons.append("stage21_no_control_all_open_not_proven")
+        if exact.get("internal_native_rules_authoritative") is not True:
+            reasons.append("stage21_internal_native_rules_not_proven")
+
+    surrogate = payloads["surrogate"]
+    if surrogate:
+        if surrogate.get("status") != "pass":
+            reasons.append("stage22_status_not_pass")
+        if surrogate.get("surrogate_closed_loop_executed") is not True:
+            reasons.append("stage22_metadata_only_stub_forbidden")
+        if surrogate.get("surrogate_role") != "hydraulic_surrogate_not_policy":
+            reasons.append("stage22_wrong_surrogate_role")
+        if surrogate.get("pfvfirst_mpc_v42") is not True:
+            reasons.append("stage22_canonical_mpc_not_proven")
+        if int(surrogate.get("event_count", 0)) != EXPECTED_CALIBRATION_GROUPS:
+            reasons.append("stage22_must_cover_calibration12")
+        if surrogate.get("authoritative_hydraulic_truth_used_after_prefix") is not False:
+            reasons.append("stage22_future_hydraulic_truth_feedback_detected")
+        if surrogate.get("realized_future_rainfall_used_online") is not False:
+            reasons.append("stage22_realized_future_rainfall_detected")
+        if surrogate.get("dynamic_internal_future_action_used_online") is not False:
+            reasons.append("stage22_future_internal_action_detected")
+
+    gat = payloads["gat"]
+    if gat:
+        if gat.get("status") != "pass":
+            reasons.append("stage23_status_not_pass")
+        if gat.get("state_source") != "gat_sparse_reconstruction":
+            reasons.append("stage23_not_sparse_gat_integrated")
+        if int(gat.get("event_count", 0)) != EXPECTED_CALIBRATION_GROUPS:
+            reasons.append("stage23_must_cover_calibration12")
+        if gat.get("authoritative_swmm_outcome") is not True:
+            reasons.append("stage23_authoritative_swmm_outcome_not_proven")
+        if gat.get("authoritative_swmm_history_used_as_online_input") is not False:
+            reasons.append("stage23_swmm_truth_history_leakage")
+        if gat.get("current_frame_repetition_used") is not False:
+            reasons.append("stage23_current_frame_repetition_detected")
+        if gat.get("gat_uncertainty_used") is not True or gat.get("ood_gate_used") is not True:
+            reasons.append("stage23_uncertainty_ood_not_active")
+
+    return {
+        "status": "pass" if not reasons else "fail",
+        "paths": {name: str(path) for name, path in paths.items()},
+        "reasons": reasons,
+    }
+
+
 def audit_formal_strict(output_root: Path) -> dict[str, Any]:
     output_root = Path(output_root)
     paper_root = output_root / "v42_paper"
@@ -198,9 +282,15 @@ def audit_formal_strict(output_root: Path) -> dict[str, Any]:
     calibration = audit_calibration_completeness(formal_root)
     step2 = audit_step2_evidence_strict(paper_root)
     step3 = audit_step3_evidence_strict(paper_root)
+    closed_loop = audit_closed_loop_execution_strict(paper_root)
     workflow = audit_paper_workflow(output_root)
     reasons: list[str] = []
-    for name, item in (("calibration", calibration), ("step2", step2), ("step3", step3)):
+    for name, item in (
+        ("calibration", calibration),
+        ("step2", step2),
+        ("step3", step3),
+        ("closed_loop", closed_loop),
+    ):
         if item.get("status") != "pass":
             reasons.append(f"{name}_strict_audit_not_pass")
     if not workflow.complete:
@@ -211,6 +301,7 @@ def audit_formal_strict(output_root: Path) -> dict[str, Any]:
         "calibration": calibration,
         "step2": step2,
         "step3": step3,
+        "closed_loop": closed_loop,
         "paper_workflow": workflow.as_dict(),
         "reasons": reasons,
     }
