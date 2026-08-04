@@ -3,12 +3,11 @@
 The final paper-generation checks must not be bypassed by hand-written evidence:
 
 * current Calibration is the complete frozen 12-rainfall holdout;
+* the complete PFV budget statistic is calibrated with non-empty safe admission;
 * CONTROL_CORE/FULL_HYDRAULIC supervision semantics are explicit;
-* Step3 is PFV-budget + TFV-primary, with
-  execution-derived Engineering36/readback evidence;
+* Step3 is PFV-budget + TFV-primary, with execution-derived Engineering36/readback evidence;
 * stage21 contains authoritative SWMM Proposed/No-control/Internal/Hold runs;
-* stage22 is an actually executed surrogate-state-feedback closed loop, not a
-  metadata-only evidence stub;
+* stage22 is an actually executed surrogate-state-feedback closed loop, not a metadata-only evidence stub;
 * stage23 is the sparse-GAT-integrated authoritative SWMM loop;
 * Policy-Lock and current-generation held-out evidence pass the frozen workflow.
 
@@ -27,6 +26,7 @@ from .formal_f2 import sha256_file
 
 EXPECTED_CALIBRATION_GROUPS = 12
 CONTROL_OBJECTIVE_CONTRACT = "PROJECT6_V42_PFV_ONLY_TFV_MIN_MPC_V2"
+PFV_SAFETY_STATISTIC = "candidate_minus_1p05_no_control"
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -90,12 +90,35 @@ def audit_calibration_completeness(formal_root: Path) -> dict[str, Any]:
             if int(payload.get("calibration_rainfall_group_count", -1)) != len(expected):
                 reasons.append(f"{name}_calibration_reported_group_count_mismatch")
 
+    if step2:
+        if step2.get("safety_calibrated") is not True:
+            reasons.append("step2_pfv_safety_not_calibrated")
+        if step2.get("pfv_safety_statistic") != PFV_SAFETY_STATISTIC:
+            reasons.append("step2_wrong_complete_pfv_budget_statistic")
+        if int(step2.get("pfv_predicted_safe_count", 0)) <= 0:
+            reasons.append("step2_pfv_calibration_has_empty_admitted_set")
+        try:
+            alpha = float(step2.get("alpha", 0.05))
+            conditional = step2.get("pfv_false_safe_rate_among_admitted")
+            event_balanced = step2.get(
+                "pfv_event_balanced_false_safe_rate_among_admitted"
+            )
+            if conditional is None or float(conditional) > alpha + 1.0e-12:
+                reasons.append("step2_pfv_false_safe_rate_among_admitted_exceeds_alpha")
+            if event_balanced is None or float(event_balanced) > alpha + 1.0e-12:
+                reasons.append(
+                    "step2_event_balanced_pfv_false_safe_rate_among_admitted_exceeds_alpha"
+                )
+        except (TypeError, ValueError):
+            reasons.append("step2_pfv_admitted_risk_statistics_invalid")
+
     return {
         "status": "pass" if not reasons else "fail",
         "expected_calibration_group_count": len(expected),
         "expected_calibration_rainfall_groups": sorted(expected),
         "step1_calibration_path": str(step1_path),
         "step2_calibration_path": str(step2_path),
+        "pfv_safety_statistic": step2.get("pfv_safety_statistic") if step2 else None,
         "reasons": reasons,
     }
 
@@ -132,6 +155,10 @@ def audit_step2_evidence_strict(paper_root: Path) -> dict[str, Any]:
         reasons.append("control_objective_contract_not_proven")
     if p.get("pfv_budget_applied") is not True:
         reasons.append("pfv_budget_not_proven")
+    if p.get("pfv_safety_statistic") != PFV_SAFETY_STATISTIC:
+        reasons.append("complete_pfv_budget_statistic_not_proven")
+    if int(p.get("pfv_predicted_safe_count_calibration", 0)) <= 0:
+        reasons.append("step2_calibration_admitted_set_not_proven_nonempty")
     if p.get("objective") != "minimize_TFV_subject_to_PFV_budget":
         reasons.append("tfv_objective_not_proven")
     if p.get("priority_depth_hard_gate") is not False:
@@ -148,6 +175,7 @@ def audit_step2_evidence_strict(paper_root: Path) -> dict[str, Any]:
         "status": "pass" if not reasons else "fail",
         "path": str(path),
         "step2_target_contract": contract,
+        "pfv_safety_statistic": p.get("pfv_safety_statistic"),
         "reasons": reasons,
     }
 
@@ -171,6 +199,8 @@ def audit_step3_evidence_strict(paper_root: Path) -> dict[str, Any]:
         reasons.append("wrong_pfv_reference")
     if p.get("pfv_budget_applied") is not True:
         reasons.append("pfv_budget_not_applied")
+    if p.get("pfv_safety_statistic") != PFV_SAFETY_STATISTIC:
+        reasons.append("wrong_pfv_safety_statistic")
     if float(p.get("pfv_absolute_allowance_m3", -1.0)) != 100.0:
         reasons.append("pfv_absolute_allowance_mismatch")
     if abs(float(p.get("pfv_relative_allowance_fraction", -1.0)) - 0.05) > 1.0e-12:
@@ -187,6 +217,8 @@ def audit_step3_evidence_strict(paper_root: Path) -> dict[str, Any]:
         reasons.append("tfv_must_not_be_hard_gate")
     if p.get("peak_is_hard_safety_constraint") is not False:
         reasons.append("peak_must_not_be_hard_gate")
+    if p.get("peak_reference") != "reporting_only":
+        reasons.append("peak_reference_must_be_reporting_only")
     if p.get("global_peak_objective_term") is not False:
         reasons.append("global_peak_must_not_enter_objective")
     for key in (
@@ -201,6 +233,8 @@ def audit_step3_evidence_strict(paper_root: Path) -> dict[str, Any]:
         reasons.append("independent_OOD_gate_must_be_false")
     if p.get("independent_uncertainty_gate") is not False:
         reasons.append("independent_uncertainty_gate_must_be_false")
+    if p.get("uncertainty_and_ood_linked_to_calibrated_models") is not True:
+        reasons.append("calibrated_model_lineage_not_proven")
     if int(p.get("facility_count", -1)) != 36:
         reasons.append("engineering36_not_proven")
     if int(p.get("max_changed_facilities", -1)) != 8:
@@ -217,6 +251,7 @@ def audit_step3_evidence_strict(paper_root: Path) -> dict[str, Any]:
     return {
         "status": "pass" if not reasons else "fail",
         "path": str(path),
+        "pfv_safety_statistic": p.get("pfv_safety_statistic"),
         "reasons": reasons,
     }
 
