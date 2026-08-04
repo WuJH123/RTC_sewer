@@ -4,8 +4,11 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
+import statistics
 import subprocess
 import time
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -56,11 +59,79 @@ def _status(path: Path | None) -> dict[str, object]:
         return {}
 
 
+def _classify(rows: list[dict[str, object]]) -> str:
+    """Classify the current limiting resource from the recent sample window."""
+    if not rows:
+        return "UNKNOWN"
+
+    def values(key: str) -> list[float]:
+        result = []
+        for row in rows:
+            value = row.get(key)
+            if value is not None:
+                try:
+                    result.append(float(value))
+                except (TypeError, ValueError):
+                    pass
+        return result
+
+    available = values("available_ram_gb")
+    used = values("total_ram_used_gb")
+    pagefile = values("pagefile_used_gb")
+    if (
+        (available and min(available) < 2.5)
+        or (used and max(used) > 13.0)
+        or (len(pagefile) >= 2 and pagefile[-1] - pagefile[0] > 0.25)
+    ):
+        return "RAM_BOUND"
+
+    gpu = values("gpu_util_percent")
+    gpu_mem = values("gpu_memory_used_mb")
+    gpu_total = values("gpu_memory_total_mb")
+    cpu = values("total_cpu_percent")
+    read = values("disk_read_MBps")
+    write = values("disk_write_MBps")
+    gpu_median = statistics.median(gpu) if gpu else 0.0
+    memory_headroom = True
+    if gpu_mem and gpu_total:
+        memory_headroom = statistics.median(gpu_mem) < 0.90 * statistics.median(gpu_total)
+    if gpu_median >= 85.0:
+        return "GPU_COMPUTE_BOUND"
+    if gpu_median < 65.0 and cpu and statistics.median(cpu) >= 70.0:
+        return "CPU_BOUND"
+    if gpu_median < 65.0 and (read or write):
+        io_median = statistics.median(read or [0.0]) + statistics.median(write or [0.0])
+        if io_median >= 5.0 and (not cpu or statistics.median(cpu) < 70.0):
+            return "IO_BOUND"
+    if gpu_median < 65.0 and memory_headroom:
+        return "GPU_STARVED"
+    return "UNKNOWN"
+
+
+def _write_runtime_status(path: Path, row: dict[str, object], samples: int) -> None:
+    value = {
+        "timestamp": row.get("timestamp"),
+        "pid": row.get("pid"),
+        "stage": row.get("stage", ""),
+        "epoch": row.get("epoch", ""),
+        "batch": row.get("batch", ""),
+        "windows_seen": row.get("windows_seen", ""),
+        "windows_per_sec": row.get("windows_per_sec", ""),
+        "bottleneck": row.get("bottleneck", "UNKNOWN"),
+        "telemetry_samples": samples,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(value, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--pid", type=int, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--status-file", type=Path, default=None)
+    parser.add_argument("--runtime-status-output", type=Path, default=None)
     parser.add_argument("--interval-sec", type=float, default=5.0)
     parser.add_argument("--flush-sec", type=float, default=30.0)
     args = parser.parse_args()
@@ -72,9 +143,16 @@ def main() -> int:
         "gpu_util_percent", "gpu_memory_used_mb", "gpu_memory_total_mb", "gpu_power_w",
         "gpu_temperature_c", "sm_clock_mhz", "memory_clock_mhz", "total_cpu_percent",
         "per_core_cpu_percent", "rss_process_mb", "total_ram_used_gb", "available_ram_gb",
-        "pagefile_used_gb", "disk_read_MBps", "disk_write_MBps",
+        "pagefile_used_gb", "disk_read_MBps", "disk_write_MBps", "process_cpu_percent",
+        "bottleneck",
     ]
     exists = args.output.exists()
+    if exists:
+        with args.output.open("r", encoding="utf-8") as existing:
+            existing_fields = next(csv.reader(existing), [])
+        if existing_fields:
+            # Preserve append compatibility for pre-autotuner telemetry files.
+            fieldnames = existing_fields
     with args.output.open("a", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         if not exists:
@@ -82,11 +160,14 @@ def main() -> int:
         last = time.monotonic()
         last_io = None
         last_flush = last
+        recent: deque[dict[str, object]] = deque(maxlen=24)
+        runtime_status = args.runtime_status_output or args.output.with_name("FORMAL_RUNTIME_STATUS.json")
         while True:
             now = time.monotonic()
             try:
                 cpu = psutil.cpu_percent(interval=None)
                 cores = psutil.cpu_percent(interval=None, percpu=True)
+                process_cpu = process.cpu_percent(interval=None)
                 vm = psutil.virtual_memory()
                 io = process.io_counters()
                 if last_io is None:
@@ -115,10 +196,14 @@ def main() -> int:
                     "pagefile_used_gb": psutil.swap_memory().used / 1e9,
                     "disk_read_MBps": read_rate,
                     "disk_write_MBps": write_rate,
+                    "process_cpu_percent": process_cpu,
                 }
-                writer.writerow(row)
+                recent.append(row)
+                row["bottleneck"] = _classify(list(recent))
+                writer.writerow({key: row.get(key, "") for key in fieldnames})
                 if now - last_flush >= args.flush_sec:
                     handle.flush()
+                    _write_runtime_status(runtime_status, row, len(recent))
                     last_flush = now
                 print(json.dumps(row, ensure_ascii=False), flush=True)
             except psutil.NoSuchProcess:

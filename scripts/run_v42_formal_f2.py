@@ -145,6 +145,7 @@ def main() -> int:
     ap.add_argument("--step1-prefetch-factor", type=int, default=2)
     ap.add_argument("--step1-pin-memory", action=argparse.BooleanOptionalAction, default=True)
     ap.add_argument("--step1-runtime-status-dir", type=Path, default=None)
+    ap.add_argument("--step2-runtime-status-dir", type=Path, default=None)
     args = ap.parse_args()
     root = args.project_root
     py = str(Path(sys.executable))
@@ -343,26 +344,33 @@ def main() -> int:
             root,
         )
         for seed in args.seeds:
+            runtime_status = None
+            if args.step2_runtime_status_dir is not None:
+                runtime_status = args.step2_runtime_status_dir / f"step2_seed_{seed}.json"
+                runtime_status.parent.mkdir(parents=True, exist_ok=True)
+            command = [
+                py,
+                "-u",
+                str(root / "scripts/train_v42_step2_formal_f2.py"),
+                "--project-root",
+                str(root),
+                "--manifest",
+                str(target_manifest),
+                "--output-dir",
+                str(step2_root / "models" / f"seed_{seed}"),
+                "--seed",
+                str(seed),
+                "--split-seed",
+                str(args.split_seed),
+                "--min-train-groups",
+                "65",
+                "--target-contract",
+                args.step2_target_contract,
+            ]
+            if runtime_status is not None:
+                command.extend(["--runtime-status-file", str(runtime_status)])
             _run(
-                [
-                    py,
-                    "-u",
-                    str(root / "scripts/train_v42_step2_formal_f2.py"),
-                    "--project-root",
-                    str(root),
-                    "--manifest",
-                    str(target_manifest),
-                    "--output-dir",
-                    str(step2_root / "models" / f"seed_{seed}"),
-                    "--seed",
-                    str(seed),
-                    "--split-seed",
-                    str(args.split_seed),
-                    "--min-train-groups",
-                    "65",
-                    "--target-contract",
-                    args.step2_target_contract,
-                ],
+                command,
                 root,
             )
 

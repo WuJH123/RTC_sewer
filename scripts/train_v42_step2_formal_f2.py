@@ -18,7 +18,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -51,6 +53,15 @@ def _rank(groups: list[str], seed: int) -> list[str]:
         groups,
         key=lambda g: (hashlib.sha256(f"formal-f2:{seed}:{g}".encode()).hexdigest(), g),
     )
+
+
+def _write_runtime_status(path: Path | None, value: dict[str, object]) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(value, allow_nan=False), encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def _split(frame, seed: int, min_train: int):
@@ -106,6 +117,7 @@ def main() -> int:
         choices=("CONTROL_CORE", "FULL_HYDRAULIC"),
         default="CONTROL_CORE",
     )
+    ap.add_argument("--runtime-status-file", type=Path, default=None)
     args = ap.parse_args()
 
     frame = read_table(args.manifest)
@@ -209,11 +221,23 @@ def main() -> int:
     history = []
     best_loss = float("inf")
     stale = 0
+    started = time.time()
+    _write_runtime_status(args.runtime_status_file, {
+        "stage": "step2",
+        "epoch": 0,
+        "batch": 0,
+        "windows_seen": 0,
+        "windows_per_sec": 0.0,
+        "timestamp": time.time(),
+    })
     for epoch in range(1, args.epochs + 1):
         model.train()
         running = 0.0
         seen = 0
-        for idx in _batch_indices(len(train_f), args.batch_size, shuffle=True, seed=args.seed + epoch):
+        for batch_number, idx in enumerate(
+            _batch_indices(len(train_f), args.batch_size, shuffle=True, seed=args.seed + epoch),
+            1,
+        ):
             batch = _slice(train, idx)
             optimizer.zero_grad(set_to_none=True)
             prediction = _forward(model, batch, graph_tensors, priority, device)
@@ -225,9 +249,27 @@ def main() -> int:
             optimizer.step()
             running += float(loss.detach().item()) * len(idx)
             seen += len(idx)
+            _write_runtime_status(args.runtime_status_file, {
+                "stage": "step2_train",
+                "epoch": epoch,
+                "batch": batch_number,
+                "windows_seen": seen,
+                "expected_windows": len(train_f),
+                "windows_per_sec": seen / max(time.time() - started, 1e-9),
+                "timestamp": time.time(),
+            })
         validation = _evaluate(
             model, val, graph_tensors, priority, device, args.batch_size, loss_fn
         )
+        _write_runtime_status(args.runtime_status_file, {
+            "stage": "step2_validation",
+            "epoch": epoch,
+            "batch": batch_number if len(train_f) else 0,
+            "windows_seen": seen,
+            "expected_windows": len(train_f),
+            "windows_per_sec": seen / max(time.time() - started, 1e-9),
+            "timestamp": time.time(),
+        })
         row = {
             "epoch": epoch,
             "train_loss": running / max(1, seen),
@@ -296,6 +338,15 @@ def main() -> int:
         "calibration": cal_report,
         "history": history,
     }
+    _write_runtime_status(args.runtime_status_file, {
+        "stage": "step2_complete",
+        "epoch": history[-1]["epoch"] if history else 0,
+        "batch": 0,
+        "windows_seen": len(train_f),
+        "windows_per_sec": len(train_f) / max(time.time() - started, 1e-9),
+        "timestamp": time.time(),
+        "completed": True,
+    })
     (args.output_dir / "formal_step2_report.json").write_text(
         json.dumps(report, indent=2, allow_nan=False), encoding="utf-8"
     )

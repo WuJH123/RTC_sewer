@@ -30,6 +30,11 @@ def main() -> int:
     parser.add_argument("--workers", type=int, nargs="+", default=[0, 1, 2, 3, 4])
     parser.add_argument("--persistent-workers", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--prefetch-factor", type=int, default=2)
+    parser.add_argument(
+        "--autotune",
+        action="store_true",
+        help="select the fastest valid worker count; stop when the next gain is below 5%",
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
@@ -108,8 +113,21 @@ def main() -> int:
         del loader, dataset
     if not all(item["identity_matches_workers0"] for item in results):
         raise RuntimeError("DataLoader worker benchmark changed the window identity set")
+    selected = None
+    if args.autotune:
+        ordered = sorted(results, key=lambda item: item["workers"])
+        selected = ordered[0]
+        previous = ordered[0]
+        for candidate in ordered[1:]:
+            gain = candidate["windows_per_sec"] / max(previous["windows_per_sec"], 1e-9) - 1.0
+            if gain >= 0.05:
+                selected = candidate
+            previous = candidate
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps({"limit": int(args.limit), "results": results}, indent=2), encoding="utf-8")
+    payload = {"limit": int(args.limit), "results": results}
+    if selected is not None:
+        payload["selected"] = selected
+    args.output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return 0
 
 
