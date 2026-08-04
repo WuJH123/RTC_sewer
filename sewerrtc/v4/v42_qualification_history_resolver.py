@@ -1,4 +1,4 @@
-"""Development-only resolver for causal qualification GAT history sources."""
+"""Content-based resolver for causal GAT history sources."""
 from __future__ import annotations
 
 from pathlib import Path

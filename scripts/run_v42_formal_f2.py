@@ -255,6 +255,25 @@ def main() -> int:
         if not (primary / "best_model.pt").exists():
             raise FileNotFoundError(primary / "best_model.pt")
         gat_manifest = step2_root / "FORMAL_F2_STEP2_GAT_MANIFEST.parquet"
+        history_source = step2_root / "FORMAL_F2_HISTORY_SOURCE_MANIFEST.parquet"
+        _run(
+            [
+                py,
+                "-u",
+                str(root / "scripts/build_v42_formal_gat_history_source_f2.py"),
+                "--project-root",
+                str(root),
+                "--raw-manifest",
+                str(step2_root / "FORMAL_F2_STEP2_RAW_MANIFEST.parquet"),
+                "--step1-window-manifest",
+                str(prep / "FORMAL_F2_STEP1_WINDOW_MANIFEST.parquet"),
+                "--output-manifest",
+                str(history_source),
+                "--min-rainfall-groups",
+                "69",
+            ],
+            root,
+        )
         _run(
             [
                 py,
@@ -266,6 +285,8 @@ def main() -> int:
                 str(step2_root / "FORMAL_F2_STEP2_RAW_MANIFEST.parquet"),
                 "--step1-window-manifest",
                 str(prep / "FORMAL_F2_STEP1_WINDOW_MANIFEST.parquet"),
+                "--history-source-manifest",
+                str(history_source),
                 "--step1-model-dir",
                 str(primary),
                 "--output-manifest",
