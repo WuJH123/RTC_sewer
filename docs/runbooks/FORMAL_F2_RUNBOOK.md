@@ -61,26 +61,25 @@ The history source is separate from Candidate outcome detail and must cover `che
 
 ## 13-17 — Authoritative Calibration and training evidence
 
-Generate the 12 frozen Calibration rainfall groups with the authoritative Wuhan SWMM runner, then build the calibration bridge. Both Step1 and Step2 calibration reports must contain **exactly the same 12 rainfall SHA values as the frozen ledger**. A partial 8/12 subset cannot authorize Formal, even if a low-level calibration CLI is invoked with a smaller diagnostic minimum.
+Generate the 12 frozen Calibration rainfall groups with the authoritative Wuhan SWMM runner, then build the calibration bridge. Both Step1 and Step2 calibration reports must contain **exactly the same 12 rainfall SHA values as the frozen ledger**. A partial 8/12 subset cannot authorize Formal.
 
 Calibration safety quantities are PFV budget and priority-node depth. Peak is retained as a performance-error diagnostic/penalty term, not a hard safety label.
 
 ```powershell
 & $Py -u scripts\prepare_v42_formal_calibration_data_f2.py ...
-& $Py -u scripts\run_v42_formal_f2.py --stage calibration --seeds 17 42 73 --primary-step1-seed 42
-& $Py -u scripts\run_v42_formal_f2.py --stage evidence --seeds 17 42 73 --primary-step1-seed 42
-& $Py -u scripts\audit_v42_formal_strict_f2.py
+& $Py -u scripts\run_v42_formal_calibration12_f2.py --seeds 17 42 73 --primary-step1-seed 42
+& $Py -u scripts\compile_v42_formal_training_evidence_strict_f2.py --seeds 17 42 73 --primary-seed 42
 ```
 
-The low-level calibration commands may retain smaller diagnostic minima for development diagnostics, but **Formal authorization is impossible unless the strict audit proves exact 12/12 equality with the frozen ledger**.
+The underlying calibration modules may retain smaller diagnostic minima for non-paper diagnostics, but the Formal entrypoint and evidence compiler both fail closed unless Step1 and Step2 calibration equal the frozen ledger **12/12 exactly**.
 
 ## 18-19 — Step3 engineering evidence
 
-The authoritative execution audit must derive Engineering36 legality, K, requested/projected/written/readback settings, PFV budget and priority-depth safety from actual execution. It must use the frozen GAT/surrogate/calibration hashes. The production runner performs this execution audit before compiling Step3 evidence.
+The authoritative execution audit must derive Engineering36 legality, K, target writes, actual/current readback, cross-decision dwell, bounds/binary/rate/ramp/interlock, PFV budget and priority-depth safety from actual execution. It must use the frozen GAT/surrogate/calibration hashes. The production runner performs this execution audit before compiling Step3 evidence.
 
 ## 20-28 — Formal closed-loop campaign
 
-Use **`scripts/run_v42_formal_production_f2.py`**. `scripts/run_v42_formal_paper_f2.py` is the internal restart/orchestration implementation; the production entrypoint additionally injects the rule-free-plant/native-Internal-shadow safety runtime and expands Policy-Lock hashing to every executable Formal module. Never run the development `run_v42_qualification_micro.py` as Formal evidence.
+Use **`scripts/run_v42_formal_production_f2.py`**. `scripts/run_v42_formal_paper_f2.py` is the internal restart/orchestration implementation; the production entrypoint injects the rule-free-plant/native-Internal-shadow safety runtime, the executed surrogate-only stage22, and expanded Policy-Lock hashing. Never run the development `run_v42_qualification_micro.py` as Formal evidence.
 
 Before starting, create the local deployment manifests under:
 
@@ -94,7 +93,7 @@ Run the zero-SWMM preflight first:
 & $Py -u scripts\run_v42_formal_production_f2.py --stage preflight
 ```
 
-Then the restartable campaign can be run stage by stage or as one supervised campaign:
+Then run stage by stage or as one supervised campaign:
 
 ```powershell
 & $Py -u scripts\run_v42_formal_production_f2.py --stage all --device cuda --max-candidate-sequences 64
@@ -104,8 +103,8 @@ The ordered stages are:
 
 1. Step3 authoritative execution/readback audit and evidence compile;
 2. true-state offline diagnostic validation;
-3. authoritative SWMM exact closed loop with true-state diagnostic state source;
-4. surrogate-vs-authoritative outcome validation;
+3. authoritative SWMM exact closed loop with true-state diagnostic state source and authoritative No-control/Internal/Hold references;
+4. actual surrogate-state-feedback rolling closed loop initialized from the same authoritative prefix;
 5. full sparse-GAT-integrated authoritative SWMM closed loop;
 6. Policy Lock;
 7. Challenge;
@@ -113,7 +112,7 @@ The ordered stages are:
 9. final held-out >=24 rainfall groups × seven strategies;
 10. strict/mainline audit.
 
-Final strategies are `Proposed`, `EFD`, `Auto-RBC`, `All-close`, `No-control`, `Internal`, and `Hold`. Every final strategy/event result must be authoritative SWMM. Formal No-control is physically all-open; Formal All-close is physically all-zero. `Internal` alone retains the frozen native SWMM `[CONTROLS]` rules. Proposed/EFD/Auto-RBC/No-control/All-close/Hold run on a physical-SHA-equivalent runtime clone with native `[CONTROLS]` disabled so the evaluated policy actually owns Engineering36. Proposed simultaneously advances a separate native-rule Internal shadow only to the **current** time; only current readback is exposed, and no future shadow state/action is used online.
+Final strategies are `Proposed`, `EFD`, `Auto-RBC`, `All-close`, `No-control`, `Internal`, and `Hold`. Every final strategy/event result must be authoritative SWMM. Formal No-control is physically all-open; Formal All-close is physically all-zero. `Internal` alone retains the frozen native SWMM `[CONTROLS]` rules. Proposed/EFD/Auto-RBC/No-control/All-close/Hold run on a physical-SHA-equivalent runtime clone with native `[CONTROLS]` disabled so the evaluated policy actually owns Engineering36. Proposed simultaneously advances a separate native-rule Internal shadow only to the **current** time; only current readback is exposed, and no future shadow state/action is used online. Before the first 120-min decision, the rule-free Proposed plant causally replays current Internal readback to reproduce a deterministic common control prefix.
 
 The production runner is restartable and hash-ledgered. Reuse is permitted only when input/model/policy hashes still match. Long local runs should be launched by Codex/shell with persistent stdout/stderr/PID/exit markers; a chat-turn timeout must not restart a valid running process.
 
