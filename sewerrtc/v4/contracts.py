@@ -20,6 +20,12 @@ def sha256_file(path: str | Path) -> str:
     return digest.hexdigest()
 
 
+def canonical_text_sha256(path: str | Path) -> str:
+    """Hash text contracts independent of Windows/Unix line endings."""
+    data = Path(path).read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(data).hexdigest()
+
+
 def active_dwf_flow_rows(path: str | Path) -> int:
     """Count non-comment FLOW rows in the INP [DWF] section."""
     count = 0
@@ -54,7 +60,8 @@ def audit_network(
             "network_path": str(network),
             "active_dwf_flow_rows": None,
         }
-    full_sha = sha256_file(network)
+    full_sha = canonical_text_sha256(network)
+    raw_sha = sha256_file(network)
     physical_sha = physical_network_sha256(network)
     dwf_rows = active_dwf_flow_rows(network)
     checks = {
@@ -74,6 +81,7 @@ def audit_network(
         "network_variant": NETWORK_VARIANT,
         "network_path": str(network.resolve()),
         "network_sha256": full_sha,
+        "raw_network_sha256": raw_sha,
         "physical_network_sha256": physical_sha,
         "active_dwf_flow_rows": dwf_rows,
         "runtime_dwf_mutation_permitted": False,
@@ -142,13 +150,13 @@ def audit_final_contract(contract: dict[str, Any], project_root: str | Path) -> 
         "canonical_order_exists": order_path.exists(),
         "canonical_order_sha256": (
             order_path.exists()
-            and sha256_file(order_path)
+            and canonical_text_sha256(order_path)
             == contract.get("canonical_facility_order_sha256")
         ),
         "facility_semantics_exists": semantics_path.exists(),
         "facility_semantics_sha256": (
             semantics_path.exists()
-            and sha256_file(semantics_path)
+            and canonical_text_sha256(semantics_path)
             == contract.get("facility_semantics_sha256")
         ),
         "facility_semantics_cover_order": (
@@ -160,9 +168,9 @@ def audit_final_contract(contract: dict[str, Any], project_root: str | Path) -> 
         "variable_speed_semantics": variable_speed_semantics_ok,
         "record_step_300": contract.get("state_record_step_sec") == 300,
         "control_interval_600": contract.get("control_interval_sec") == 600,
-        "history_60_7": (
+        "history_60_13": (
             contract.get("history_min") == 60
-            and contract.get("history_frames") == 7
+            and contract.get("history_frames") == 13
         ),
         "h120_12": (
             contract.get("horizon_min") == 120
@@ -186,7 +194,8 @@ def audit_final_contract(contract: dict[str, Any], project_root: str | Path) -> 
         "canonical_facility_order": {
             "path": str(order_path.resolve()) if order_path.exists() else str(order_path),
             "count": len(order_ids),
-            "sha256": sha256_file(order_path) if order_path.exists() else None,
+            "sha256": canonical_text_sha256(order_path) if order_path.exists() else None,
+            "raw_sha256": sha256_file(order_path) if order_path.exists() else None,
         },
         "facility_semantics": {
             "path": (
@@ -196,6 +205,11 @@ def audit_final_contract(contract: dict[str, Any], project_root: str | Path) -> 
             ),
             "count": int(len(semantics)),
             "sha256": (
+                canonical_text_sha256(semantics_path)
+                if semantics_path.exists()
+                else None
+            ),
+            "raw_sha256": (
                 sha256_file(semantics_path)
                 if semantics_path.exists()
                 else None

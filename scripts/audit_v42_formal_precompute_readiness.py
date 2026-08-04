@@ -390,6 +390,7 @@ def _history_compatible(root: Path, raw: pd.DataFrame, step1: pd.DataFrame, grap
         return value
     def window(d: pd.DataFrame, anchor: float) -> bool:
         return _detail_extract_window(d, anchor, [str(x) for x in graph["node_ids"]], [str(x) for x in graph["facility_ids"]]) is not None
+    raw = raw[pd.to_numeric(raw["checkpoint_min"], errors="coerce") >= 120.0].copy()
     state_rows = []
     for state, group in raw.groupby("state_key", sort=True):
         first = group.iloc[0]
@@ -402,7 +403,7 @@ def _history_compatible(root: Path, raw: pd.DataFrame, step1: pd.DataFrame, grap
             if not window(candidate_detail, cp):
                 raise ValueError("candidate lacks checkpoint Step1 window")
             anchor_signature = _detail_extract_window(candidate_detail, cp, [str(x) for x in graph["node_ids"]], [str(x) for x in graph["facility_ids"]])
-            sig = (anchor_signature["depth_history"][-1], anchor_signature["actions"][-1], anchor_signature["rainfall"][-1:])
+            sig = (anchor_signature["depth_history"][-1], anchor_signature["actions"][:-1], anchor_signature["rainfall"])
             candidates = sorted(by_rain_event.get((rain, event), set())) or sorted(by_rain.get(rain, set()))
             for raw_path in candidates:
                 path = Path(raw_path)
@@ -417,7 +418,7 @@ def _history_compatible(root: Path, raw: pd.DataFrame, step1: pd.DataFrame, grap
                     continue
                 d = detail(path)
                 s = _detail_extract_window(d, cp, [str(x) for x in graph["node_ids"]], [str(x) for x in graph["facility_ids"]])
-                if s is None or not all(np.allclose(a, b, atol=1e-6, rtol=0.0) for a, b in zip(sig, (s["depth_history"][-1], s["actions"][-1], s["rainfall"][-1:]))):
+                if s is None or not all(np.allclose(a, b, atol=1e-6, rtol=0.0) for a, b in zip(sig, (s["depth_history"][-1], s["actions"][:-1], s["rainfall"]))):
                     continue
                 if all(window(d, anchor) for anchor in [cp - 60.0 + 5.0 * i for i in range(13)]):
                     compatible = True

@@ -17,7 +17,7 @@ def test_final_contract_freezes_core_runtime_and_reference_roles() -> None:
     assert contract["network_variant"] == "rainfall_only_no_dwf"
     assert contract["state_record_step_sec"] == 300
     assert contract["control_interval_sec"] == 600
-    assert contract["history_frames"] == 7
+    assert contract["history_frames"] == 13
     assert contract["horizon_steps"] == 12
     assert contract["max_active_changes"] == 8
     assert contract["references"] == {
