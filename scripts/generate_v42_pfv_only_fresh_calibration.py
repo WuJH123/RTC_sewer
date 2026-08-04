@@ -131,6 +131,14 @@ def _same_prefix(a: dict, b: dict) -> bool:
     return bool(np.allclose(left.to_numpy(dtype=float), right.to_numpy(dtype=float), atol=1e-7, rtol=0.0))
 
 
+def _covers_duration(path: Path, end_min: float) -> bool:
+    try:
+        elapsed = pd.read_csv(path, usecols=["elapsed_min"])["elapsed_min"].to_numpy(dtype=float)
+    except Exception:
+        return False
+    return bool(elapsed.size and np.isfinite(elapsed).all() and elapsed.max() + 5.0 + 1e-9 >= end_min)
+
+
 def _job(job: dict) -> dict:
     event = str(job["event_id"])
     event_dir = Path(job["event_dir"])
@@ -139,7 +147,10 @@ def _job(job: dict) -> dict:
     paths = {name: detail_dir / f"{event}__{name}.csv" for name in ("no_control", "dynamic_internal", "candidate_1", "candidate_2", "candidate_3")}
     completion_dir = event_dir / "completions"
     result_path = event_dir / "event_result.json"
-    if job["resume"] and result_path.exists() and all(path.exists() and path.stat().st_size > 0 for path in paths.values()):
+    if job["resume"] and result_path.exists() and all(
+        path.exists() and path.stat().st_size > 0 and _covers_duration(path, float(job["simulation_duration_min"]))
+        for path in paths.values()
+    ):
         return json.loads(result_path.read_text(encoding="utf-8"))
     root = Path(job["project_root"])
     base_inp = root / "data/wuhan_v8_storage_retrofit.inp"
@@ -161,7 +172,12 @@ def _job(job: dict) -> dict:
     kpis: dict[str, dict] = {}
 
     def run(name: str, inp: Path, action: np.ndarray, mode: str) -> None:
-        if paths[name].exists() and paths[name].stat().st_size > 0 and not job["force"]:
+        if (
+            paths[name].exists()
+            and paths[name].stat().st_size > 0
+            and _covers_duration(paths[name], float(job["simulation_duration_min"]))
+            and not job["force"]
+        ):
             return
         kpis[name] = run_swmm_fixed_action(
             inp_path=inp,
@@ -312,7 +328,9 @@ def main() -> int:
             raise FileNotFoundError(rainfall)
         duration_match = _DURATION.search(event)
         duration = int(duration_match.group(1)) if duration_match else int(math.ceil(float(row["duration_min"])))
-        simulation_duration = max(240, duration + 120, 240)
+        # The final 5-minute report row is stamped at end-5; add one interval
+        # so the exact checkpoint+120 row exists for Formal H120 selection.
+        simulation_duration = max(245, duration + 120)
         jobs.append(
             {
                 "project_root": str(args.project_root.resolve()),
