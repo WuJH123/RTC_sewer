@@ -12,6 +12,8 @@ from sewerrtc.v4.v42_step1_streaming import (
     split_target_groups,
     summarise_selection,
 )
+from sewerrtc.v4.v42_step1_dataset import _detail_extract_window
+from scripts.train_v42_step1_streaming import _save_full_checkpoint
 
 
 def test_step1_reordered_csv_columns_preserve_semantics(tmp_path):
@@ -87,6 +89,52 @@ def test_projected_cache_roundtrip_preserves_canonical_values(tmp_path):
         source, required, cache_dir=cache, source_identity="physical-sha"
     )
     assert cache_path.exists()
+
+
+def test_prepared_window_extraction_matches_reference_path():
+    times = np.arange(0.0, 65.0, 5.0)
+    detail = pd.DataFrame(
+        {
+            "elapsed_min": times,
+            "rainfall_mm_h": times + 1.0,
+            "h:N1": times + 10.0,
+            "setting:F1": times / 10.0,
+        }
+    )
+    reference = _detail_extract_window(detail, 60.0, ["N1"], ["F1"])
+    elapsed = detail["elapsed_min"].to_numpy(np.float64)
+    elapsed_index = {round(float(value), 6): index for index, value in enumerate(elapsed)}
+    prepared = _detail_extract_window(
+        None,
+        60.0,
+        ["N1"],
+        ["F1"],
+        elapsed_values=elapsed,
+        elapsed_index=elapsed_index,
+        depth_values=detail[["h:N1"]].to_numpy(np.float32),
+        rain_values=detail["rainfall_mm_h"].to_numpy(np.float32),
+        action_values=detail[["setting:F1"]].to_numpy(np.float32),
+    )
+    assert reference is not None and prepared is not None
+    for key in ("depth_history", "rainfall", "actions"):
+        np.testing.assert_array_equal(reference[key], prepared[key])
+
+
+def test_full_resume_checkpoint_contains_model_optimizer_rng_and_identity(tmp_path):
+    import torch
+
+    model = torch.nn.Linear(2, 1)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    path = tmp_path / "last_resume.pt"
+    _save_full_checkpoint(
+        path,
+        model=model,
+        optimizer=optimizer,
+        meta={"epoch": 1, "next_batch_index": 7, "manifest_sha256": "m"},
+    )
+    checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+    assert set(("model_state_dict", "optimizer_state_dict", "rng_state", "meta")) <= set(checkpoint)
+    assert checkpoint["meta"]["next_batch_index"] == 7
 
 
 def _manifest() -> pd.DataFrame:
