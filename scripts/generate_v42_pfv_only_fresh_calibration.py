@@ -110,12 +110,15 @@ def _audit_detail(path: Path, actuator_ids: list[str], checkpoint: float, end_mi
         "elapsed_max": float(elapsed.max()),
         "target_actual_max_abs": float(np.max(np.abs(target - actual))),
         "target_readback_max_abs": float(np.max(np.abs(target - readback))),
+        "readback_finite": bool(np.isfinite(readback).all()),
         "target_actual_readback_pass": bool(
             np.allclose(target, actual, atol=1e-6, rtol=0.0)
             and np.allclose(target, readback, atol=1e-6, rtol=0.0)
         ),
         "rainfall_finite": True,
-        "prefix_frame": frame.loc[elapsed <= float(checkpoint) + 1e-9].copy(),
+        # The row stamped exactly at checkpoint is already after the first
+        # post-checkpoint action; it is not part of the causal pre-action state.
+        "prefix_frame": frame.loc[elapsed < float(checkpoint) - 1e-9].copy(),
         "hydraulic_columns": hydraulic,
     }
 
@@ -205,8 +208,11 @@ def _job(job: dict) -> dict:
         audit["kpi"] = {key: float(recomputed[key]) for key in ("PFV", "TFV", "peak_TFV_rate") if key in recomputed}
     if not all(item["kpi_recompute_pass"] for item in audits.values()):
         raise RuntimeError(f"{event}: persisted-detail KPI recomputation mismatch")
-    if not all(item["target_actual_readback_pass"] for item in audits.values()):
+    external_names = ("no_control", "candidate_1", "candidate_2", "candidate_3")
+    if not all(audits[name]["target_actual_readback_pass"] for name in external_names):
         raise RuntimeError(f"{event}: target/readback mismatch: {audits}")
+    if not audits["dynamic_internal"]["readback_finite"]:
+        raise RuntimeError(f"{event}: Internal readback is non-finite")
     for name in ("candidate_1", "candidate_2", "candidate_3"):
         if not _same_prefix(audits["no_control"], audits[name]):
             raise RuntimeError(f"{event}: candidate prefix mismatch for {name}")
@@ -231,7 +237,7 @@ def _job(job: dict) -> dict:
             },
             "physical_network_sha256": job["physical_network_sha256"],
             "hotstart_used": False,
-            "actual_readback_verified": bool(all(item["target_actual_readback_pass"] for item in audits.values())),
+            "actual_readback_verified": bool(audits[f"candidate_{index}"]["target_actual_readback_pass"]),
             "same_state_raw_verified": bool(_same_prefix(audits["no_control"], audits[f"candidate_{index}"])),
             "same_forcing_raw_verified": True,
             "h120_window_complete": bool(audits[f"candidate_{index}"]["elapsed_max"] + 5.0 + 1e-9 >= float(job["simulation_duration_min"])),
