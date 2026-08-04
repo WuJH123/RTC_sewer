@@ -64,3 +64,22 @@ def test_json_safe_does_not_turn_nonfinite_diagnostics_into_zero() -> None:
     micro = _load_micro_module()
     value = micro._json_safe({"nan": np.nan, "inf": np.inf, "array": np.asarray([1.0, np.nan])})
     assert value == {"nan": None, "inf": None, "array": [1.0, None]}
+
+
+def test_micro_reconciles_first_pass_audit(tmp_path: Path) -> None:
+    micro = _load_micro_module()
+    audit_path = tmp_path / "QUALIFICATION_FIRST_PASS_AUDIT.json"
+    audit_path.write_text(
+        json.dumps({"stage_status": {"01_core": "PASS_REUSABLE"}}),
+        encoding="utf-8",
+    )
+    summary = {"event_rows": 70, "potential_go": False}
+    status = {
+        "stage_status": {"13_micro": "PASS_REUSABLE"},
+        "scientific_performance_status": "provisional",
+    }
+    micro._update_first_pass_audit(tmp_path, summary, status)
+    result = json.loads(audit_path.read_text(encoding="utf-8"))
+    assert result["next_stage"] is None
+    assert result["micro_summary"] == summary
+    assert result["micro_stage_status"] == status
