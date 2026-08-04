@@ -68,6 +68,7 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
         "timestamp", "pid", "stage", "epoch", "batch", "windows_seen", "windows_per_sec",
+        "gpu_index",
         "gpu_util_percent", "gpu_memory_used_mb", "gpu_memory_total_mb", "gpu_power_w",
         "gpu_temperature_c", "sm_clock_mhz", "memory_clock_mhz", "total_cpu_percent",
         "per_core_cpu_percent", "rss_process_mb", "total_ram_used_gb", "available_ram_gb",
