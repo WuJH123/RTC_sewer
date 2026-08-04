@@ -6,8 +6,11 @@ Hard admission
 --------------
 A Candidate must satisfy:
 
-* priority flooding non-inferiority relative to No-control with a frozen budget
-  ``100 m3 + 5% * PFV_no_control`` (evaluated on a one-sided UCB);
+* priority flooding non-inferiority relative to No-control with the frozen budget
+  ``PFV_candidate <= 100 m3 + 1.05 * PFV_no_control``.  Formal V2 evaluates the
+  algebraically equivalent budget metric
+  ``PFV_candidate - 1.05 * PFV_no_control`` with a one-sided UCB and requires
+  that UCB to be <= 100 m3;
 * Engineering36 K/bounds/rate/ramp/dwell/interlock constraints;
 * finite PFV/TFV prediction and executability.
 
@@ -15,7 +18,7 @@ Performance inside the admitted set
 -----------------------------------
 The primary objective is total flooding volume relative to Dynamic Internal.
 Global peak and priority-node depth are reporting/diagnostic channels only.
-Uncertainty is already consumed by the one-sided PFV UCB and is not an
+Uncertainty is consumed only by the one-sided PFV-budget UCB and is not an
 independent rejection gate or objective penalty.
 
 If the admitted set is empty, or candidate selection fails, the frozen fallback
@@ -34,10 +37,10 @@ import numpy as np
 class MPCWeights:
     """Legacy-compatible fields; V2 selection intentionally ignores them."""
 
-    peak: float = 600.0
-    action: float = 0.05
-    terminal: float = 0.10
-    uncertainty: float = 0.10
+    peak: float = 0.0
+    action: float = 0.0
+    terminal: float = 0.0
+    uncertainty: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -81,10 +84,10 @@ class EngineeringStatus:
 class MPCandidate:
     candidate_id: str
     action_sequence: np.ndarray
-    # Candidate-minus-No-control priority flooding UCB [m3].
+    # Candidate-minus-No-control priority flooding UCB [m3], retained for
+    # diagnostics/backward-compatible evidence.
     pfv_delta_ucb_m3: float
-    # Candidate-minus-Dynamic-Internal peak rate [m3/s]. Kept under the legacy
-    # field name for schema compatibility; it is now a performance term.
+    # Candidate-minus-Dynamic-Internal global peak rate [m3/s]. Reporting only.
     peak_delta_ucb_m3s: float
     tfv_delta_di_m3: float
     action_cost: float
@@ -100,6 +103,12 @@ class MPCandidate:
     priority_depth_ucb_m: tuple[float, ...] = field(default_factory=tuple)
     priority_depth_limit_m: tuple[float, ...] = field(default_factory=tuple)
     metadata: Mapping[str, object] = field(default_factory=dict)
+    # Formal V2 safety statistic. This is a one-sided UCB on
+    #   PFV_candidate - (1 + relative_allowance) * PFV_no_control
+    # so the uncertainty of the No-control reference participates in the same
+    # calibrated scalar safety quantity.  ``None`` keeps legacy callers working
+    # with the older delta-UCB/mean-reference calculation.
+    pfv_budget_metric_ucb_m3: float | None = None
 
 
 @dataclass(frozen=True)
@@ -119,6 +128,7 @@ class CandidateAudit:
     objective: float | None
     pfv_allowance_m3: float | None = None
     maximum_priority_depth_exceedance_m: float | None = None
+    pfv_budget_metric_ucb_m3: float | None = None
 
 
 @dataclass(frozen=True)
@@ -171,10 +181,21 @@ def audit_candidate_safety(
     else:
         allowance = margins.pfv_allowance_m3(float(candidate.pfv_no_control_m3))
 
-    if not np.isfinite(float(candidate.pfv_delta_ucb_m3)):
-        reasons.append("nonfinite_PFV_prediction")
-    elif allowance is not None and float(candidate.pfv_delta_ucb_m3) > allowance:
-        reasons.append("PFV_budget_exceeded_vs_no_control")
+    budget_metric_ucb: float | None = None
+    if candidate.pfv_budget_metric_ucb_m3 is not None:
+        budget_metric_ucb = float(candidate.pfv_budget_metric_ucb_m3)
+        if not np.isfinite(budget_metric_ucb):
+            reasons.append("nonfinite_PFV_prediction")
+        elif budget_metric_ucb > float(margins.pfv_absolute_allowance_m3):
+            reasons.append("PFV_budget_exceeded_vs_no_control")
+    else:
+        # Legacy compatibility path. New Formal execution must populate the
+        # complete budget-metric UCB above so No-control uncertainty is not
+        # silently treated as deterministic.
+        if not np.isfinite(float(candidate.pfv_delta_ucb_m3)):
+            reasons.append("nonfinite_PFV_prediction")
+        elif allowance is not None and float(candidate.pfv_delta_ucb_m3) > allowance:
+            reasons.append("PFV_budget_exceeded_vs_no_control")
 
     depth_exceedance: float | None = None
     try:
@@ -202,6 +223,7 @@ def audit_candidate_safety(
         objective=None,
         pfv_allowance_m3=allowance,
         maximum_priority_depth_exceedance_m=depth_exceedance,
+        pfv_budget_metric_ucb_m3=budget_metric_ucb,
     )
 
 
@@ -238,6 +260,7 @@ def select_safe_candidate(
                     objective=None,
                     pfv_allowance_m3=audit.pfv_allowance_m3,
                     maximum_priority_depth_exceedance_m=audit.maximum_priority_depth_exceedance_m,
+                    pfv_budget_metric_ucb_m3=audit.pfv_budget_metric_ucb_m3,
                 )
             )
             continue
@@ -249,6 +272,7 @@ def select_safe_candidate(
                 objective=score,
                 pfv_allowance_m3=audit.pfv_allowance_m3,
                 maximum_priority_depth_exceedance_m=audit.maximum_priority_depth_exceedance_m,
+                pfv_budget_metric_ucb_m3=audit.pfv_budget_metric_ucb_m3,
             )
         )
         safe_scored.append((score, str(candidate.candidate_id), candidate))
@@ -285,6 +309,7 @@ def execute_frozen_fallback(
             "fallback_contract_hash": fallback.contract_hash,
             "safety_and_performance_separated": True,
             "control_objective_contract": "PROJECT6_V42_PFV_ONLY_TFV_MIN_MPC_V2",
+            "fallback_is_engineering_fail_safe_not_pfv_certificate": True,
         },
     )
 
@@ -345,9 +370,10 @@ def decide_pfvfirst_mpc(
             ],
             "pfv_absolute_allowance_m3": margins.pfv_absolute_allowance_m3,
             "pfv_relative_allowance_fraction": margins.pfv_relative_allowance_fraction,
+            "pfv_safety_statistic": "UCB(PFV_candidate-(1+relative_allowance)*PFV_no_control)<=absolute_allowance",
             "peak_role": "reporting_only",
             "priority_depth_role": "diagnostic_only",
-            "uncertainty_role": "PFV_UCB_only",
+            "uncertainty_role": "PFV_budget_UCB_only",
             "OOD_role": "diagnostic_only",
             "peak_is_hard_safety_constraint": False,
             "global_peak_objective_term": False,
