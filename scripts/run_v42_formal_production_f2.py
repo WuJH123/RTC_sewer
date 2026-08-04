@@ -1,12 +1,14 @@
 """Production entrypoint for the V4.2 Formal paper campaign.
 
 This entrypoint injects the rule-free-plant/native-Internal-shadow runtime,
-replaces the metadata-only stage22 stub with an actual surrogate-feedback closed
-loop, and expands Policy-Lock hashing to every executable Formal module.
+requires execution-derived dwell/target-write evidence, replaces the
+metadata-only stage22 stub with an actual surrogate-feedback closed loop, and
+expands Policy-Lock hashing to every executable Formal module.
 """
 from __future__ import annotations
 
 import hashlib
+import json
 import sys
 from pathlib import Path
 
@@ -48,7 +50,67 @@ def _production_policy_lock_payload(project_root: str | Path):
     payload["rule_free_proposed_plant"] = True
     payload["native_internal_causal_shadow"] = True
     payload["surrogate_closed_loop_is_executed_not_metadata_only"] = True
+    payload["runtime_cross_decision_dwell_enforced"] = True
+    payload["target_setting_write_readback_required"] = True
     return payload
+
+
+def _production_stage_engineering(
+    project_root: Path, device: str, max_candidate_sequences: int
+) -> None:
+    """Stage18-19: derive engineering evidence from authoritative execution."""
+    calibration = orchestrator.audit_calibration_completeness(orchestrator.FORMAL_ROOT)
+    if calibration["status"] != "pass":
+        raise RuntimeError(f"Calibration12 incomplete: {calibration['reasons']}")
+    results = orchestrator._run_role(
+        project_root=project_root,
+        role="calibration",
+        strategies=["Proposed"],
+        state_source="gat_sparse_reconstruction",
+        device=device,
+        max_candidate_sequences=max_candidate_sequences,
+    )
+    audit = orchestrator._engineering_audit(project_root, results)
+    if not all(
+        result.get("target_write_all_decisions_verified") is True
+        and result.get("runtime_cross_decision_dwell_enforced") is True
+        and result.get("precontrol_prefix_contract") == "causal_internal_readback_replay"
+        for result in results
+    ):
+        audit["status"] = "fail"
+        audit["target_setting_write_readback_verified"] = False
+        audit["runtime_cross_decision_dwell_enforced"] = False
+        audit["causal_precontrol_prefix_verified"] = False
+    else:
+        audit["target_setting_write_readback_verified"] = True
+        audit["runtime_cross_decision_dwell_enforced"] = True
+        audit["causal_precontrol_prefix_verified"] = True
+    decisions = orchestrator._decision_rows(results)
+    if not decisions or not all(
+        row.get("target_write_verified") is True for row in decisions
+    ):
+        audit["status"] = "fail"
+        audit["target_setting_write_readback_verified"] = False
+    audit_path = (
+        orchestrator.FORMAL_ROOT
+        / "calibration/STEP3_AUTHORITATIVE_ENGINEERING_AUDIT.json"
+    )
+    audit_path.write_text(
+        json.dumps(audit, indent=2, ensure_ascii=False, allow_nan=False),
+        encoding="utf-8",
+    )
+    if audit.get("status") != "pass":
+        raise RuntimeError(
+            f"Formal Step3 authoritative engineering audit failed: {audit}"
+        )
+    orchestrator._run_subprocess(
+        [
+            str(Path(sys.executable)),
+            "-u",
+            str(project_root / "scripts/compile_v42_formal_step3_evidence_f2.py"),
+        ],
+        project_root,
+    )
 
 
 def _production_stage_exact(
@@ -166,13 +228,11 @@ def _production_stage_surrogate(
     )
 
 
-# Replace low-level execution and scientific stage implementations. Split,
-# one-shot, evidence-order and held-out lineage logic remains in the Formal
-# orchestrator.
 orchestrator.run_baseline_event = run_baseline_event
 orchestrator.run_proposed_event = run_proposed_event
 orchestrator._policy_sha = _production_policy_sha
 orchestrator.policy_lock_payload = _production_policy_lock_payload
+orchestrator.stage_engineering = _production_stage_engineering
 orchestrator.stage_exact = _production_stage_exact
 orchestrator.stage_surrogate = _production_stage_surrogate
 
