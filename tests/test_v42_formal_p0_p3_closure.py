@@ -19,6 +19,20 @@ def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _step2_calibration(groups: list[str]) -> dict:
+    return {
+        "status": "pass",
+        "safety_calibrated": True,
+        "calibration_rainfall_groups": groups,
+        "calibration_rainfall_group_count": len(groups),
+        "pfv_safety_statistic": "candidate_minus_1p05_no_control",
+        "pfv_predicted_safe_count": 8,
+        "alpha": 0.05,
+        "pfv_false_safe_rate_among_admitted": 0.0,
+        "pfv_event_balanced_false_safe_rate_among_admitted": 0.0,
+    }
+
+
 def test_calibration_strict_requires_exact_frozen_12(tmp_path: Path):
     formal = tmp_path / "formal_f2"
     groups = [f"rain-{i:02d}" for i in range(12)]
@@ -30,31 +44,57 @@ def test_calibration_strict_requires_exact_frozen_12(tmp_path: Path):
     )
     (formal / "prepare").mkdir(parents=True)
     ledger.to_csv(formal / "prepare/FORMAL_F2_EVENT_LEDGER.csv", index=False)
-    for name in (
-        "STEP1_UNCERTAINTY_OOD_CALIBRATION.json",
-        "PFV_ONLY_SAFETY_CALIBRATION.json",
-    ):
-        _write_json(
-            formal / "calibration" / name,
-            {
-                "status": "pass",
-                "calibration_rainfall_groups": groups,
-                "calibration_rainfall_group_count": 12,
-            },
-        )
+    _write_json(
+        formal / "calibration/STEP1_UNCERTAINTY_OOD_CALIBRATION.json",
+        {
+            "status": "pass",
+            "calibration_rainfall_groups": groups,
+            "calibration_rainfall_group_count": 12,
+        },
+    )
+    _write_json(
+        formal / "calibration/PFV_ONLY_SAFETY_CALIBRATION.json",
+        _step2_calibration(groups),
+    )
     assert audit_calibration_completeness(formal)["status"] == "pass"
 
     _write_json(
         formal / "calibration/PFV_ONLY_SAFETY_CALIBRATION.json",
-        {
-            "status": "pass",
-            "calibration_rainfall_groups": groups[:8],
-            "calibration_rainfall_group_count": 8,
-        },
+        _step2_calibration(groups[:8]),
     )
     result = audit_calibration_completeness(formal)
     assert result["status"] == "fail"
     assert any("does_not_equal_frozen_plan" in reason for reason in result["reasons"])
+
+
+def test_calibration_strict_rejects_empty_or_unsafe_admitted_set(tmp_path: Path):
+    formal = tmp_path / "formal_f2"
+    groups = [f"rain-{i:02d}" for i in range(12)]
+    (formal / "prepare").mkdir(parents=True)
+    pd.DataFrame(
+        {"formal_f2_role": ["calibration"] * 12, "rainfall_group_key": groups}
+    ).to_csv(formal / "prepare/FORMAL_F2_EVENT_LEDGER.csv", index=False)
+    _write_json(
+        formal / "calibration/STEP1_UNCERTAINTY_OOD_CALIBRATION.json",
+        {
+            "status": "pass",
+            "calibration_rainfall_groups": groups,
+            "calibration_rainfall_group_count": 12,
+        },
+    )
+    bad = _step2_calibration(groups)
+    bad["pfv_predicted_safe_count"] = 0
+    _write_json(formal / "calibration/PFV_ONLY_SAFETY_CALIBRATION.json", bad)
+    result = audit_calibration_completeness(formal)
+    assert result["status"] == "fail"
+    assert "step2_pfv_calibration_has_empty_admitted_set" in result["reasons"]
+
+    bad = _step2_calibration(groups)
+    bad["pfv_false_safe_rate_among_admitted"] = 0.06
+    _write_json(formal / "calibration/PFV_ONLY_SAFETY_CALIBRATION.json", bad)
+    result = audit_calibration_completeness(formal)
+    assert result["status"] == "fail"
+    assert "step2_pfv_false_safe_rate_among_admitted_exceeds_alpha" in result["reasons"]
 
 
 def test_control_core_strict_does_not_require_outfall(tmp_path: Path):
@@ -71,6 +111,8 @@ def test_control_core_strict_does_not_require_outfall(tmp_path: Path):
         "peak_is_hard_safety_constraint": False,
         "control_objective_contract": "PROJECT6_V42_PFV_ONLY_TFV_MIN_MPC_V2",
         "pfv_budget_applied": True,
+        "pfv_safety_statistic": "candidate_minus_1p05_no_control",
+        "pfv_predicted_safe_count_calibration": 8,
         "objective": "minimize_TFV_subject_to_PFV_budget",
         "priority_depth_hard_gate": False,
         "global_peak_objective_term": False,
@@ -97,6 +139,7 @@ def test_step3_strict_requires_pfv_only_objective_and_peak_reporting(tmp_path: P
         "pfv_absolute_allowance_m3": 100.0,
         "pfv_relative_allowance_fraction": 0.05,
         "pfv_budget_applied": True,
+        "pfv_safety_statistic": "candidate_minus_1p05_no_control",
         "objective": "minimize_TFV_subject_to_PFV_budget",
         "priority_depth_hard_gate": False,
         "tfv_reference": "dynamic_internal",
@@ -104,6 +147,7 @@ def test_step3_strict_requires_pfv_only_objective_and_peak_reporting(tmp_path: P
         "tfv_is_hard_safety_constraint": False,
         "global_peak_objective_term": False,
         "peak_is_hard_safety_constraint": False,
+        "peak_reference": "reporting_only",
         "peak_penalty_weight": 0.0,
         "action_penalty_weight": 0.0,
         "terminal_penalty_weight": 0.0,
@@ -231,7 +275,9 @@ def test_formal_production_scripts_compile():
         root / "scripts/run_v42_formal_paper_f2.py",
         root / "scripts/run_v42_formal_production_f2.py",
         root / "scripts/run_v42_formal_calibration12_f2.py",
+        root / "scripts/compile_v42_formal_training_evidence_f2.py",
         root / "scripts/compile_v42_formal_training_evidence_strict_f2.py",
+        root / "scripts/compile_v42_formal_step3_evidence_f2.py",
         root / "scripts/audit_v42_formal_strict_f2.py",
     ]
     for path in paths:
