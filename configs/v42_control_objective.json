@@ -4,12 +4,19 @@
     "absolute_allowance_m3": 100.0,
     "relative_allowance_fraction": 0.05,
     "reference": "no_control",
-    "uncertainty_form": "one_sided_ucb"
+    "uncertainty_form": "one_sided_ucb",
+    "calibrated_safety_statistic": "PFV_candidate-(1+relative_allowance_fraction)*PFV_no_control",
+    "formal_admission_rule": "UCB(calibrated_safety_statistic)<=absolute_allowance_m3"
   },
   "performance_objective": {
     "primary": "minimize_total_flooding_volume",
     "implementation_equivalent": "delta_TFV_vs_dynamic_internal",
     "secondary_objectives": []
+  },
+  "candidate_search": {
+    "scope": "global_engineering36_plus_priority_local_heuristics",
+    "priority_influence_domains_define_search_space": false,
+    "candidate_cap_stage": "after_executable_H3_projection_and_deduplication"
   },
   "global_peak": {
     "role": "authoritative_reporting_only",
@@ -23,7 +30,7 @@
     "objective_term": false
   },
   "uncertainty": {
-    "role": "used_only_in_PFV_one_sided_UCB"
+    "role": "used_only_in_complete_PFV_budget_one_sided_UCB"
   },
   "OOD": {
     "role": "diagnostic_only"
@@ -39,5 +46,10 @@
     "target_write_readback": true
   },
   "max_changed_facilities": 8,
-  "fallback": "execute_frozen_hold_on_empty_admitted_set"
+  "fallback": {
+    "action": "execute_frozen_hold_on_empty_admitted_set",
+    "role": "engineering_fail_safe",
+    "pfv_certificate": false,
+    "report_infeasible_pfv_safe_set": true
+  }
 }
