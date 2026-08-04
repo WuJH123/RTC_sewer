@@ -13,6 +13,7 @@ from sewerrtc.v4.v42_step1_streaming import (
     summarise_selection,
 )
 from sewerrtc.v4.v42_step1_dataset import _detail_extract_window
+from scripts.train_v42_step1_streaming import _save_full_checkpoint
 
 
 def test_step1_reordered_csv_columns_preserve_semantics(tmp_path):
@@ -117,6 +118,23 @@ def test_prepared_window_extraction_matches_reference_path():
     assert reference is not None and prepared is not None
     for key in ("depth_history", "rainfall", "actions"):
         np.testing.assert_array_equal(reference[key], prepared[key])
+
+
+def test_full_resume_checkpoint_contains_model_optimizer_rng_and_identity(tmp_path):
+    import torch
+
+    model = torch.nn.Linear(2, 1)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    path = tmp_path / "last_resume.pt"
+    _save_full_checkpoint(
+        path,
+        model=model,
+        optimizer=optimizer,
+        meta={"epoch": 1, "next_batch_index": 7, "manifest_sha256": "m"},
+    )
+    checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+    assert set(("model_state_dict", "optimizer_state_dict", "rng_state", "meta")) <= set(checkpoint)
+    assert checkpoint["meta"]["next_batch_index"] == 7
 
 
 def _manifest() -> pd.DataFrame:
