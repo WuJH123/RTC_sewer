@@ -96,6 +96,7 @@ def main() -> int:
     ap.add_argument("--batch-size", type=int, default=4)
     ap.add_argument("--hidden-dim", type=int, default=64)
     ap.add_argument("--gat-layers", type=int, default=3)
+    ap.add_argument("--action-diffusion-steps", type=int, default=10)
     ap.add_argument("--lr", type=float, default=5e-4)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--split-seed", type=int, default=42)
@@ -186,6 +187,7 @@ def main() -> int:
         gat_heads=4,
         gat_layers=args.gat_layers,
         horizon=12,
+        action_diffusion_steps=args.action_diffusion_steps,
     ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     loss_fn = HydraulicTrajectoryLoss(
@@ -268,6 +270,7 @@ def main() -> int:
         "rainfall_group_isolated_split": True,
         "formal_target_domain_only": True,
         "step2_target_contract": args.target_contract,
+        "action_diffusion_steps": args.action_diffusion_steps,
         "control_core_target_coverage_complete": True,
         "full_hydraulic_target_coverage_complete": bool(
             args.target_contract == "FULL_HYDRAULIC" and has_outfall

@@ -75,6 +75,39 @@ def _as_index_tensor(
     return torch.as_tensor(values, dtype=torch.long, device=device)
 
 
+def diffuse_action_embeddings(
+    node_embeddings: torch.Tensor,
+    edge_index: torch.Tensor,
+    steps: int,
+) -> torch.Tensor:
+    """Propagate facility action context through the physical graph.
+
+    ``action_node_map`` is sparse by design: it identifies the node attached to
+    each actuator, not every downstream node affected by that actuator.  The
+    rollout must therefore carry the action context through the network before
+    producing hydraulic trajectories.  This is a parameter-free message pass,
+    so it does not add an unidentifiable policy or alter the recorded targets.
+    """
+    if steps <= 0:
+        return node_embeddings
+    if node_embeddings.ndim != 4:
+        raise ValueError("node_embeddings must be [B,H,N,D]")
+    if edge_index.ndim != 2 or edge_index.shape[0] != 2:
+        raise ValueError("edge_index must be [2,E]")
+    n_nodes = node_embeddings.shape[2]
+    src = torch.cat((edge_index[0], edge_index[1])).to(torch.long)
+    dst = torch.cat((edge_index[1], edge_index[0])).to(torch.long)
+    degree = torch.bincount(dst, minlength=n_nodes).clamp_min(1).to(
+        node_embeddings.dtype
+    )
+    result = node_embeddings
+    for _ in range(int(steps)):
+        messages = torch.zeros_like(result)
+        messages.index_add_(2, dst, result.index_select(2, src))
+        result = 0.5 * (result + messages / degree[None, None, :, None])
+    return result
+
+
 class HydraulicHistoryEncoder(nn.Module):
     """Encode 13-frame hydraulic state + historical actions before GAT."""
 
@@ -219,6 +252,7 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
         horizon: int = 12,
         dt_sec: float = 600.0,
         dropout: float = 0.05,
+        action_diffusion_steps: int = 0,
     ) -> None:
         super().__init__()
         self.n_nodes = int(n_nodes)
@@ -226,6 +260,9 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
         self.horizon = int(horizon)
         self.dt_sec = float(dt_sec)
         self.hidden_dim = int(hidden_dim)
+        self.action_diffusion_steps = int(action_diffusion_steps)
+        if self.action_diffusion_steps < 0:
+            raise ValueError("action_diffusion_steps must be non-negative")
 
         self.history_encoder = HydraulicHistoryEncoder(
             n_nodes=n_nodes,
@@ -282,6 +319,7 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
         rain_embed: torch.Tensor,
         action_schedule: torch.Tensor,
         action_node_map: torch.Tensor,
+        edge_index: torch.Tensor,
         storage_indices: torch.Tensor,
         outfall_indices: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
@@ -296,6 +334,9 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
             )
         action_embed = self.action_encoder(
             action_schedule, action_node_map
+        )
+        action_embed = diffuse_action_embeddings(
+            action_embed, edge_index, self.action_diffusion_steps
         )
         h = self.state_to_hidden(initial_state).reshape(
             B * N, self.hidden_dim
@@ -472,11 +513,13 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
         branches: dict[str, dict[str, torch.Tensor]] = {}
         kpis: dict[str, HydraulicKPIBundle] = {}
         for name in self.BRANCHES:
+            action_schedule = schedules[name]
             branches[name] = self._rollout_branch(
                 initial_state=initial,
                 rain_embed=rain_embed,
-                action_schedule=schedules[name],
+                action_schedule=action_schedule,
                 action_node_map=action_node_map,
+                edge_index=edge_index,
                 storage_indices=storage_idx,
                 outfall_indices=outfall_idx,
             )
