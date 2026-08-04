@@ -234,7 +234,7 @@ def test_mpc_minimizes_tfv_only_inside_safe_set():
 
 def test_mpc_empty_safe_set_uses_frozen_fallback():
     decision = decide_pfvfirst_mpc(
-        candidates=[_candidate("bad", peak=0.1)],
+        candidates=[_candidate("bad", pfv=101.0)],
         fallback=_fallback(),
         expected_fallback_contract_hash="abc123",
     )
@@ -294,12 +294,17 @@ def _stage_payload(stage: str) -> dict:
             fallback_contract_sha256="f",
             gat_model_sha256="g",
             post_lock_parameter_updates_allowed=False,
+            control_objective_contract="PROJECT6_V42_PFV_BUDGETED_TFV_MPC_V1",
         )
     elif stage == "challenge":
         base.update(
-            policy_locked_before_reveal=True,
+            event_count=12,
+            policy_locked_before_evaluation=True,
+            current_generation_holdout_only=True,
             used_for_retraining=False,
-            rainfall_sha256s=["challenge-rain"],
+            rainfall_sha256s=[f"challenge-rain-{i}" for i in range(12)],
+            training_rainfall_sha256s=["train-a", "train-b"],
+            training_rainfall_overlap_count=0,
             policy_sha256="p",
             model_sha256="m",
             gat_model_sha256="g",
@@ -308,13 +313,16 @@ def _stage_payload(stage: str) -> dict:
     elif stage == "locked_validation":
         base.update(
             event_count=16,
-            policy_locked_before_reveal=True,
+            policy_locked_before_evaluation=True,
+            current_generation_holdout_only=True,
             new_rainfall_sha_only=True,
             post_reveal_exclusion_used=False,
             used_for_retraining=False,
             rainfall_sha256s=[f"locked-{i}" for i in range(16)],
             revealed_rainfall_sha256s=["train-a", "train-b", "challenge-rain"],
             revealed_rainfall_overlap_count=0,
+            training_rainfall_sha256s=["train-a", "train-b"],
+            training_rainfall_overlap_count=0,
             policy_sha256="p",
             model_sha256="m",
             gat_model_sha256="g",
@@ -323,13 +331,16 @@ def _stage_payload(stage: str) -> dict:
     elif stage == "formal_blind":
         base.update(
             event_count=24,
-            policy_locked_before_reveal=True,
+            policy_locked_before_evaluation=True,
+            current_generation_holdout_only=True,
             new_rainfall_sha_only=True,
             post_reveal_exclusion_used=False,
             used_for_retraining=False,
             rainfall_sha256s=[f"rain-{i}" for i in range(24)],
             revealed_rainfall_sha256s=["train-a", "train-b", "challenge-rain", "locked-0"],
             revealed_rainfall_overlap_count=0,
+            training_rainfall_sha256s=["train-a", "train-b"],
+            training_rainfall_overlap_count=0,
             policy_sha256="p",
             model_sha256="m",
             gat_model_sha256="g",
@@ -398,12 +409,13 @@ def test_formal_blind_computes_rainfall_overlap_from_explicit_sets(tmp_path: Pat
     for stage in PAPER_STAGE_ORDER[:-1]:
         write_stage_evidence(stage=stage, output_root=tmp_path, payload=_stage_payload(stage))
     bad = _stage_payload("formal_blind")
-    bad["revealed_rainfall_sha256s"] = ["rain-3"]
-    bad["revealed_rainfall_overlap_count"] = 1
+    bad["rainfall_sha256s"] = ["train-a"] + [f"final-rain-{i}" for i in range(23)]
+    bad["training_rainfall_sha256s"] = ["train-a", "train-b"]
+    bad["training_rainfall_overlap_count"] = 1
     write_stage_evidence(stage="formal_blind", output_root=tmp_path, payload=bad)
     audit = audit_paper_workflow(tmp_path)
     assert not audit.complete
-    assert "formal_rainfall_overlaps_revealed_development" in audit.stage_audits[-1].reasons
+    assert "formal_test_rainfall_overlaps_current_training" in audit.stage_audits[-1].reasons
 
 
 def test_paper_contract_ids_are_explicit():

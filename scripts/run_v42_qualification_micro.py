@@ -757,6 +757,48 @@ def _write_stage_status(qualification: Path, events: list[dict[str, Any]], summa
     return payload
 
 
+def _update_first_pass_audit(
+    qualification: Path, summary: dict[str, Any], status: dict[str, Any]
+) -> None:
+    """Keep the legacy aggregate audit consistent with the micro-stage audit."""
+    path = qualification / "QUALIFICATION_FIRST_PASS_AUDIT.json"
+    if not path.exists():
+        return
+    audit = json.loads(path.read_text(encoding="utf-8"))
+    stage_status_path = qualification / "QUALIFICATION_28_STAGE_STATUS.json"
+    if stage_status_path.exists():
+        stage_status = json.loads(stage_status_path.read_text(encoding="utf-8")).get(
+            "stage_status", {}
+        )
+    else:
+        stage_status = dict(audit.get("stage_status", {}))
+    stage_status.update(status["stage_status"])
+    audit["stage_status"] = stage_status
+    audit["passed_stage_count"] = sum(
+        value == "PASS_REUSABLE" for value in stage_status.values()
+    )
+    audit["next_stage"] = next(
+        (name for name, value in stage_status.items() if value != "PASS_REUSABLE"),
+        None,
+    )
+    core_statuses = [
+        value
+        for name, value in stage_status.items()
+        if name[:2].isdigit() and 1 <= int(name[:2]) <= 12
+    ]
+    audit["qualification_core_complete"] = len(core_statuses) == 12 and all(
+        value == "PASS_REUSABLE" for value in core_statuses
+    )
+    audit["micro_summary"] = summary
+    audit["micro_stage_status"] = status
+    audit["scientific_performance_status"] = status["scientific_performance_status"]
+    audit["formal_evidence_generated"] = False
+    path.write_text(
+        json.dumps(audit, indent=2, ensure_ascii=False, allow_nan=False, default=str),
+        encoding="utf-8",
+    )
+
+
 def _preflight(root: Path, qualification: Path) -> dict[str, Any]:
     events = _load_events(root, qualification)
     payload = {
@@ -882,6 +924,7 @@ def main() -> int:
         return 0
     summary = _compute_summary(root, qualification, all_events_for_summary, priority_nodes, ledger)
     status = _write_stage_status(qualification, all_events_for_summary, summary)
+    _update_first_pass_audit(qualification, summary, status)
     final = {
         "contract_id": CONTRACT_ID,
         "stage": "qualification_micro_13_28",

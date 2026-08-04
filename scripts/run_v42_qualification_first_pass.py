@@ -39,7 +39,7 @@ STAGES = (
     "13_new_calibration_authoritative_swmm",
     "14_calibration_data_bridge",
     "15_step1_uncertainty_ood_calibration",
-    "16_step2_pfv_depth_safety_calibration",
+    "16_step2_pfv_peak_safety_calibration",
     "17_compile_step1_step2_evidence",
     "18_step3_authoritative_engineering_audit",
     "19_compile_step3_evidence",
@@ -146,10 +146,10 @@ def _status(root: Path, qualification: Path) -> dict[str, Any]:
         )
 
     gat_audit = qualification / "step2/QUALIFICATION_GAT_HISTORY_AUDIT.json"
-    target_audit = qualification / "step2/QUALIFICATION_STEP2_CONTROL_CORE_MANIFEST_TARGET_AUDIT.json"
+    gat_manifest = qualification / "step2/QUALIFICATION_STEP2_GAT_MANIFEST.parquet"
     statuses["09_causal_13frame_gat_history"] = (
         "PASS_REUSABLE"
-        if _pass_json(gat_audit) and _pass_json(target_audit)
+        if _pass_json(gat_audit) and gat_manifest.exists()
         else "NOT_STARTED"
     )
     for seed, stage in (
@@ -164,17 +164,6 @@ def _status(root: Path, qualification: Path) -> dict[str, Any]:
             if _pass_model_report(report, "qualification_step2_single_seed") and model.exists()
             else "NOT_STARTED"
         )
-
-    micro_status = qualification / "QUALIFICATION_MICRO_STAGE_STATUS.json"
-    if micro_status.exists():
-        try:
-            micro_payload = _read_json(micro_status)
-            micro_stages = micro_payload.get("stage_status", {})
-            for stage in STAGES[12:]:
-                if micro_stages.get(stage) == "PASS_REUSABLE":
-                    statuses[stage] = "PASS_REUSABLE"
-        except Exception:
-            pass
 
     micro_status = qualification / "QUALIFICATION_MICRO_STAGE_STATUS.json"
     if micro_status.exists():

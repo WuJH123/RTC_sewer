@@ -177,6 +177,8 @@ def audit_candidate_safety(
         reasons.append("pfv_uncertainty_not_finite")
     elif allowance is not None and float(candidate.pfv_delta_ucb_m3) > allowance:
         reasons.append("pfv_noninferiority_budget_exceeded_vs_no_control")
+        # Keep the pre-budget diagnostic alias for downstream audit readers.
+        reasons.append("pfv_safety_violation_vs_no_control")
 
     depth_exceedance: float | None = None
     try:
@@ -372,6 +374,7 @@ def decide_pfvfirst_mpc(
             "pfv_absolute_allowance_m3": margins.pfv_absolute_allowance_m3,
             "pfv_relative_allowance_fraction": margins.pfv_relative_allowance_fraction,
             "peak_is_performance_penalty_not_hard_gate": True,
+            "tfv_is_hard_safety_constraint": False,
             "safety_and_performance_separated": True,
             "control_objective_contract": "PROJECT6_V42_PFV_BUDGETED_TFV_MPC_V1",
         },
