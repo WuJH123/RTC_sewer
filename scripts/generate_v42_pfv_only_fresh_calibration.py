@@ -95,7 +95,9 @@ def _audit_detail(path: Path, actuator_ids: list[str], checkpoint: float, end_mi
     if frame.empty or not np.isfinite(frame.to_numpy(dtype=float)).all():
         raise RuntimeError(f"{path}: empty or non-finite detail")
     elapsed = frame["elapsed_min"].to_numpy(dtype=float)
-    if np.any(np.diff(elapsed) <= 0) or elapsed.min() < 0 or elapsed.max() + 1e-9 < end_min:
+    # A 5-minute report is stamped at its interval start; the final row at
+    # end_min-5 covers [end_min-5, end_min].
+    if np.any(np.diff(elapsed) <= 0) or elapsed.min() < 0 or elapsed.max() + 5.0 + 1e-9 < end_min:
         raise RuntimeError(
             f"{path}: incomplete/non-monotone time axis min={elapsed.min()} max={elapsed.max()} required_end={end_min}"
         )
@@ -232,7 +234,7 @@ def _job(job: dict) -> dict:
             "actual_readback_verified": bool(all(item["target_actual_readback_pass"] for item in audits.values())),
             "same_state_raw_verified": bool(_same_prefix(audits["no_control"], audits[f"candidate_{index}"])),
             "same_forcing_raw_verified": True,
-            "h120_window_complete": bool(audits[f"candidate_{index}"]["elapsed_max"] + 1e-9 >= float(job["simulation_duration_min"])),
+            "h120_window_complete": bool(audits[f"candidate_{index}"]["elapsed_max"] + 5.0 + 1e-9 >= float(job["simulation_duration_min"])),
             "kpi_recompute_ok": bool(audits[f"candidate_{index}"]["kpi_recompute_pass"]),
             "detail_sha256": sha256_file(paths[f"candidate_{index}"]),
             "detail_audit": {key: value for key, value in audits[f"candidate_{index}"].items() if key != "prefix_frame"},
