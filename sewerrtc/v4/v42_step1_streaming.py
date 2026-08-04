@@ -22,6 +22,8 @@ Scientific contracts enforced here
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Iterator, Sequence
@@ -172,7 +174,83 @@ def summarise_selection(frame: pd.DataFrame) -> Step1StreamingSummary:
     )
 
 
-def _read_projected_detail(path: str | Path, required_columns: Sequence[str]) -> pd.DataFrame:
+_PROJECTED_CACHE_STATS = {"hits": 0, "misses": 0, "writes": 0, "invalid": 0}
+
+
+def _projected_cache_location(
+    path: str | Path,
+    required_columns: Sequence[str],
+    *,
+    cache_dir: str | Path,
+    source_identity: str | None = None,
+) -> tuple[Path, dict[str, object]]:
+    """Return the content-addressed projected-detail cache path and authority."""
+    p = Path(path)
+    stat = p.stat()
+    authority = {
+        "source_identity": str(source_identity or p.resolve()),
+        "source_path": str(p.resolve()),
+        "source_size": int(stat.st_size),
+        "source_mtime_ns": int(stat.st_mtime_ns),
+        "required_columns": [str(c) for c in required_columns],
+    }
+    key = hashlib.sha256(
+        json.dumps(authority, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return Path(cache_dir) / f"{key}.npz", authority
+
+
+def projected_cache_stats(*, reset: bool = False) -> dict[str, int]:
+    stats = {key: int(value) for key, value in _PROJECTED_CACHE_STATS.items()}
+    if reset:
+        for key in _PROJECTED_CACHE_STATS:
+            _PROJECTED_CACHE_STATS[key] = 0
+    return stats
+
+
+def _write_projected_cache(path: Path, frame: pd.DataFrame, authority: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    arrays = {f"column_{index}": frame[column].to_numpy(copy=True) for index, column in enumerate(frame.columns)}
+    arrays["__meta__"] = np.asarray(
+        json.dumps({"authority": authority, "columns": frame.columns.tolist()}, sort_keys=True)
+    )
+    try:
+        with tmp.open("wb") as handle:
+            np.savez(handle, **arrays)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+        _PROJECTED_CACHE_STATS["writes"] += 1
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
+def _load_projected_cache(path: Path, authority: dict[str, object]) -> pd.DataFrame | None:
+    try:
+        with np.load(path, allow_pickle=False) as archive:
+            meta = json.loads(str(archive["__meta__"].item()))
+            if meta.get("authority") != authority:
+                _PROJECTED_CACHE_STATS["invalid"] += 1
+                return None
+            columns = [str(column) for column in meta["columns"]]
+            frame = pd.DataFrame(
+                {column: archive[f"column_{index}"] for index, column in enumerate(columns)}
+            )
+            return frame.loc[:, columns]
+    except (OSError, KeyError, ValueError, json.JSONDecodeError):
+        _PROJECTED_CACHE_STATS["invalid"] += 1
+        return None
+
+
+def _read_projected_detail(
+    path: str | Path,
+    required_columns: Sequence[str],
+    *,
+    cache_dir: str | Path | None = None,
+    source_identity: str | None = None,
+) -> pd.DataFrame:
     """Read required columns by *name* and return canonical column order.
 
     Pandas intentionally ignores the element order of ``usecols``.  Therefore
@@ -182,6 +260,19 @@ def _read_projected_detail(path: str | Path, required_columns: Sequence[str]) ->
     been returned.
     """
     p = Path(path)
+    if cache_dir is not None:
+        cache_path, authority = _projected_cache_location(
+            p,
+            required_columns,
+            cache_dir=cache_dir,
+            source_identity=source_identity,
+        )
+        if cache_path.exists():
+            cached = _load_projected_cache(cache_path, authority)
+            if cached is not None:
+                _PROJECTED_CACHE_STATS["hits"] += 1
+                return cached
+        _PROJECTED_CACHE_STATS["misses"] += 1
     header = pd.read_csv(p, nrows=0)
     available = set(map(str, header.columns))
     missing = [str(c) for c in required_columns if str(c) not in available]
@@ -192,6 +283,8 @@ def _read_projected_detail(path: str | Path, required_columns: Sequence[str]) ->
     frame = frame.loc[:, required]
     if frame.columns.tolist() != required:
         raise RuntimeError("formal Step1 projected CSV columns are not in canonical order")
+    if cache_dir is not None:
+        _write_projected_cache(cache_path, frame, authority)
     return frame
 
 
@@ -220,6 +313,7 @@ class Step1StreamingDataset(IterableDataset):
         sampling_seed: int = 42,
         shuffle_files: bool = False,
         iteration_seed: int = 42,
+        cache_dir: str | Path | None = None,
     ) -> None:
         super().__init__()
         self.project_root = Path(project_root)
@@ -261,6 +355,7 @@ class Step1StreamingDataset(IterableDataset):
         self.shuffle_files = bool(shuffle_files)
         self.iteration_seed = int(iteration_seed)
         self.epoch = 0
+        self.cache_dir = None if cache_dir is None else Path(cache_dir)
 
     def __len__(self) -> int:
         return int(len(self.rows))
@@ -289,7 +384,17 @@ class Step1StreamingDataset(IterableDataset):
             file_groups = file_groups[worker.id :: worker.num_workers]
 
         for detail_path, rows in file_groups:
-            detail = _read_projected_detail(detail_path, self.required_columns)
+            source_identity = None
+            if "physical_identity_sha256" in rows.columns:
+                source_identity = "|".join(
+                    sorted(rows["physical_identity_sha256"].astype(str).unique())
+                )
+            detail = _read_projected_detail(
+                detail_path,
+                self.required_columns,
+                cache_dir=self.cache_dir,
+                source_identity=source_identity,
+            )
             try:
                 for row in rows.itertuples(index=False):
                     extracted = _detail_extract_window(
@@ -380,4 +485,6 @@ __all__ = [
     "summarise_selection",
     "target_rainfall_groups",
     "_read_projected_detail",
+    "_projected_cache_location",
+    "projected_cache_stats",
 ]

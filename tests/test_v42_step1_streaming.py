@@ -5,7 +5,9 @@ import pandas as pd
 import pytest
 
 from sewerrtc.v4.v42_step1_streaming import (
+    _projected_cache_location,
     _read_projected_detail,
+    projected_cache_stats,
     select_manifest_rows,
     split_target_groups,
     summarise_selection,
@@ -53,6 +55,38 @@ def test_step1_streaming_projection_missing_column_fails_closed(tmp_path):
             path,
             ["elapsed_min", "rainfall_mm_h", "h:N1", "setting:F1"],
         )
+
+
+def test_projected_cache_roundtrip_preserves_canonical_values(tmp_path):
+    required = ["elapsed_min", "rainfall_mm_h", "h:N1", "setting:F1"]
+    expected = pd.DataFrame(
+        {
+            "elapsed_min": [0.0, 5.0],
+            "rainfall_mm_h": [1.25, 2.5],
+            "h:N1": [0.125, 0.25],
+            "setting:F1": [0.0, 1.0],
+        }
+    )
+    source = tmp_path / "detail.csv"
+    expected.to_csv(source, index=False)
+    cache = tmp_path / "cache"
+    projected_cache_stats(reset=True)
+    first = _read_projected_detail(
+        source, required, cache_dir=cache, source_identity="physical-sha"
+    )
+    second = _read_projected_detail(
+        source, required, cache_dir=cache, source_identity="physical-sha"
+    )
+    pd.testing.assert_frame_equal(first, expected)
+    pd.testing.assert_frame_equal(second, expected)
+    stats = projected_cache_stats()
+    assert stats["misses"] == 1
+    assert stats["writes"] == 1
+    assert stats["hits"] == 1
+    cache_path, _ = _projected_cache_location(
+        source, required, cache_dir=cache, source_identity="physical-sha"
+    )
+    assert cache_path.exists()
 
 
 def _manifest() -> pd.DataFrame:

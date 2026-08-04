@@ -200,17 +200,36 @@ def _nll_weight(epoch: int, target: float, warmup: int, ramp: int) -> float:
     return float(target) * float(step) / float(ramp)
 
 
-def _make_loader(dataset: Step1StreamingDataset, *, batch_size: int, num_workers: int, pin_memory: bool):
+def _make_loader(
+    dataset: Step1StreamingDataset,
+    *,
+    batch_size: int,
+    num_workers: int,
+    pin_memory: bool,
+    persistent_workers: bool = False,
+    prefetch_factor: int = 2,
+):
     # shuffle must remain False for IterableDataset; file/window order is
     # deterministically shuffled inside Step1StreamingDataset when requested.
-    return DataLoader(
-        dataset,
-        batch_size=int(batch_size),
-        shuffle=False,
-        num_workers=int(num_workers),
-        pin_memory=bool(pin_memory),
-        drop_last=False,
-    )
+    kwargs = {
+        "dataset": dataset,
+        "batch_size": int(batch_size),
+        "shuffle": False,
+        "num_workers": int(num_workers),
+        "pin_memory": bool(pin_memory),
+        "drop_last": False,
+    }
+    if int(num_workers) > 0:
+        kwargs["persistent_workers"] = bool(persistent_workers)
+        kwargs["prefetch_factor"] = max(1, int(prefetch_factor))
+    return DataLoader(**kwargs)
+
+
+def _write_runtime_status(path: Path, value: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(value, allow_nan=False), encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def _run_epoch(
@@ -226,6 +245,10 @@ def _run_epoch(
     wet_threshold_m: float,
     heartbeat_batches: int,
     epoch: int,
+    persistent_workers: bool = False,
+    prefetch_factor: int = 2,
+    pin_memory: bool | None = None,
+    runtime_status_file: Path | None = None,
 ) -> dict[str, object]:
     training = optimizer is not None
     model.train(training)
@@ -234,7 +257,9 @@ def _run_epoch(
         dataset,
         batch_size=batch_size,
         num_workers=num_workers,
-        pin_memory=device.type == "cuda",
+        pin_memory=device.type == "cuda" if pin_memory is None else bool(pin_memory),
+        persistent_workers=persistent_workers,
+        prefetch_factor=prefetch_factor,
     )
     node_static, link_static, edge_index, action_map = _graph_tensors(graph, device)
     pri_mask = _priority_mask(graph, device)
@@ -253,6 +278,7 @@ def _run_epoch(
     physical_runs: set[str] = set()
     peak_rss = _rss_mb()
     started = time.time()
+    last_status = started
 
     amp_enabled = os.environ.get("RTC_V42_STEP1_AMP") == "1" and device.type == "cuda"
     scaler = None
@@ -338,6 +364,25 @@ def _run_epoch(
                     "NA" if rss is None else f"{rss:.0f}",
                     len(detail_files),
                 )
+            now = time.time()
+            if runtime_status_file is not None and (
+                now - last_status >= 5.0 or batches == 1
+            ):
+                _write_runtime_status(
+                    runtime_status_file,
+                    {
+                        "stage": "step1",
+                        "epoch": int(epoch),
+                        "batch": int(batches),
+                        "windows_seen": int(windows_seen),
+                        "expected_windows": int(len(dataset)),
+                        "windows_per_sec": float(windows_seen / max(now - started, 1e-9)),
+                        "unique_detail_files": int(len(detail_files)),
+                        "unique_rainfall_groups": int(len(rainfall_groups)),
+                        "timestamp": time.time(),
+                    },
+                )
+                last_status = now
 
     expected = len(dataset)
     # With num_workers=0 or correctly partitioned workers, every selected window
@@ -362,6 +407,22 @@ def _run_epoch(
             },
         }
     )
+    if runtime_status_file is not None:
+        _write_runtime_status(
+            runtime_status_file,
+            {
+                "stage": "step1",
+                "epoch": int(epoch),
+                "batch": int(batches),
+                "windows_seen": int(windows_seen),
+                "expected_windows": int(expected),
+                "windows_per_sec": float(windows_seen / max(result["elapsed_s"], 1e-9)),
+                "unique_detail_files": int(len(detail_files)),
+                "unique_rainfall_groups": int(len(rainfall_groups)),
+                "timestamp": time.time(),
+                "completed": True,
+            },
+        )
     return result
 
 
