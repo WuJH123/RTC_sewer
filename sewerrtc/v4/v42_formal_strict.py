@@ -4,7 +4,7 @@ The final paper-generation checks must not be bypassed by hand-written evidence:
 
 * current Calibration is the complete frozen 12-rainfall holdout;
 * CONTROL_CORE/FULL_HYDRAULIC supervision semantics are explicit;
-* Step3 is PFV-budget + priority-depth hard-safe, TFV-primary, Peak-soft, with
+* Step3 is PFV-budget + TFV-primary, with
   execution-derived Engineering36/readback evidence;
 * stage21 contains authoritative SWMM Proposed/No-control/Internal/Hold runs;
 * stage22 is an actually executed surrogate-state-feedback closed loop, not a
@@ -23,9 +23,10 @@ from typing import Any
 import pandas as pd
 
 from .paper_workflow_v42 import audit_paper_workflow
+from .formal_f2 import sha256_file
 
 EXPECTED_CALIBRATION_GROUPS = 12
-CONTROL_OBJECTIVE_CONTRACT = "PROJECT6_V42_PFV_BUDGETED_TFV_MPC_V1"
+CONTROL_OBJECTIVE_CONTRACT = "PROJECT6_V42_PFV_ONLY_TFV_MIN_MPC_V2"
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -60,7 +61,7 @@ def audit_calibration_completeness(formal_root: Path) -> dict[str, Any]:
     ledger = _read_table(formal_root / "prepare/FORMAL_F2_EVENT_LEDGER.csv")
     expected = _calibration_group_set(ledger)
     step1_path = formal_root / "calibration/STEP1_UNCERTAINTY_OOD_CALIBRATION.json"
-    step2_path = formal_root / "calibration/STEP2_SAFETY_CALIBRATION.json"
+    step2_path = formal_root / "calibration/PFV_ONLY_SAFETY_CALIBRATION.json"
     reasons: list[str] = []
     if len(expected) != EXPECTED_CALIBRATION_GROUPS:
         reasons.append(
@@ -127,6 +128,20 @@ def audit_step2_evidence_strict(paper_root: Path) -> dict[str, Any]:
         reasons.append("no_control_all_open_not_verified")
     if p.get("trajectory_first_kpi_derivation") is not True:
         reasons.append("trajectory_first_kpi_derivation_not_proven")
+    if p.get("control_objective_contract") != CONTROL_OBJECTIVE_CONTRACT:
+        reasons.append("control_objective_contract_not_proven")
+    if p.get("pfv_budget_applied") is not True:
+        reasons.append("pfv_budget_not_proven")
+    if p.get("objective") != "minimize_TFV_subject_to_PFV_budget":
+        reasons.append("tfv_objective_not_proven")
+    if p.get("priority_depth_hard_gate") is not False:
+        reasons.append("priority_depth_must_be_diagnostic_only")
+    if p.get("global_peak_objective_term") is not False:
+        reasons.append("global_peak_must_be_reporting_only")
+    if p.get("independent_OOD_gate") is not False:
+        reasons.append("independent_OOD_gate_must_be_false")
+    if p.get("independent_uncertainty_gate") is not False:
+        reasons.append("independent_uncertainty_gate_must_be_false")
     if p.get("peak_is_hard_safety_constraint") is not False:
         reasons.append("peak_must_not_be_hard_safety_constraint")
     return {
@@ -154,24 +169,38 @@ def audit_step3_evidence_strict(paper_root: Path) -> dict[str, Any]:
         reasons.append("wrong_control_objective_contract")
     if p.get("pfv_reference") != "no_control":
         reasons.append("wrong_pfv_reference")
+    if p.get("pfv_budget_applied") is not True:
+        reasons.append("pfv_budget_not_applied")
     if float(p.get("pfv_absolute_allowance_m3", -1.0)) != 100.0:
         reasons.append("pfv_absolute_allowance_mismatch")
     if abs(float(p.get("pfv_relative_allowance_fraction", -1.0)) - 0.05) > 1.0e-12:
         reasons.append("pfv_relative_allowance_mismatch")
-    if p.get("priority_depth_safety") is not True:
-        reasons.append("priority_depth_safety_not_proven")
+    if p.get("priority_depth_hard_gate") is not False:
+        reasons.append("priority_depth_must_be_diagnostic_only")
     if p.get("tfv_reference") != "dynamic_internal":
         reasons.append("wrong_tfv_reference")
     if p.get("tfv_is_primary_performance_objective") is not True:
         reasons.append("tfv_primary_objective_not_proven")
+    if p.get("objective") != "minimize_TFV_subject_to_PFV_budget":
+        reasons.append("wrong_tfv_objective_contract")
     if p.get("tfv_is_hard_safety_constraint") is not False:
         reasons.append("tfv_must_not_be_hard_gate")
-    if p.get("peak_reference") != "dynamic_internal":
-        reasons.append("wrong_peak_reference")
     if p.get("peak_is_hard_safety_constraint") is not False:
         reasons.append("peak_must_not_be_hard_gate")
-    if p.get("peak_positive_excess_is_penalized") is not True:
-        reasons.append("positive_peak_excess_penalty_not_proven")
+    if p.get("global_peak_objective_term") is not False:
+        reasons.append("global_peak_must_not_enter_objective")
+    for key in (
+        "peak_penalty_weight",
+        "action_penalty_weight",
+        "terminal_penalty_weight",
+        "uncertainty_penalty_weight",
+    ):
+        if float(p.get(key, 1.0)) != 0.0:
+            reasons.append(f"{key}_must_be_zero")
+    if p.get("independent_OOD_gate") is not False:
+        reasons.append("independent_OOD_gate_must_be_false")
+    if p.get("independent_uncertainty_gate") is not False:
+        reasons.append("independent_uncertainty_gate_must_be_false")
     if int(p.get("facility_count", -1)) != 36:
         reasons.append("engineering36_not_proven")
     if int(p.get("max_changed_facilities", -1)) != 8:
@@ -182,7 +211,6 @@ def audit_step3_evidence_strict(paper_root: Path) -> dict[str, Any]:
         "engineering_status_derived_from_execution",
         "changed_facilities_derived_from_executed_action",
         "readback_verified",
-        "uncertainty_and_ood_linked_to_calibrated_models",
     ):
         if p.get(key) is not True:
             reasons.append(f"{key}_not_proven")
@@ -250,6 +278,32 @@ def audit_closed_loop_execution_strict(paper_root: Path) -> dict[str, Any]:
             reasons.append("stage22_realized_future_rainfall_detected")
         if surrogate.get("dynamic_internal_future_action_used_online") is not False:
             reasons.append("stage22_future_internal_action_detected")
+        ledger_path = surrogate.get("execution_ledger_path")
+        try:
+            ledger = pd.read_csv(ledger_path, low_memory=False)
+            if len(ledger) != EXPECTED_CALIBRATION_GROUPS:
+                reasons.append("stage22_execution_ledger_event_count_mismatch")
+            if not ledger.get("stage", pd.Series(dtype=str)).astype(str).eq("surrogate_closed_loop").all():
+                reasons.append("stage22_execution_ledger_stage_mismatch")
+            if not ledger.get("state_source", pd.Series(dtype=str)).astype(str).eq("surrogate_feedback_from_authoritative_prefix").all():
+                reasons.append("stage22_execution_ledger_state_source_mismatch")
+            for column in ("detail_path", "decision_path", "detail_sha256", "decision_sha256"):
+                if column not in ledger or ledger[column].astype(str).eq("").any():
+                    reasons.append(f"stage22_execution_ledger_{column}_missing")
+            if "detail_path" in ledger and "detail_sha256" in ledger:
+                for _, row in ledger.iterrows():
+                    detail = Path(str(row["detail_path"]))
+                    if not detail.exists() or sha256_file(detail) != str(row["detail_sha256"]):
+                        reasons.append("stage22_execution_ledger_detail_hash_mismatch")
+                        break
+            if "decision_path" in ledger and "decision_sha256" in ledger:
+                for _, row in ledger.iterrows():
+                    decision = Path(str(row["decision_path"]))
+                    if not decision.exists() or sha256_file(decision) != str(row["decision_sha256"]):
+                        reasons.append("stage22_execution_ledger_decision_hash_mismatch")
+                        break
+        except Exception as exc:
+            reasons.append(f"stage22_execution_ledger_unreadable:{type(exc).__name__}")
 
     gat = payloads["gat"]
     if gat:
@@ -265,8 +319,10 @@ def audit_closed_loop_execution_strict(paper_root: Path) -> dict[str, Any]:
             reasons.append("stage23_swmm_truth_history_leakage")
         if gat.get("current_frame_repetition_used") is not False:
             reasons.append("stage23_current_frame_repetition_detected")
-        if gat.get("gat_uncertainty_used") is not True or gat.get("ood_gate_used") is not True:
-            reasons.append("stage23_uncertainty_ood_not_active")
+        if gat.get("gat_uncertainty_used") is not True:
+            reasons.append("stage23_uncertainty_not_used_for_pfv_ucb")
+        if gat.get("ood_gate_used") is not False or gat.get("ood_diagnostic_used") is not True:
+            reasons.append("stage23_ood_must_be_diagnostic_only")
 
     return {
         "status": "pass" if not reasons else "fail",

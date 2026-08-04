@@ -49,6 +49,14 @@ LOCK_HASH_KEYS = (
     "model_sha256",
     "gat_model_sha256",
     "fallback_contract_sha256",
+    "control_objective_contract_sha256",
+    "candidate_generator_sha256",
+    "engineering_projector_sha256",
+    "production_runtime_sha256",
+    "surrogate_loop_sha256",
+    "pfv_calibration_sha256",
+    "rainfall_forecast_sha256",
+    "sensor_layout_sha256",
 )
 
 REQUIRED_FORMAL_BLIND_STRATEGIES = (
@@ -321,8 +329,8 @@ def _stage_specific_reasons(stage: str, payload: Mapping[str, Any]) -> list[str]
             reasons.append("current_reconstructed_frame_repeated_as_history")
         if payload.get("gat_uncertainty_used") is not True:
             reasons.append("gat_uncertainty_not_used")
-        if payload.get("ood_gate_used") is not True:
-            reasons.append("ood_gate_not_used")
+        if payload.get("ood_gate_used") is not False or payload.get("ood_diagnostic_used") is not True:
+            reasons.append("ood_must_be_diagnostic_only")
         if payload.get("uncertainty_calibrated") is not True:
             reasons.append("gat_uncertainty_not_calibrated")
         if payload.get("ood_calibrated") is not True:
@@ -334,7 +342,7 @@ def _stage_specific_reasons(stage: str, payload: Mapping[str, Any]) -> list[str]
             _require_hash(payload, key, reasons)
         if payload.get("post_lock_parameter_updates_allowed") is not False:
             reasons.append("policy_lock_allows_post_lock_updates")
-        if payload.get("control_objective_contract") != "PROJECT6_V42_PFV_BUDGETED_TFV_MPC_V1":
+        if payload.get("control_objective_contract") != "PROJECT6_V42_PFV_ONLY_TFV_MIN_MPC_V2":
             reasons.append("wrong_control_objective_contract")
     elif stage == "challenge":
         stage_reasons, _ = _holdout_evidence_reasons(

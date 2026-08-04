@@ -71,12 +71,12 @@ def test_pfv_budget_allows_100_plus_five_percent() -> None:
     )
     assert rejected.used_fallback
     assert any(
-        "pfv_noninferiority_budget_exceeded_vs_no_control" in audit.rejection_reasons
+        "PFV_budget_exceeded_vs_no_control" in audit.rejection_reasons
         for audit in rejected.audits
     )
 
 
-def test_priority_depth_is_hard_constraint() -> None:
+def test_priority_depth_is_diagnostic_only() -> None:
     decision = decide_pfvfirst_mpc(
         candidates=[
             _candidate(
@@ -88,16 +88,11 @@ def test_priority_depth_is_hard_constraint() -> None:
         fallback=_fallback(),
         margins=SafetyMargins(require_priority_depth=True),
     )
-    assert decision.used_fallback
-    assert any(
-        "priority_depth_safety_violation" in audit.rejection_reasons
-        for audit in decision.audits
-    )
+    assert not decision.used_fallback
+    assert decision.selected_id == "too_deep"
 
 
-def test_peak_is_penalty_not_hard_gate() -> None:
-    # B has lower TFV but a large peak excess. With a 600 s peak penalty A wins;
-    # both remain admissible because Peak is no longer a hard gate.
+def test_peak_is_reporting_only_and_cannot_change_selection() -> None:
     a = _candidate("a", tfv=-100.0, peak=0.0)
     b = _candidate("b", tfv=-500.0, peak=1.0)
     decision = decide_pfvfirst_mpc(
@@ -107,14 +102,14 @@ def test_peak_is_penalty_not_hard_gate() -> None:
         weights=MPCWeights(peak=600.0, action=0.0, terminal=0.0, uncertainty=0.0),
     )
     assert not decision.used_fallback
-    assert decision.selected_id == "a"
+    assert decision.selected_id == "b"
     assert all(
         "peak_safety_violation_vs_dynamic_internal" not in audit.rejection_reasons
         for audit in decision.audits
     )
 
 
-def test_engineering_k_uncertainty_ood_and_executable_remain_hard() -> None:
+def test_engineering_remains_hard_but_ood_and_uncertainty_are_diagnostic() -> None:
     bad_engineering = EngineeringStatus(False, True, True, True, True)
     candidates = [
         _candidate("k", changed=9),
@@ -128,12 +123,11 @@ def test_engineering_k_uncertainty_ood_and_executable_remain_hard() -> None:
         fallback=_fallback(),
         margins=SafetyMargins(require_priority_depth=True),
     )
-    assert decision.used_fallback
+    assert not decision.used_fallback
+    assert decision.selected_id == "ood"
     reasons = {reason for audit in decision.audits for reason in audit.rejection_reasons}
     assert "K_exceeded" in reasons
     assert "engineering_bounds_violation" in reasons
-    assert "uncertainty_gate_failed" in reasons
-    assert "ood_gate_failed" in reasons
     assert "candidate_not_executable" in reasons
 
 
@@ -148,7 +142,7 @@ def test_selects_minimum_tfv_objective_within_safe_set() -> None:
         weights=MPCWeights(peak=0.0, action=0.0, terminal=0.0, uncertainty=0.0),
     )
     assert decision.selected_id == "better"
-    assert decision.reason == "minimum_tfv_objective_within_pfv_budget_and_depth_safe_set"
+    assert decision.reason == "minimum_tfv_objective_within_pfv_budget_and_engineering_safe_set"
 
 
 def test_empty_safe_set_executes_frozen_fallback() -> None:

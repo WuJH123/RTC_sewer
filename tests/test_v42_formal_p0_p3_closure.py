@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 
 import pandas as pd
@@ -31,7 +32,7 @@ def test_calibration_strict_requires_exact_frozen_12(tmp_path: Path):
     ledger.to_csv(formal / "prepare/FORMAL_F2_EVENT_LEDGER.csv", index=False)
     for name in (
         "STEP1_UNCERTAINTY_OOD_CALIBRATION.json",
-        "STEP2_SAFETY_CALIBRATION.json",
+        "PFV_ONLY_SAFETY_CALIBRATION.json",
     ):
         _write_json(
             formal / "calibration" / name,
@@ -44,7 +45,7 @@ def test_calibration_strict_requires_exact_frozen_12(tmp_path: Path):
     assert audit_calibration_completeness(formal)["status"] == "pass"
 
     _write_json(
-        formal / "calibration/STEP2_SAFETY_CALIBRATION.json",
+        formal / "calibration/PFV_ONLY_SAFETY_CALIBRATION.json",
         {
             "status": "pass",
             "calibration_rainfall_groups": groups[:8],
@@ -68,6 +69,13 @@ def test_control_core_strict_does_not_require_outfall(tmp_path: Path):
         "no_control_all_open_verified": True,
         "trajectory_first_kpi_derivation": True,
         "peak_is_hard_safety_constraint": False,
+        "control_objective_contract": "PROJECT6_V42_PFV_ONLY_TFV_MIN_MPC_V2",
+        "pfv_budget_applied": True,
+        "objective": "minimize_TFV_subject_to_PFV_budget",
+        "priority_depth_hard_gate": False,
+        "global_peak_objective_term": False,
+        "independent_OOD_gate": False,
+        "independent_uncertainty_gate": False,
     }
     _write_json(paper / "step2_surrogate/evidence.json", base)
     assert audit_step2_evidence_strict(paper)["status"] == "pass"
@@ -80,21 +88,28 @@ def test_control_core_strict_does_not_require_outfall(tmp_path: Path):
     assert "full_hydraulic_outfall_supervision_not_proven" in result["reasons"]
 
 
-def test_step3_strict_requires_budget_depth_and_peak_soft(tmp_path: Path):
+def test_step3_strict_requires_pfv_only_objective_and_peak_reporting(tmp_path: Path):
     paper = tmp_path / "v42_paper"
     payload = {
         "selector": "decide_pfvfirst_mpc",
-        "control_objective_contract": "PROJECT6_V42_PFV_BUDGETED_TFV_MPC_V1",
+        "control_objective_contract": "PROJECT6_V42_PFV_ONLY_TFV_MIN_MPC_V2",
         "pfv_reference": "no_control",
         "pfv_absolute_allowance_m3": 100.0,
         "pfv_relative_allowance_fraction": 0.05,
-        "priority_depth_safety": True,
+        "pfv_budget_applied": True,
+        "objective": "minimize_TFV_subject_to_PFV_budget",
+        "priority_depth_hard_gate": False,
         "tfv_reference": "dynamic_internal",
         "tfv_is_primary_performance_objective": True,
         "tfv_is_hard_safety_constraint": False,
-        "peak_reference": "dynamic_internal",
+        "global_peak_objective_term": False,
         "peak_is_hard_safety_constraint": False,
-        "peak_positive_excess_is_penalized": True,
+        "peak_penalty_weight": 0.0,
+        "action_penalty_weight": 0.0,
+        "terminal_penalty_weight": 0.0,
+        "uncertainty_penalty_weight": 0.0,
+        "independent_OOD_gate": False,
+        "independent_uncertainty_gate": False,
         "facility_count": 36,
         "max_changed_facilities": 8,
         "horizon_steps": 12,
@@ -155,7 +170,8 @@ def test_closed_loop_strict_rejects_metadata_only_surrogate_stub(tmp_path: Path)
             "authoritative_swmm_history_used_as_online_input": False,
             "current_frame_repetition_used": False,
             "gat_uncertainty_used": True,
-            "ood_gate_used": True,
+            "ood_gate_used": False,
+            "ood_diagnostic_used": True,
         },
     )
     result = audit_closed_loop_execution_strict(paper)
@@ -166,6 +182,27 @@ def test_closed_loop_strict_rejects_metadata_only_surrogate_stub(tmp_path: Path)
         (paper / "surrogate_closed_loop/evidence.json").read_text(encoding="utf-8")
     )
     surrogate["surrogate_closed_loop_executed"] = True
+    ledger_dir = paper / "surrogate_closed_loop"
+    rows = []
+    for i in range(12):
+        detail = ledger_dir / f"detail_{i}.csv"
+        decision = ledger_dir / f"decision_{i}.jsonl"
+        detail.write_text("elapsed_min\n120\n", encoding="utf-8")
+        decision.write_text("{}\n", encoding="utf-8")
+        sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+        rows.append(
+            {
+                "stage": "surrogate_closed_loop",
+                "state_source": "surrogate_feedback_from_authoritative_prefix",
+                "detail_path": str(detail),
+                "detail_sha256": sha(detail),
+                "decision_path": str(decision),
+                "decision_sha256": sha(decision),
+            }
+        )
+    ledger_path = ledger_dir / "FORMAL_EXECUTION_LEDGER.csv"
+    pd.DataFrame(rows).to_csv(ledger_path, index=False)
+    surrogate["execution_ledger_path"] = str(ledger_path)
     _write_json(paper / "surrogate_closed_loop/evidence.json", surrogate)
     assert audit_closed_loop_execution_strict(paper)["status"] == "pass"
 

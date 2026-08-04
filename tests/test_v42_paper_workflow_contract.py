@@ -217,7 +217,7 @@ def test_mpc_safety_cannot_be_compensated_by_large_tfv_gain():
     assert decision.selected_id == "safe"
     assert decision.used_fallback is False
     unsafe_audit = next(a for a in decision.audits if a.candidate_id == "unsafe")
-    assert "pfv_safety_violation_vs_no_control" in unsafe_audit.rejection_reasons
+    assert "PFV_budget_exceeded_vs_no_control" in unsafe_audit.rejection_reasons
 
 
 def test_mpc_minimizes_tfv_only_inside_safe_set():
@@ -281,7 +281,8 @@ def _stage_payload(stage: str) -> dict:
             authoritative_swmm_history_used_as_online_input=False,
             current_frame_repetition_used=False,
             gat_uncertainty_used=True,
-            ood_gate_used=True,
+            ood_gate_used=False,
+            ood_diagnostic_used=True,
             uncertainty_calibrated=True,
             ood_calibrated=True,
             gat_model_sha256="g",
@@ -289,12 +290,17 @@ def _stage_payload(stage: str) -> dict:
         )
     elif stage == "policy_lock":
         base.update(
-            policy_sha256="p",
-            model_sha256="m",
-            fallback_contract_sha256="f",
-            gat_model_sha256="g",
+            policy_sha256="p", model_sha256="m", fallback_contract_sha256="f", gat_model_sha256="g",
+            control_objective_contract_sha256="objective",
+            candidate_generator_sha256="candidate",
+            engineering_projector_sha256="projector",
+            production_runtime_sha256="runtime",
+            surrogate_loop_sha256="surrogate-loop",
+            pfv_calibration_sha256="pfv-calibration",
+            rainfall_forecast_sha256="rainfall",
+            sensor_layout_sha256="sensor-layout",
             post_lock_parameter_updates_allowed=False,
-            control_objective_contract="PROJECT6_V42_PFV_BUDGETED_TFV_MPC_V1",
+            control_objective_contract="PROJECT6_V42_PFV_ONLY_TFV_MIN_MPC_V2",
         )
     elif stage == "challenge":
         base.update(
@@ -305,10 +311,11 @@ def _stage_payload(stage: str) -> dict:
             rainfall_sha256s=[f"challenge-rain-{i}" for i in range(12)],
             training_rainfall_sha256s=["train-a", "train-b"],
             training_rainfall_overlap_count=0,
-            policy_sha256="p",
-            model_sha256="m",
-            gat_model_sha256="g",
-            fallback_contract_sha256="f",
+            policy_sha256="p", model_sha256="m", gat_model_sha256="g", fallback_contract_sha256="f",
+            control_objective_contract_sha256="objective", candidate_generator_sha256="candidate",
+            engineering_projector_sha256="projector", production_runtime_sha256="runtime",
+            surrogate_loop_sha256="surrogate-loop", pfv_calibration_sha256="pfv-calibration",
+            rainfall_forecast_sha256="rainfall", sensor_layout_sha256="sensor-layout",
         )
     elif stage == "locked_validation":
         base.update(
@@ -323,10 +330,11 @@ def _stage_payload(stage: str) -> dict:
             revealed_rainfall_overlap_count=0,
             training_rainfall_sha256s=["train-a", "train-b"],
             training_rainfall_overlap_count=0,
-            policy_sha256="p",
-            model_sha256="m",
-            gat_model_sha256="g",
-            fallback_contract_sha256="f",
+            policy_sha256="p", model_sha256="m", gat_model_sha256="g", fallback_contract_sha256="f",
+            control_objective_contract_sha256="objective", candidate_generator_sha256="candidate",
+            engineering_projector_sha256="projector", production_runtime_sha256="runtime",
+            surrogate_loop_sha256="surrogate-loop", pfv_calibration_sha256="pfv-calibration",
+            rainfall_forecast_sha256="rainfall", sensor_layout_sha256="sensor-layout",
         )
     elif stage == "formal_blind":
         base.update(
@@ -341,10 +349,11 @@ def _stage_payload(stage: str) -> dict:
             revealed_rainfall_overlap_count=0,
             training_rainfall_sha256s=["train-a", "train-b"],
             training_rainfall_overlap_count=0,
-            policy_sha256="p",
-            model_sha256="m",
-            gat_model_sha256="g",
-            fallback_contract_sha256="f",
+            policy_sha256="p", model_sha256="m", gat_model_sha256="g", fallback_contract_sha256="f",
+            control_objective_contract_sha256="objective", candidate_generator_sha256="candidate",
+            engineering_projector_sha256="projector", production_runtime_sha256="runtime",
+            surrogate_loop_sha256="surrogate-loop", pfv_calibration_sha256="pfv-calibration",
+            rainfall_forecast_sha256="rainfall", sensor_layout_sha256="sensor-layout",
             strategy_authority={name: "authoritative_swmm" for name in REQUIRED_FORMAL_BLIND_STRATEGIES},
             strategy_event_counts={name: 24 for name in REQUIRED_FORMAL_BLIND_STRATEGIES},
         )

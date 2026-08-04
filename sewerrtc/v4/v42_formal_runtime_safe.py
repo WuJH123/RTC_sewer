@@ -353,7 +353,8 @@ def run_proposed_event(
                         == "true_state",
                         "gat_uncertainty_used": state_source
                         == "gat_sparse_reconstruction",
-                        "ood_gate_used": state_source
+                        "ood_gate_used": False,
+                        "ood_diagnostic_used": state_source
                         == "gat_sparse_reconstruction",
                         "sensor_layout_sha256": bundle.sensor_layout_sha256,
                         "plant_native_controls_disabled": True,

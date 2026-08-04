@@ -18,7 +18,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from sewerrtc.v4.formal_f2 import FORMAL_GENERATION_ID, sha256_file
 from sewerrtc.v4.paper_workflow_v42 import CONTRACT_ID
 
-CONTROL_OBJECTIVE_CONTRACT = "PROJECT6_V42_PFV_BUDGETED_TFV_MPC_V1"
+CONTROL_OBJECTIVE_CONTRACT = "PROJECT6_V42_PFV_ONLY_TFV_MIN_MPC_V2"
 
 
 def _json(path: Path) -> dict:
@@ -59,7 +59,6 @@ def main() -> int:
         "dwell_pass",
         "interlock_pass",
         "adaptive_k_pass",
-        "priority_depth_safety_applied",
         "pfv_noninferiority_budget_applied",
     )
     missing = [key for key in required_true if audit.get(key) is not True]
@@ -78,16 +77,18 @@ def main() -> int:
         or audit.get("tfv_reference") != "dynamic_internal"
     ):
         raise RuntimeError("Step3 execution audit reference contract mismatch")
-    if audit.get("peak_reference") != "dynamic_internal":
-        raise RuntimeError("Step3 Peak penalty reference must be Dynamic Internal")
     if audit.get("peak_is_hard_safety_constraint") is not False:
         raise RuntimeError("Step3 audit still treats Peak as a hard zero-tolerance gate")
+    if audit.get("global_peak_objective_term") is not False:
+        raise RuntimeError("Step3 audit still uses Global Peak in the objective")
     if float(audit.get("pfv_absolute_allowance_m3", -1.0)) != 100.0:
         raise RuntimeError("Step3 PFV absolute allowance is not frozen at 100 m3")
     if abs(float(audit.get("pfv_relative_allowance_fraction", -1.0)) - 0.05) > 1.0e-12:
         raise RuntimeError("Step3 PFV relative allowance is not frozen at 5%")
     if audit.get("control_objective_contract") != CONTROL_OBJECTIVE_CONTRACT:
         raise RuntimeError("Step3 execution audit control-objective contract mismatch")
+    if audit.get("objective") != "minimize_TFV_subject_to_PFV_budget":
+        raise RuntimeError("Step3 execution audit objective mismatch")
     if audit.get("uses_future_swmm_truth_online") is not False:
         raise RuntimeError("Step3 execution audit indicates future SWMM truth leakage")
     if audit.get("gat_model_sha256") != step1.get("gat_model_sha256"):
@@ -106,10 +107,16 @@ def main() -> int:
         "pfv_reference": "no_control",
         "pfv_absolute_allowance_m3": 100.0,
         "pfv_relative_allowance_fraction": 0.05,
-        "priority_depth_safety": True,
-        "peak_reference": "dynamic_internal",
+        "pfv_budget_applied": True,
+        "objective": "minimize_TFV_subject_to_PFV_budget",
+        "priority_depth_hard_gate": False,
+        "global_peak_objective_term": False,
         "peak_is_hard_safety_constraint": False,
-        "peak_positive_excess_is_penalized": True,
+        "peak_role": "reporting_only",
+        "peak_penalty_weight": 0.0,
+        "action_penalty_weight": 0.0,
+        "terminal_penalty_weight": 0.0,
+        "uncertainty_penalty_weight": 0.0,
         "tfv_reference": "dynamic_internal",
         "tfv_is_primary_performance_objective": True,
         "max_changed_facilities": 8,
@@ -121,7 +128,10 @@ def main() -> int:
         "engineering_status_derived_from_execution": True,
         "changed_facilities_derived_from_executed_action": True,
         "readback_verified": True,
-        "uncertainty_and_ood_linked_to_calibrated_models": True,
+        "uncertainty_role": "PFV_UCB_only",
+        "OOD_role": "diagnostic_only",
+        "independent_OOD_gate": False,
+        "independent_uncertainty_gate": False,
         "gat_model_sha256": step1["gat_model_sha256"],
         "surrogate_model_sha256": step2["surrogate_model_sha256"],
         "safety_calibration_sha256": step2.get("safety_calibration_sha256"),

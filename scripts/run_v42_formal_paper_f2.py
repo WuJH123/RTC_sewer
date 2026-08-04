@@ -28,6 +28,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from sewerrtc.v4.paper_workflow_v42 import (
     CONTRACT_ID,
+    LOCK_HASH_KEYS,
     MODEL_LINE,
     audit_paper_workflow,
     write_stage_evidence,
@@ -53,6 +54,7 @@ OUTPUT_ROOT = PROJECT_ROOT / "outputs/project6_dual_reference_v4/final_v4"
 FORMAL_ROOT = OUTPUT_ROOT / "v42_paper/formal_f2"
 PAPER_ROOT = OUTPUT_ROOT / "v42_paper"
 LEDGER = FORMAL_ROOT / "paper_execution/FORMAL_EXECUTION_LEDGER.csv"
+PRODUCTION_RUNTIME_INJECTED = False
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -242,7 +244,7 @@ def _run_role(
         frozen = _read_json(lock_path)
         if policy_sha != str(frozen.get("policy_sha256", "")):
             raise RuntimeError("source policy SHA changed after Policy Lock")
-        for key in ("model_sha256", "gat_model_sha256", "fallback_contract_sha256"):
+        for key in LOCK_HASH_KEYS:
             if str(lock.get(key, "")) != str(frozen.get(key, "")):
                 raise RuntimeError(f"{key} changed after Policy Lock")
     results: list[dict[str, Any]] = []
@@ -368,15 +370,25 @@ def _engineering_audit(project_root: Path, results: list[dict[str, Any]]) -> dic
         "dwell_pass": rate_pass,
         "interlock_pass": selected_safe,
         "adaptive_k_pass": max_changed <= 8,
-        "priority_depth_safety_applied": canonical and selected_safe,
+        "priority_depth_safety_applied": False,
         "pfv_noninferiority_budget_applied": canonical and selected_safe,
         "facility_count": 36,
         "horizon_steps": 12,
         "max_changed_facilities": max_changed,
         "pfv_reference": "no_control",
         "tfv_reference": "dynamic_internal",
-        "peak_reference": "dynamic_internal",
+        "pfv_budget_applied": True,
+        "objective": "minimize_TFV_subject_to_PFV_budget",
+        "peak_reference": "reporting_only",
         "peak_is_hard_safety_constraint": False,
+        "global_peak_objective_term": False,
+        "priority_depth_hard_gate": False,
+        "peak_penalty_weight": 0.0,
+        "action_penalty_weight": 0.0,
+        "terminal_penalty_weight": 0.0,
+        "uncertainty_penalty_weight": 0.0,
+        "independent_OOD_gate": False,
+        "independent_uncertainty_gate": False,
         "pfv_absolute_allowance_m3": 100.0,
         "pfv_relative_allowance_fraction": 0.05,
         "control_objective_contract": FORMAL_OBJECTIVE_CONTRACT,
@@ -510,7 +522,8 @@ def stage_gat(project_root: Path, device: str, max_candidates: int) -> list[dict
             "authoritative_swmm_history_used_as_online_input": False,
             "current_frame_repetition_used": False,
             "gat_uncertainty_used": True,
-            "ood_gate_used": True,
+            "ood_gate_used": False,
+            "ood_diagnostic_used": True,
             "uncertainty_calibrated": True,
             "ood_calibrated": True,
             "gat_model_sha256": step1["gat_model_sha256"],
@@ -556,6 +569,7 @@ def _holdout_payload(role: str, results: list[dict[str, Any]]) -> dict[str, Any]
             "authority": "authoritative_swmm",
         }
     )
+    payload.update({key: lock[key] for key in LOCK_HASH_KEYS if key not in payload})
     return payload
 
 
@@ -669,6 +683,14 @@ def main() -> int:
     ap.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     ap.add_argument("--max-candidate-sequences", type=int, default=64)
     args = ap.parse_args()
+    if args.stage in {
+        "engineering", "true_state", "exact", "surrogate", "gat",
+        "lock", "challenge", "locked", "final", "all",
+    } and not PRODUCTION_RUNTIME_INJECTED:
+        raise RuntimeError(
+            "Formal stages 18-28 require scripts/run_v42_formal_production_f2.py; "
+            "direct paper-runner execution is not authorized"
+        )
     project_root = args.project_root.resolve()
     global OUTPUT_ROOT, FORMAL_ROOT, PAPER_ROOT, LEDGER
     OUTPUT_ROOT = project_root / "outputs/project6_dual_reference_v4/final_v4"

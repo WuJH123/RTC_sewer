@@ -20,6 +20,14 @@ def _lock_fields() -> dict:
         "model_sha256": "model",
         "gat_model_sha256": "gat",
         "fallback_contract_sha256": "fallback",
+        "control_objective_contract_sha256": "objective",
+        "candidate_generator_sha256": "candidate",
+        "engineering_projector_sha256": "projector",
+        "production_runtime_sha256": "runtime",
+        "surrogate_loop_sha256": "surrogate-loop",
+        "pfv_calibration_sha256": "pfv-calibration",
+        "rainfall_forecast_sha256": "rainfall",
+        "sensor_layout_sha256": "sensor-layout",
     }
 
 
@@ -65,7 +73,8 @@ def _payload(stage: str) -> dict:
             authoritative_swmm_history_used_as_online_input=False,
             current_frame_repetition_used=False,
             gat_uncertainty_used=True,
-            ood_gate_used=True,
+            ood_gate_used=False,
+            ood_diagnostic_used=True,
             uncertainty_calibrated=True,
             ood_calibrated=True,
             gat_model_sha256="gat",
@@ -75,7 +84,7 @@ def _payload(stage: str) -> dict:
         base.update(
             **_lock_fields(),
             post_lock_parameter_updates_allowed=False,
-            control_objective_contract="PROJECT6_V42_PFV_BUDGETED_TFV_MPC_V1",
+            control_objective_contract="PROJECT6_V42_PFV_ONLY_TFV_MIN_MPC_V2",
         )
     elif stage == "challenge":
         rainfall = [f"challenge-{i}" for i in range(12)]

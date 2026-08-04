@@ -1,40 +1,43 @@
 {
-  "contract_id": "PROJECT6_V42_PFV_BUDGETED_TFV_MPC_V1",
-  "priority_flooding_noninferiority": {
+  "contract_id": "PROJECT6_V42_PFV_ONLY_TFV_MIN_MPC_V2",
+  "pfv_noninferiority": {
     "absolute_allowance_m3": 100.0,
     "relative_allowance_fraction": 0.05,
     "reference": "no_control",
     "uncertainty_form": "one_sided_ucb"
   },
-  "priority_depth_safety": {
-    "mode": "fraction_of_node_max_depth_with_freeboard",
-    "max_depth_fraction": 0.95,
-    "minimum_freeboard_m": 0.05,
-    "reference_nodes": "PFV_CORE8_V1",
-    "uncertainty_form": "one_sided_ucb"
-  },
   "performance_objective": {
-    "primary": "delta_TFV_vs_dynamic_internal",
-    "peak_penalty_weight_seconds": 600.0,
-    "action_penalty_weight": 0.05,
-    "terminal_penalty_weight": 0.10,
-    "uncertainty_penalty_weight": 0.10,
-    "peak_penalty": "positive_part_of_delta_peak_vs_dynamic_internal"
+    "primary": "minimize_total_flooding_volume",
+    "implementation_equivalent": "delta_TFV_vs_dynamic_internal",
+    "secondary_objectives": []
   },
-  "hard_constraints": [
-    "priority_flooding_noninferiority_budget",
-    "priority_depth_safety",
-    "K",
-    "bounds",
-    "rate",
-    "ramp",
-    "dwell",
-    "interlock",
-    "uncertainty",
-    "OOD",
-    "executability"
-  ],
+  "global_peak": {
+    "role": "authoritative_reporting_only",
+    "hard_constraint": false,
+    "objective_term": false,
+    "penalty_weight": 0.0
+  },
+  "priority_depth": {
+    "role": "diagnostic_only",
+    "hard_constraint": false,
+    "objective_term": false
+  },
+  "uncertainty": {
+    "role": "used_only_in_PFV_one_sided_UCB"
+  },
+  "OOD": {
+    "role": "diagnostic_only"
+  },
+  "engineering_feasibility": {
+    "K_max": 8,
+    "bounds": true,
+    "binary": true,
+    "rate": true,
+    "ramp": true,
+    "dwell": true,
+    "interlock": true,
+    "target_write_readback": true
+  },
   "max_changed_facilities": 8,
-  "safe_set_empty": "execute_frozen_fallback",
-  "selection_error": "execute_frozen_fallback"
+  "fallback": "execute_frozen_hold_on_empty_admitted_set"
 }
