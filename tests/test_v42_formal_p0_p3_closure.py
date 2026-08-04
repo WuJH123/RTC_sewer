@@ -117,6 +117,8 @@ def test_production_entrypoint_never_imports_qualification_controller():
     assert "run_v42_qualification" not in text
     assert "qualification_micro" not in text
     assert "v42_formal_runtime_safe" in text
+    assert "v42_formal_surrogate_closed_loop" in text
+    assert "orchestrator.stage_surrogate = _production_stage_surrogate" in text
 
 
 def test_formal_orchestrator_contains_one_shot_locked_and_final_guards():
@@ -125,3 +127,28 @@ def test_formal_orchestrator_contains_one_shot_locked_and_final_guards():
     assert "Locked Validation is one-shot" in text
     assert "Final held-out test already has evidence" in text
     assert "FORMAL_STRATEGIES" in text
+
+
+def test_formal_production_scripts_compile():
+    root = Path(__file__).resolve().parents[1]
+    paths = [
+        root / "scripts/run_v42_formal_paper_f2.py",
+        root / "scripts/run_v42_formal_production_f2.py",
+        root / "scripts/run_v42_formal_calibration12_f2.py",
+        root / "scripts/compile_v42_formal_training_evidence_strict_f2.py",
+        root / "scripts/audit_v42_formal_strict_f2.py",
+    ]
+    for path in paths:
+        compile(path.read_text(encoding="utf-8"), str(path), "exec")
+
+
+def test_strict_evidence_entrypoint_mentions_calibration12_gate():
+    root = Path(__file__).resolve().parents[1]
+    text = (root / "scripts/compile_v42_formal_training_evidence_strict_f2.py").read_text(
+        encoding="utf-8"
+    )
+    assert "audit_calibration_completeness" in text
+    calibration = (root / "scripts/run_v42_formal_calibration12_f2.py").read_text(
+        encoding="utf-8"
+    )
+    assert "FORMAL_F2_CALIBRATION12_GATE.json" in calibration
