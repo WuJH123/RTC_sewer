@@ -18,6 +18,7 @@ import json
 import logging
 import math
 import os
+import random
 import sys
 import time
 from dataclasses import asdict, dataclass
@@ -232,6 +233,52 @@ def _write_runtime_status(path: Path, value: dict[str, object]) -> None:
     os.replace(tmp, path)
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _rng_snapshot() -> dict[str, object]:
+    return {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch": torch.get_rng_state(),
+        "torch_cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+    }
+
+
+def _restore_rng(snapshot: dict[str, object]) -> None:
+    random.setstate(snapshot["python"])
+    np.random.set_state(snapshot["numpy"])
+    torch.set_rng_state(snapshot["torch"])
+    if torch.cuda.is_available() and snapshot.get("torch_cuda") is not None:
+        torch.cuda.set_rng_state_all(snapshot["torch_cuda"])
+
+
+def _save_full_checkpoint(
+    path: Path,
+    *,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    meta: dict[str, object],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    torch.save(
+        {
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "rng_state": _rng_snapshot(),
+            "meta": meta,
+        },
+        tmp,
+    )
+    os.replace(tmp, path)
+
+
 def _run_epoch(
     *,
     model: torch.nn.Module,
@@ -249,6 +296,10 @@ def _run_epoch(
     prefetch_factor: int = 2,
     pin_memory: bool | None = None,
     runtime_status_file: Path | None = None,
+    skip_batches: int = 0,
+    checkpoint_batches: int = 0,
+    checkpoint_minutes: float = 0.0,
+    checkpoint_callback=None,
 ) -> dict[str, object]:
     training = optimizer is not None
     model.train(training)
@@ -279,6 +330,7 @@ def _run_epoch(
     peak_rss = _rss_mb()
     started = time.time()
     last_status = started
+    last_checkpoint = started
 
     amp_enabled = os.environ.get("RTC_V42_STEP1_AMP") == "1" and device.type == "cuda"
     scaler = None
@@ -290,7 +342,12 @@ def _run_epoch(
 
     context = torch.enable_grad() if training else torch.no_grad()
     with context:
-        for batch in loader:
+        for batch_index, batch in enumerate(loader):
+            actual_batch = int(batch["target_depth"].shape[0])
+            if batch_index < int(skip_batches):
+                windows_seen += actual_batch
+                batches += 1
+                continue
             sdh = batch["sparse_depth_history"].to(device, non_blocking=True)
             smh = batch["sensor_mask_history"].to(device, non_blocking=True)
             rain = batch["rainfall_history"].to(device, non_blocking=True)
@@ -365,6 +422,16 @@ def _run_epoch(
                     len(detail_files),
                 )
             now = time.time()
+            if training and checkpoint_callback is not None and (
+                (checkpoint_batches > 0 and batches % int(checkpoint_batches) == 0)
+                or (checkpoint_minutes > 0 and now - last_checkpoint >= float(checkpoint_minutes) * 60.0)
+            ):
+                checkpoint_callback(
+                    epoch=int(epoch),
+                    next_batch_index=int(batch_index + 1),
+                    windows_seen=int(windows_seen),
+                )
+                last_checkpoint = now
             if runtime_status_file is not None and (
                 now - last_status >= 5.0 or batches == 1
             ):
