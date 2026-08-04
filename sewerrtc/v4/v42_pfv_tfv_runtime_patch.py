@@ -3,17 +3,20 @@
 This module fixes two search-space errors in the first PFV-only implementation:
 
 1. Global TFV minimisation must not be restricted to actuators in PFV_CORE8
-   influence domains.  Local priority-domain candidates are still useful, but
+   influence domains. Local priority-domain candidates are still useful, but
    every Engineering36 asset also receives global single-asset candidates.
-2. The candidate cap is applied *after* the H3 executable-prefix projection and
-   deduplication.  Profiles that collapse to the same executed sequence can no
-   longer consume the 64-candidate budget before scoring.
+2. The requested candidate budget is applied *after* the H3 executable-prefix
+   projection and deduplication. Profiles that collapse to the same executed
+   sequence can no longer consume the budget before scoring. If complete
+   Engineering36 single-asset coverage itself is slightly larger than the
+   requested budget, the effective budget is raised only enough to preserve
+   that coverage.
 
 It also evaluates the calibrated PFV safety statistic directly as
 
     PFV_candidate - 1.05 * PFV_no_control <= 100 m3,
 
-using one ensemble scalar per seed before the one-sided UCB is formed.  This
+using one ensemble scalar per seed before the one-sided UCB is formed. This
 keeps uncertainty in the No-control reference inside the same calibrated safety
 quantity instead of treating the 5% reference term as deterministic.
 """
@@ -172,22 +175,26 @@ def predict_and_decide(
     ids = actuators["actuator_id"].astype(str).tolist()
     base = np.asarray(current_action, np.float32)
 
-    # Do not cap before executable projection. Priority-local candidates remain
-    # useful hydraulic heuristics, but they no longer define the search domain.
-    generated = generate_action_sequences(
-        base,
-        actuators,
-        base_runtime.HORIZON_STEPS,
-        max_delta=GLOBAL_SINGLE_DELTA,
-        include_hold=True,
-        max_sequences=0,
-        group_limit=8,
-        reference_sequence=np.repeat(
-            base[None, :], base_runtime.HORIZON_STEPS, axis=0
-        ),
-        priority_to_actuators=bundle.priority_to_actuators,
+    # Global candidates are deliberately inserted before priority-local
+    # heuristics. Projection deduplication keeps the first semantic equivalent;
+    # putting global coverage first prevents a local alias from stealing the
+    # mandatory rank and then being discarded by the post-projection cap.
+    generated = _global_tfv_sequences(base, actuators)
+    generated.extend(
+        generate_action_sequences(
+            base,
+            actuators,
+            base_runtime.HORIZON_STEPS,
+            max_delta=GLOBAL_SINGLE_DELTA,
+            include_hold=True,
+            max_sequences=0,
+            group_limit=8,
+            reference_sequence=np.repeat(
+                base[None, :], base_runtime.HORIZON_STEPS, axis=0
+            ),
+            priority_to_actuators=bundle.priority_to_actuators,
+        )
     )
-    generated.extend(_global_tfv_sequences(base, actuators))
     projected, pool_stats = _project_dedupe_and_cap(
         generated,
         base=base,
