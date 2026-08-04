@@ -69,29 +69,51 @@ Calibration safety quantities are PFV budget and priority-node depth. Peak is re
 & $Py -u scripts\prepare_v42_formal_calibration_data_f2.py ...
 & $Py -u scripts\run_v42_formal_f2.py --stage calibration --seeds 17 42 73 --primary-step1-seed 42
 & $Py -u scripts\run_v42_formal_f2.py --stage evidence --seeds 17 42 73 --primary-step1-seed 42
+& $Py -u scripts\audit_v42_formal_strict_f2.py
 ```
+
+The low-level calibration commands may retain smaller diagnostic minima for development diagnostics, but **Formal authorization is impossible unless the strict audit proves exact 12/12 equality with the frozen ledger**.
 
 ## 18-19 — Step3 engineering evidence
 
-The authoritative execution audit must derive Engineering36 legality, K, requested/projected/written/readback settings, PFV budget and priority-depth safety from actual execution. It must use the frozen GAT/surrogate/calibration hashes. Then compile Step3 evidence with `scripts/compile_v42_formal_step3_evidence_f2.py`.
+The authoritative execution audit must derive Engineering36 legality, K, requested/projected/written/readback settings, PFV budget and priority-depth safety from actual execution. It must use the frozen GAT/surrogate/calibration hashes. The production runner performs this execution audit before compiling Step3 evidence.
 
 ## 20-28 — Formal closed-loop campaign
 
-Use `scripts/run_v42_formal_paper_f2.py` (added for the Formal production line), not the development `run_v42_qualification_micro.py`.
+Use **`scripts/run_v42_formal_production_f2.py`**. `scripts/run_v42_formal_paper_f2.py` is the internal restart/orchestration implementation; the production entrypoint additionally injects the rule-free-plant/native-Internal-shadow safety runtime and expands Policy-Lock hashing to every executable Formal module. Never run the development `run_v42_qualification_micro.py` as Formal evidence.
+
+Before starting, create the local deployment manifests under:
+
+`outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2/evaluation_inputs/`
+
+with one row for every already-frozen event in `calibration/challenge/locked_validation/formal_blind`. Each row must contain `event_id`, `rainfall_sha256`, `inp_path`, `rain_duration_min`, and `simulation_duration_min`. These manifests only resolve frozen rainfalls to local authoritative INP files; they are **not allowed to select or replace evaluation rainfalls**.
+
+Run the zero-SWMM preflight first:
+
+```powershell
+& $Py -u scripts\run_v42_formal_production_f2.py --stage preflight
+```
+
+Then the restartable campaign can be run stage by stage or as one supervised campaign:
+
+```powershell
+& $Py -u scripts\run_v42_formal_production_f2.py --stage all --device cuda --max-candidate-sequences 64
+```
 
 The ordered stages are:
 
-1. true-state offline validation;
-2. authoritative SWMM closed loop with true-state diagnostic state source;
-3. surrogate prediction-vs-authoritative-outcome validation;
-4. full sparse-GAT-integrated authoritative SWMM closed loop;
-5. Policy Lock;
-6. Challenge;
-7. one-shot Locked Validation;
-8. final held-out >=24 rainfall groups × seven strategies;
-9. strict mainline audit.
+1. Step3 authoritative execution/readback audit and evidence compile;
+2. true-state offline diagnostic validation;
+3. authoritative SWMM exact closed loop with true-state diagnostic state source;
+4. surrogate-vs-authoritative outcome validation;
+5. full sparse-GAT-integrated authoritative SWMM closed loop;
+6. Policy Lock;
+7. Challenge;
+8. one-shot Locked Validation;
+9. final held-out >=24 rainfall groups × seven strategies;
+10. strict/mainline audit.
 
-Final strategies are `Proposed`, `EFD`, `Auto-RBC`, `All-close`, `No-control`, `Internal`, and `Hold`. Every final strategy/event result must be authoritative SWMM. Formal No-control is explicitly all-open; Formal All-close is explicitly zero. `Internal` leaves the frozen native SWMM rules active. Qualification proxy results are never promoted.
+Final strategies are `Proposed`, `EFD`, `Auto-RBC`, `All-close`, `No-control`, `Internal`, and `Hold`. Every final strategy/event result must be authoritative SWMM. Formal No-control is physically all-open; Formal All-close is physically all-zero. `Internal` alone retains the frozen native SWMM `[CONTROLS]` rules. Proposed/EFD/Auto-RBC/No-control/All-close/Hold run on a physical-SHA-equivalent runtime clone with native `[CONTROLS]` disabled so the evaluated policy actually owns Engineering36. Proposed simultaneously advances a separate native-rule Internal shadow only to the **current** time; only current readback is exposed, and no future shadow state/action is used online.
 
 The production runner is restartable and hash-ledgered. Reuse is permitted only when input/model/policy hashes still match. Long local runs should be launched by Codex/shell with persistent stdout/stderr/PID/exit markers; a chat-turn timeout must not restart a valid running process.
 
