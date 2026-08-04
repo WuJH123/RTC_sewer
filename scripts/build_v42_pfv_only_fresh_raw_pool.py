@@ -68,7 +68,7 @@ def main() -> int:
     source_path = args.output_dir / "FRESH_PFV_ONLY_SOURCE_MANIFEST.csv"
     source.to_csv(source_path, index=False)
     metadata = source[["case_id", "source_dataset", "checkpoint_min", "rainfall_group_key", "source_row_number"]].copy()
-    metadata["source_id"] = metadata["case_id"].astype(str)
+    metadata["source_id"] = "pfv_only_fresh_calibration"
     metadata["source_manifest"] = str(source_path.resolve())
     metadata["source_manifest_sha256"] = sha256_file(source_path)
     metadata_path = args.output_dir / "FRESH_PFV_ONLY_METADATA_POOL.parquet"
