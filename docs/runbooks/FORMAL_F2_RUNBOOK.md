@@ -1,127 +1,132 @@
 # Project6 V4.2 Formal F2 runbook
 
-This is the formal (paper-evidence) line. `fast_e2e_64plus` remains development-only and cannot authorize Formal.
+This is the **paper-evidence** line. Qualification/fast artifacts remain development-only and can never authorize Formal evidence.
 
-## Scientific data roles
+## Frozen scientific design
 
-- **Formal Step1 physics:** all current-Wuhan, finite, causal, readback-compatible physical trajectories discovered through the F2 source registry; physical detail SHA dedupe; maximum 4 timeline-spread windows per physical run.
-- **Formal Step2 core:** Train1600 current 14-gate rows + Pilot V3 training-eligible rows + raw re-admitted Peak Boundary + raw re-admitted revealed V4.1 Calibration/Locked. Candidate/NC/Dynamic-Internal/Hold-Previous are mandatory.
-- **Auxiliary only:** V3/V4 Base/Rounds, Aug1, Gate5R/oracle search, Pilot V1/V2 superseded rows, augmented-state/unified assets according to `configs/v42_formal_source_registry_f2.yaml`.
-- **Opportunity pool:** pre-control checkpoint-selection metadata. Merely appearing in this pool does **not** make every rainfall historically consumed. The F2 rainfall ledger is frozen first; only rainfalls assigned `train`/historical `auxiliary` may contribute Step1 training windows. Calibration/Locked/Challenge/Blind and `unused_untouched` rainfalls are excluded from Step1 training.
-- **New F2 evaluation:** new rainfall SHA only: Calibration 12, Locked 16, Challenge 12, Formal Blind >=24 by default. Same rainfall SHA may never cross a role.
+- Network: `data/wuhan_v8_storage_retrofit.inp`, rainfall-only/no-DWF, Engineering36.
+- State record: 5 min. Control decision: 10 min. Causal history: `t-60,t-55,...,t` (13 frames). Prediction horizon: `t+10,...,t+120` (12 steps). Only the first 30 min of a candidate schedule may deviate from its frozen anchor; only the first 10-min action is executed before replanning.
+- Split authority: rainfall SHA/fingerprint. The current generation requires zero rainfall-group overlap between model development and Calibration/Challenge/Locked/final held-out roles. Historical labels are lineage metadata only and are **not** a permanent split gate.
+- Step1: sparse-sensor Temporal GAT state reconstruction only. No future hydraulic truth.
+- Step2: shared four-reference hydraulic trajectory surrogate: Candidate / No-control / Dynamic Internal / Hold Previous. No-control means all Engineering36 settings are exactly 1.0 over H120. Real branch equivalence is allowed and audited.
+- Default Step2 target contract is `CONTROL_CORE`: node depth + node flooding rate + storage volume + managed-facility flow. `outfall_flow` is optional. `FULL_HYDRAULIC` is an explicit extension and additionally requires real outfall-flow supervision. Missing targets are never zero-filled.
+- Step3 canonical selector: `sewerrtc.control.pfvfirst_mpc_v42.decide_pfvfirst_mpc`.
+  - hard PFV budget: `PFV_delta_UCB <= 100 m3 + 0.05*PFV_no_control`;
+  - hard PFV-Core8 priority-depth UCB limit from the raw frozen INP;
+  - hard K<=8/bounds/binary/rate/ramp/dwell/interlock/uncertainty/OOD/executability;
+  - primary performance objective: minimize TFV relative to Dynamic Internal;
+  - positive Peak excess relative to Dynamic Internal is penalized, **not** a zero-deterioration hard gate;
+  - empty safe set or selection error executes the frozen legal fallback.
 
-### Eligibility is not contamination
+## Current-generation data roles
 
-`formal_step1_allowed` / `formal_step2_allowed` describe whether a source *can* support a model after the ledger is frozen. `historically_revealed` describes whether the rainfall itself has already been exposed by prior development/evaluation. The two must not be OR-ed together when deciding what remains untouched. Any row already admitted to (or pending raw re-admission for) Formal Step2 training is contamination regardless of the registry flag.
+Formal Step1 may reuse physically compatible historical Wuhan trajectories assigned by the **current frozen ledger** to model development. Formal Step2 may reuse rows that pass current Raw Readmission and the selected target contract. Prior `historically_revealed` / `historically_reserved` labels are retained for provenance but do not by themselves ban a rainfall from this generation.
 
-Legacy reserved event IDs (for example the old `formal_blind_v33` adapter) must be mapped back to rainfall SHA using the event inventory before the new F2 ledger is built. `reserved_event_count > 0` together with `reserved_rainfall_group_count == 0` is a Prepare failure, not a valid state.
+The frozen evaluation plan is:
 
-## 1. Formal Prepare
+- Calibration: exactly 12 rainfall groups;
+- Challenge: at least 12;
+- Locked Validation: at least 16, one-shot after Policy Lock;
+- final held-out (`formal_blind` legacy path name): at least 24, after Policy Lock.
 
-Run the VS Code task `RTC: Formal F2 Prepare`.
+All four sets must be rainfall-SHA-disjoint from current model development and from each other. No post-evaluation exclusion or weight retraining is allowed for Challenge/Locked/final.
 
-Required outputs under `.../v42_paper/formal_f2/`:
+## 01-05 — Formal Prepare and precompute audit
 
-- `prepare/FORMAL_F2_EVENT_LEDGER.csv`
-- `prepare/FORMAL_F2_SOURCE_ROWS.parquet`
-- `prepare/FORMAL_F2_CONTAMINATION_ROWS.parquet`
-- `prepare/FORMAL_F2_STEP1_WINDOW_MANIFEST.parquet`
-- `prepare/FORMAL_F2_STEP1_POOL_AUDIT.json`
-- `prepare/FORMAL_F2_STEP2_METADATA_POOL.parquet`
-- `step2/FORMAL_F2_STEP2_RAW_MANIFEST.parquet`
-- `step2/FORMAL_F2_STEP2_RAW_ADMISSION_AUDIT.json`
-- `evaluation_plan/FORMAL_F2_EVALUATION_PLAN_AUDIT.json`
+Run from a shell (VS Code tasks are optional conveniences, not a requirement):
 
-Do not proceed unless:
+```powershell
+$Py = '.\.venv\Scripts\python.exe'
+& $Py -u scripts\run_v42_formal_f2.py --stage prepare --split-seed 42
+& $Py -u scripts\audit_v42_formal_precompute_readiness.py --step2-target-contract CONTROL_CORE
+```
 
-- Step1 target train rainfall groups >=65;
-- raw Step2 groups >=69 so the fixed Step2 train/validation/internal-calibration split can retain >=65 train groups;
-- Calibration/Locked/Challenge/Blind group counts meet the frozen plan;
-- every rainfall-group overlap is zero;
-- old reserved event IDs resolve to rainfall groups and remain excluded;
-- raw Step2 admission proves same state, same forcing, frozen physical model, actual readback, H120 and current engineering semantics.
+Do not start GPU training unless the current artifacts prove: Step1 train diversity >=65; Raw Step2 >=69 groups; each selected state has >=3 distinct actual Candidate schedules; causal history source coverage >=69 groups with checkpoint>=120; CONTROL_CORE coverage >=69 groups; zero current split overlap; Calibration12/Locked16/Challenge12/final>=24.
 
-If Prepare reports zero untouched evaluation groups while the event inventory is non-empty, inspect `contamination_audit` and the per-source historical contamination counts before generating new data. Do not infer that every Step1-eligible source was historically consumed.
+## 06-08 — Formal Step1
 
-## 2. Formal Step1
+```powershell
+& $Py -u scripts\run_v42_formal_f2.py --stage step1 --seeds 17 42 73 --split-seed 42 --sensor-layout-seed 42
+```
 
-Run `RTC: Formal Step1`.
+All seeds use the same rainfall split and sensor layout. Internal model-selection/calibration groups are not paper Calibration.
 
-Seeds: 17, 42, 73. Split seed and sensor-layout seed remain 42. The models share exactly the same rainfall split. Do not promote the internal model-calibration holdout to paper Calibration.
+## 09-12 — Causal GAT bridge and Formal Step2
 
-Step1 evidence is not written yet. New F2 Calibration is still required for uncertainty/OOD calibration.
+```powershell
+& $Py -u scripts\run_v42_formal_f2.py --stage step2 --seeds 17 42 73 --primary-step1-seed 42 --step2-target-contract CONTROL_CORE
+```
 
-## 3. Formal Step2
+The history source is separate from Candidate outcome detail and must cover `checkpoint-120 ... checkpoint`. Thirteen real sparse-GAT calls reconstruct the states at `t-60 ... t`; the current frame is never repeated as fake history.
 
-Run `RTC: Formal Step2`.
+## 13-17 — Authoritative Calibration and training evidence
 
-The primary Step1 seed 42 creates the causal Step2 state history. Each decision state uses thirteen real sparse-GAT calls at `t-60, ..., t`; each call has its own preceding 60-minute sensor/action/rain history, so the history source must cover `t-120..t`.
+Generate the 12 frozen Calibration rainfall groups with the authoritative Wuhan SWMM runner, then build the calibration bridge. Both Step1 and Step2 calibration reports must contain **exactly the same 12 rainfall SHA values as the frozen ledger**. A partial 8/12 subset cannot authorize Formal.
 
-The three surrogate seeds 17/42/73 use the same rainfall split and train the shared four-reference trajectory model. Missing outfall/storage/facility-flow targets are not replaced with zero.
+Calibration safety quantities are PFV budget and priority-node depth. Peak is retained as a performance-error diagnostic/penalty term, not a hard safety label.
 
-## 4. Generate NEW F2 Calibration SWMM cases locally
+```powershell
+& $Py -u scripts\prepare_v42_formal_calibration_data_f2.py ...
+& $Py -u scripts\run_v42_formal_calibration12_f2.py --seeds 17 42 73 --primary-step1-seed 42
+& $Py -u scripts\compile_v42_formal_training_evidence_strict_f2.py --seeds 17 42 73 --primary-seed 42
+```
 
-Use `evaluation_plan/calibration_plan.json`. This step must use the authoritative Wuhan SWMM runner and the frozen network/Engineering36 contract. It may use the preselected responsive checkpoints in the plan but must not use Proposed/baseline outcomes to change the selected rainfalls or checkpoints.
+The underlying calibration modules may retain smaller diagnostic minima for non-paper diagnostics, but the Formal entrypoint and evidence compiler both fail closed unless Step1 and Step2 calibration equal the frozen ledger **12/12 exactly**.
 
-For each calibration candidate row write at least:
+## 18-19 — Step3 engineering evidence
 
-- `rainfall_sha256`
-- `event_id`
-- `checkpoint_min`
-- `case_id`
-- `history_detail_path` (same-event/state, full causal history through the checkpoint)
+The authoritative execution audit must derive Engineering36 legality, K, target writes, actual/current readback, cross-decision dwell, bounds/binary/rate/ramp/interlock, PFV budget and priority-depth safety from actual execution. It must use the frozen GAT/surrogate/calibration hashes. The production runner performs this execution audit before compiling Step3 evidence.
 
-The corresponding `completion.json` must expose strict Candidate, No-control, Dynamic Internal and Hold Previous detail trajectories and authoritative engineering/readback evidence.
+## 20-28 — Formal closed-loop campaign
 
-Save the manifest at:
+Use **`scripts/run_v42_formal_production_f2.py`**. `scripts/run_v42_formal_paper_f2.py` is the internal restart/orchestration implementation; the production entrypoint injects the rule-free-plant/native-Internal-shadow safety runtime, the executed surrogate-only stage22, and expanded Policy-Lock hashing. Never run the development `run_v42_qualification_micro.py` as Formal evidence.
 
-`.../formal_f2/calibration/authoritative_cases/calibration_case_manifest.csv`
+Before starting, create the local deployment manifests under:
 
-Then run `RTC: Formal Calibration Data Bridge`.
+`outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2/evaluation_inputs/`
 
-## 5. Formal Calibration
+with one row for every already-frozen event in `calibration/challenge/locked_validation/formal_blind`. Each row must contain `event_id`, `rainfall_sha256`, `inp_path`, `rain_duration_min`, and `simulation_duration_min`. These manifests only resolve frozen rainfalls to local authoritative INP files; they are **not allowed to select or replace evaluation rainfalls**.
 
-Run `RTC: Formal Calibration`.
+Run the zero-SWMM preflight first:
 
-It must pass on NEW F2 Calibration rainfall groups, disjoint from all model-development rainfalls:
+```powershell
+& $Py -u scripts\run_v42_formal_production_f2.py --stage preflight
+```
 
-- Step1 uncertainty scale + OOD uncertainty limit;
-- Step2 3-model ensemble PFV/Peak one-sided conformal UCB;
-- PFV false-safe, Peak false-safe and joint false-safe <= frozen alpha (default 0.05).
+Then run stage by stage or as one supervised campaign:
 
-## 6. Compile Formal training evidence
+```powershell
+& $Py -u scripts\run_v42_formal_production_f2.py --stage all --device cuda --max-candidate-sequences 64
+```
 
-Run `RTC: Formal Training Evidence`.
+The ordered stages are:
 
-This writes `step1_gat/evidence.json` and `step2_surrogate/evidence.json` only if the real multi-seed + new-event calibration chain passes. It cannot consume fast/development artifacts.
+1. Step3 authoritative execution/readback audit and evidence compile;
+2. true-state offline diagnostic validation;
+3. authoritative SWMM exact closed loop with true-state diagnostic state source and authoritative No-control/Internal/Hold references;
+4. actual surrogate-state-feedback rolling closed loop initialized from the same authoritative prefix;
+5. full sparse-GAT-integrated authoritative SWMM closed loop;
+6. Policy Lock;
+7. Challenge;
+8. one-shot Locked Validation;
+9. final held-out >=24 rainfall groups × seven strategies;
+10. strict/mainline audit.
 
-## 7. Step3 engineering evidence
+Final strategies are `Proposed`, `EFD`, `Auto-RBC`, `All-close`, `No-control`, `Internal`, and `Hold`. Every final strategy/event result must be authoritative SWMM. Formal No-control is physically all-open; Formal All-close is physically all-zero. `Internal` alone retains the frozen native SWMM `[CONTROLS]` rules. Proposed/EFD/Auto-RBC/No-control/All-close/Hold run on a physical-SHA-equivalent runtime clone with native `[CONTROLS]` disabled so the evaluated policy actually owns Engineering36. Proposed simultaneously advances a separate native-rule Internal shadow only to the **current** time; only current readback is exposed, and no future shadow state/action is used online. Before the first 120-min decision, the rule-free Proposed plant causally replays current Internal readback to reproduce a deterministic common control prefix.
 
-Before compiling Step3, perform an authoritative execution/readback audit on the calibrated controller and write:
+The production runner is restartable and hash-ledgered. Reuse is permitted only when input/model/policy hashes still match. Long local runs should be launched by Codex/shell with persistent stdout/stderr/PID/exit markers; a chat-turn timeout must not restart a valid running process.
 
-`.../formal_f2/calibration/STEP3_AUTHORITATIVE_ENGINEERING_AUDIT.json`
+## Strict closure
 
-It must prove actual execution-derived bounds/binary/rate/ramp/dwell/interlock/Adaptive-K, Engineering36, H12, K<=8, no future SWMM truth, and exact model hashes. Then run `RTC: Formal Step3 Evidence`.
+After all evidence exists:
 
-## 8. Paper workflow
+```powershell
+& $Py -u scripts\audit_v42_formal_strict_f2.py
+& $Py -u scripts\project6_v42_mainline.py
+```
 
-The existing fail-closed `paper_workflow_v42.py` remains the authority. Execute in order:
-
-1. true-state offline validation;
-2. authoritative exact SWMM closed loop;
-3. surrogate closed loop;
-4. GAT-integrated closed loop;
-5. Policy Lock;
-6. Challenge;
-7. one-shot Locked Validation;
-8. Formal Blind (>=24 new rainfall SHA).
-
-Formal Blind must run authoritative SWMM for Proposed, EFD, Auto-RBC, All-close, No-control, Internal rules and Hold Previous using the same physical model, rainfall, initial condition and metric definitions. EFD/Auto-RBC proxy results from the fast line are never formal evidence.
-
-## 9. Mainline audit
-
-Run `RTC: V4.2 Mainline Audit` only after all preceding evidence files exist. The audit must remain fail-closed; never edit gate booleans simply to make it pass.
+The strict audit independently rechecks exact Calibration12, Step2 target contract/supervision, all-open No-control, PFV-budgeted/priority-depth Step3 semantics, Policy-Lock lineage and the complete held-out workflow. Do not edit evidence booleans to make an audit pass.
 
 ## Restart policy
 
-Fix the first failing stage and resume from that stage. Reuse frozen manifests/model checkpoints where their input hashes still match. Do not return to exhaustive 30k-file Phase-0 scanning, regenerate existing Train1600, or retrain Step1 when only a downstream stage failed.
+Fix the **first failed stage** and resume from there. Reuse manifests/checkpoints only when their input hashes match. Do not return to exhaustive legacy Phase-0 scanning, regenerate Train1600, retrain Step1 for a downstream-only failure, substitute future SWMM truth online, or weaken a safety/data gate to obtain a pass.

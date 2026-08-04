@@ -1,0 +1,19 @@
+{
+  "contract_id": "PROJECT6_V42_FORMAL_FALLBACK_V1",
+  "role": "legal_frozen_fallback",
+  "facility_count": 36,
+  "fallback_action": "hold_current_actual_readback",
+  "horizon_steps": 12,
+  "control_interval_min": 10,
+  "max_changed_facilities": 0,
+  "requires_bounds": true,
+  "requires_binary_semantics": true,
+  "requires_rate_ramp_dwell_interlock": true,
+  "requires_actual_readback": true,
+  "future_hydraulic_truth_allowed": false,
+  "realized_future_rainfall_allowed": false,
+  "hotstart_allowed": false,
+  "safe_set_empty_policy": "execute_fallback",
+  "solver_or_selection_error_policy": "execute_fallback",
+  "notes": "Holding the current physically read-back Engineering36 settings is the frozen fallback. It changes no facility at the decision instant and therefore cannot bypass K/rate/dwell/interlock constraints by inventing a new action."
+}
