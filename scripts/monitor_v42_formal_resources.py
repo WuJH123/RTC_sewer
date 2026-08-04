@@ -68,13 +68,24 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
         "timestamp", "pid", "stage", "epoch", "batch", "windows_seen", "windows_per_sec",
-        "gpu_util_percent", "gpu_memory_used_mb", "gpu_memory_total_mb", "gpu_power_w",
+        "gpu_index", "gpu_util_percent", "gpu_memory_used_mb", "gpu_memory_total_mb", "gpu_power_w",
         "gpu_temperature_c", "sm_clock_mhz", "memory_clock_mhz", "total_cpu_percent",
         "per_core_cpu_percent", "rss_process_mb", "total_ram_used_gb", "available_ram_gb",
         "pagefile_used_gb", "disk_read_MBps", "disk_write_MBps",
     ]
     exists = args.output.exists()
-    with args.output.open("a", newline="", encoding="utf-8") as handle:
+    mode = "a"
+    if exists:
+        try:
+            expected_header = ",".join(fieldnames)
+            actual_header = args.output.read_text(encoding="utf-8").splitlines()[0]
+            if actual_header != expected_header:
+                mode = "w"
+                exists = False
+        except (OSError, IndexError):
+            mode = "w"
+            exists = False
+    with args.output.open(mode, newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         if not exists:
             writer.writeheader()
