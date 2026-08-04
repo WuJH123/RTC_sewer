@@ -6,6 +6,11 @@ This module creates a short-lived rule-free runtime INP while preserving the
 physical network/rainfall definition. ``Internal`` alone runs the original INP
 with its native rules. Proposed uses *both*: rule-free plant + native-rule causal
 shadow advanced only to the current decision time.
+
+Before the first decision (120 min, required by the 13 causal GAT anchors), the
+rule-free Proposed plant replays the *current* native-Internal readback from the
+causal shadow at every 5-min step.  This provides a deterministic common prefix
+instead of letting the rule-free plant sit at a stale initial setting.
 """
 from __future__ import annotations
 
@@ -128,8 +133,6 @@ def run_baseline_event(
     result["source_input_sha256"] = event.input_sha256
     result["runtime_rule_free_inp_sha256"] = runtime_event.input_sha256
     result["native_controls_disabled"] = True
-    # The runtime copy is a policy-execution derivative, not a new physical
-    # scenario. The frozen physical network SHA has already been verified equal.
     result["physical_network_sha256"] = physical_network_sha256(event.inp_path)
     return result
 
@@ -163,10 +166,6 @@ def run_proposed_event(
     frames: list[dict[str, Any]] = []
     started = time.time()
 
-    # Main plant is rule-free so the evaluated policy owns Engineering36.
-    # Internal shadow keeps the original native controls. It is advanced one
-    # 5-min record step alongside the plant, and only its *current* readback is
-    # exposed. Future shadow actions/states are never queried.
     with Simulation(str(runtime_event.inp_path)) as sim, Simulation(str(event.inp_path)) as internal_sim:
         sim.step_advance(STATE_STEP_SEC)
         internal_sim.step_advance(STATE_STEP_SEC)
@@ -185,7 +184,11 @@ def run_proposed_event(
         rain_ids = _ids_from_container(gages, "raingageid")
         rain_obj = gages[rain_ids[0]] if rain_ids else None
         current_action = _observed_action_from_links(link_objs, ids, actuators)
-        command = current_action.copy()
+        internal_initial = _observed_action_from_links(internal_link_objs, ids, actuators)
+        # Align the first rule-free interval with the native reference prefix.
+        command = internal_initial.copy()
+        for i, aid in enumerate(ids):
+            link_objs[aid].target_setting = float(command[i])
         shadow_iter = iter(internal_sim)
         for _ in sim:
             try:
@@ -197,7 +200,16 @@ def run_proposed_event(
             pre = _frame(sim, node_objs, rain_obj, link_objs, ids, actuators)
             frames.append(pre)
             elapsed = float(pre["elapsed_min"])
-            if _is_decision_time(elapsed):
+            internal_current = _observed_action_from_links(
+                internal_link_objs, ids, actuators
+            )
+            if elapsed < 120.0 - 1.0e-6:
+                # Deterministic prefix replay: the external plant receives only
+                # the shadow's *current* readback for the next 5-min interval.
+                command = internal_current.copy()
+                for i, aid in enumerate(ids):
+                    link_objs[aid].target_setting = float(command[i])
+            elif _is_decision_time(elapsed):
                 history, uncertainty, ood_score = reconstruct_history(
                     frames, bundle, state_source=state_source
                 )
@@ -206,9 +218,6 @@ def run_proposed_event(
                 )
                 rainfall_forecast = make_causal_rainfall_forecast(
                     [float(x["rain"]) for x in frames], horizon_steps=HORIZON_STEPS
-                )
-                internal_current = _observed_action_from_links(
-                    internal_link_objs, ids, actuators
                 )
                 command, info = predict_and_decide(
                     bundle=bundle,
@@ -245,6 +254,7 @@ def run_proposed_event(
                         "plant_native_controls_disabled": True,
                         "internal_shadow_native_controls_preserved": True,
                         "internal_shadow_future_state_used_online": False,
+                        "precontrol_prefix_contract": "causal_internal_readback_replay",
                     }
                 )
                 decisions.append(info)
@@ -302,6 +312,7 @@ def run_proposed_event(
         "online_future_hydraulic_truth_used": False,
         "realized_future_rainfall_used_online": False,
         "dynamic_internal_online_forecast": "causal_current_native_rule_setting_persistence",
+        "precontrol_prefix_contract": "causal_internal_readback_replay",
         "plant_native_controls_disabled": True,
         "internal_shadow_native_controls_preserved": True,
         "internal_shadow_future_state_used_online": False,
