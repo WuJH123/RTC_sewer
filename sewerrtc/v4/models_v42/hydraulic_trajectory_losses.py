@@ -7,6 +7,7 @@ replace node flooding-rate supervision.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Mapping
 
 import torch
 from torch import nn
@@ -20,6 +21,10 @@ class HydraulicLossWeights:
     facility_flow: float = 0.5
     outfall_flow: float = 0.5
     kpi_consistency: float = 0.2
+    action_effect: float = 0.0
+    pfv_action_effect: float = 0.0
+    pfv_ranking: float = 0.0
+    tfv_ranking: float = 0.0
 
 
 class HydraulicTrajectoryLoss(nn.Module):
@@ -40,12 +45,52 @@ class HydraulicTrajectoryLoss(nn.Module):
         require_storage_targets: bool = True,
         require_facility_flow_targets: bool = True,
         require_outfall_flow_targets: bool = True,
+        kpi_scales: Mapping[str, float] | None = None,
+        trajectory_scales: Mapping[str, float] | None = None,
+        action_effect_indices: torch.Tensor | None = None,
     ) -> None:
         super().__init__()
         self.weights = weights or HydraulicLossWeights()
         self.require_storage_targets = bool(require_storage_targets)
         self.require_facility_flow_targets = bool(require_facility_flow_targets)
         self.require_outfall_flow_targets = bool(require_outfall_flow_targets)
+        self.kpi_scales = {
+            str(key): max(float(value), 1.0e-6)
+            for key, value in (kpi_scales or {}).items()
+        }
+        self.trajectory_scales = {
+            str(key): max(float(value), 1.0e-6)
+            for key, value in (trajectory_scales or {}).items()
+        }
+        self.action_effect_indices = action_effect_indices
+
+    def _scaled(self, value: torch.Tensor, key: str) -> torch.Tensor:
+        return value / self.trajectory_scales.get(key, 1.0)
+
+    @staticmethod
+    def _pairwise_rank_loss(
+        prediction: torch.Tensor,
+        target: torch.Tensor,
+        group_id: torch.Tensor | None,
+    ) -> torch.Tensor:
+        if group_id is None:
+            return prediction.sum() * 0.0
+        terms: list[torch.Tensor] = []
+        for group in torch.unique(group_id):
+            idx = torch.nonzero(group_id == group, as_tuple=False).flatten()
+            for left in range(int(idx.numel())):
+                for right in range(left + 1, int(idx.numel())):
+                    i, j = idx[left], idx[right]
+                    delta = target[i] - target[j]
+                    if float(torch.abs(delta).detach()) <= 1.0e-6:
+                        continue
+                    direction = 1.0 if float(delta.detach()) < 0.0 else -1.0
+                    terms.append(
+                        torch.nn.functional.softplus(
+                            direction * (prediction[i] - prediction[j])
+                        )
+                    )
+        return torch.stack(terms).mean() if terms else prediction.sum() * 0.0
 
     @staticmethod
     def _masked_smooth_l1(
@@ -123,13 +168,14 @@ class HydraulicTrajectoryLoss(nn.Module):
             bpred = branches[branch]
             depth_terms.append(
                 self._masked_smooth_l1(
-                    bpred["node_depth"], target[self._target_key(branch, "depth")]
+                    self._scaled(bpred["node_depth"], "depth"),
+                    self._scaled(target[self._target_key(branch, "depth")], "depth"),
                 )
             )
             flood_terms.append(
                 self._masked_smooth_l1(
-                    bpred["node_flooding_rate"],
-                    target[self._target_key(branch, "flood")],
+                    self._scaled(bpred["node_flooding_rate"], "flood"),
+                    self._scaled(target[self._target_key(branch, "flood")], "flood"),
                 )
             )
 
@@ -137,8 +183,8 @@ class HydraulicTrajectoryLoss(nn.Module):
             if storage_key in target:
                 storage_terms.append(
                     self._masked_smooth_l1(
-                        bpred["storage_volume"],
-                        target[storage_key],
+                        self._scaled(bpred["storage_volume"], "storage_volume"),
+                        self._scaled(target[storage_key], "storage_volume"),
                         target.get(storage_key + "_available"),
                     )
                 )
@@ -146,8 +192,8 @@ class HydraulicTrajectoryLoss(nn.Module):
             if facility_key in target:
                 facility_terms.append(
                     self._masked_smooth_l1(
-                        bpred["facility_flow"],
-                        target[facility_key],
+                        self._scaled(bpred["facility_flow"], "facility_flow"),
+                        self._scaled(target[facility_key], "facility_flow"),
                         target.get(facility_key + "_available"),
                     )
                 )
@@ -155,8 +201,8 @@ class HydraulicTrajectoryLoss(nn.Module):
             if outfall_key in target:
                 outfall_terms.append(
                     self._masked_smooth_l1(
-                        bpred["outfall_flow"],
-                        target[outfall_key],
+                        self._scaled(bpred["outfall_flow"], "outfall_flow"),
+                        self._scaled(target[outfall_key], "outfall_flow"),
                         target.get(outfall_key + "_available"),
                     )
                 )
@@ -174,6 +220,43 @@ class HydraulicTrajectoryLoss(nn.Module):
             torch.stack(outfall_terms).mean() if outfall_terms else zero
         )
 
+        # Directly supervise the counterfactual action effect.  The shared
+        # branch losses can fit the common hydraulic baseline while leaving
+        # candidate-vs-No-control differences nearly constant, even when the
+        # derived PFV/TFV labels vary materially.
+        losses["action_effect"] = self._masked_smooth_l1(
+            self._scaled(
+                branches["candidate"]["node_flooding_rate"]
+                - branches["no_control"]["node_flooding_rate"],
+                "action_effect",
+            ),
+            self._scaled(
+                target[self._target_key("candidate", "flood")]
+                - target[self._target_key("no_control", "flood")],
+                "action_effect",
+            ),
+        )
+        if self.action_effect_indices is not None:
+            idx = self.action_effect_indices.to(
+                branches["candidate"]["node_flooding_rate"].device
+            )
+            cand_effect = (
+                branches["candidate"]["node_flooding_rate"]
+                .index_select(2, idx)
+                - branches["no_control"]["node_flooding_rate"].index_select(2, idx)
+            )
+            target_effect = (
+                target[self._target_key("candidate", "flood")]
+                .index_select(2, idx)
+                - target[self._target_key("no_control", "flood")].index_select(2, idx)
+            )
+            losses["pfv_action_effect"] = self._masked_smooth_l1(
+                self._scaled(cand_effect, "action_effect"),
+                self._scaled(target_effect, "action_effect"),
+            )
+        else:
+            losses["pfv_action_effect"] = zero
+
         # These are consistency terms on trajectory-derived outputs only.  There
         # is no separate free-standing KPI head in the formal model.
         kpi_terms: list[torch.Tensor] = []
@@ -183,11 +266,27 @@ class HydraulicTrajectoryLoss(nn.Module):
                     raise KeyError(f"derived KPI {key} missing from model output")
                 if not torch.isfinite(target[key]).all():
                     raise ValueError(f"target {key} contains NaN/Inf")
+                scale = self.kpi_scales.get(key, 1.0)
                 kpi_terms.append(
-                    nn.functional.smooth_l1_loss(pred[key], target[key], reduction="mean")
+                    nn.functional.smooth_l1_loss(
+                        pred[key] / scale,
+                        target[key] / scale,
+                        reduction="mean",
+                    )
                 )
         losses["derived_kpi_consistency"] = (
             torch.stack(kpi_terms).mean() if kpi_terms else zero
+        )
+        group_id = target.get("state_group_id")
+        losses["pfv_ranking"] = self._pairwise_rank_loss(
+            pred["pfv_delta"] / self.kpi_scales.get("pfv_delta", 1.0),
+            target["pfv_delta"] / self.kpi_scales.get("pfv_delta", 1.0),
+            group_id,
+        )
+        losses["tfv_ranking"] = self._pairwise_rank_loss(
+            pred["tfv_delta"] / self.kpi_scales.get("tfv_delta", 1.0),
+            target["tfv_delta"] / self.kpi_scales.get("tfv_delta", 1.0),
+            group_id,
         )
         return losses
 
@@ -200,4 +299,8 @@ class HydraulicTrajectoryLoss(nn.Module):
             + w.facility_flow * losses["facility_flow_trajectory"]
             + w.outfall_flow * losses["outfall_flow_trajectory"]
             + w.kpi_consistency * losses["derived_kpi_consistency"]
+            + w.action_effect * losses["action_effect"]
+            + w.pfv_action_effect * losses["pfv_action_effect"]
+            + w.pfv_ranking * losses["pfv_ranking"]
+            + w.tfv_ranking * losses["tfv_ranking"]
         )

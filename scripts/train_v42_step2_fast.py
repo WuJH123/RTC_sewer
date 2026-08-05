@@ -83,6 +83,11 @@ def _tensorise(frame: pd.DataFrame) -> dict[str, torch.Tensor]:
         "tfv_delta": torch.as_tensor(frame["tfv_delta"].to_numpy(np.float32)),
         "peak_delta": torch.as_tensor(frame["peak_delta"].to_numpy(np.float32)),
     }
+    if "state_key" in frame.columns:
+        data["state_group_id"] = torch.as_tensor(
+            pd.factorize(frame["state_key"].astype(str), sort=True)[0],
+            dtype=torch.long,
+        )
     for branch in BRANCHES:
         data[f"action_{branch}"] = _stack(frame, f"action_{branch}_readback")
         data[f"depth_{branch}"] = _stack(frame, f"trajectory_depth_{branch}")
@@ -164,6 +169,8 @@ def _targets(batch: dict[str, torch.Tensor], device: torch.device) -> dict[str, 
                 target[f"trajectory_{quantity}_{branch}"] = batch[key].to(device)
     for key in ("pfv_delta", "tfv_delta", "peak_delta"):
         target[key] = batch[key].to(device)
+    if "state_group_id" in batch:
+        target["state_group_id"] = batch["state_group_id"].to(device)
     return target
 
 

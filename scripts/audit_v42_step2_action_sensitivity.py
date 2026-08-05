@@ -106,6 +106,13 @@ def main() -> int:
     predicted_pfv_median = float(
         np.median([x["predicted_pfv_range_m3"] for x in rows])
     )
+    sensitivity_ratio = predicted_pfv_median / max(label_pfv_median, 1.0e-12)
+    if sensitivity_ratio < 0.1:
+        interpretation = "PFV action sensitivity collapsed"
+    elif sensitivity_ratio < 0.5:
+        interpretation = "PFV action sensitivity present but under-responsive"
+    else:
+        interpretation = "PFV action sensitivity is materially represented"
     result = {
         "audit_id": "V42_STEP2_ACTION_SENSITIVITY_V1",
         "read_only": True,
@@ -119,15 +126,10 @@ def main() -> int:
         "median_label_pfv_std_m3": label_pfv_median,
         "median_label_tfv_std_m3": float(np.median([x["label_tfv_std_m3"] for x in rows])),
         "median_predicted_pfv_range_m3": predicted_pfv_median,
-        "predicted_to_label_pfv_sensitivity_ratio": predicted_pfv_median
-        / max(label_pfv_median, 1.0e-12),
+        "predicted_to_label_pfv_sensitivity_ratio": sensitivity_ratio,
         "median_predicted_tfv_range_m3": float(np.median([x["predicted_tfv_range_m3"] for x in rows])),
         "model_hashes": {str(item["seed"]): item["model_sha256"] for item in predictions},
-        "interpretation": (
-            "candidate actions reach the model, but PFV action sensitivity remains "
-            "collapsed when predicted PFV variation is orders of magnitude below "
-            "within-state labels"
-        ),
+        "interpretation": interpretation,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2, allow_nan=False), encoding="utf-8")

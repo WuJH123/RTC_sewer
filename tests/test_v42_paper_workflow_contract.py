@@ -201,6 +201,43 @@ def test_multireference_rollout_propagates_action_to_remote_pfv_node():
     assert out["metadata"]["future_graph_message_passing"] is True
 
 
+def test_multireference_action_diffusion_reaches_two_hop_node_in_one_step():
+    torch.manual_seed(5)
+    model = MultiReferenceHydraulicSurrogate(
+        n_nodes=3,
+        n_facilities=1,
+        state_feature_dim=1,
+        static_feature_dim=2,
+        hidden_dim=8,
+        gat_heads=2,
+        gat_layers=1,
+        horizon=1,
+        dt_sec=600.0,
+        dropout=0.0,
+    )
+    common = dict(
+        state_history=torch.rand(1, 13, 3),
+        historical_actions=torch.rand(1, 13, 1),
+        rainfall_forecast=torch.rand(1, 1),
+        action_no_control=torch.ones(1, 1, 1),
+        action_dynamic_internal=torch.ones(1, 1, 1),
+        action_hold_previous=torch.ones(1, 1, 1),
+        edge_index=torch.tensor([[0, 1, 1, 2], [1, 0, 2, 1]], dtype=torch.long),
+        node_static=torch.rand(3, 2),
+        action_node_map=torch.tensor([[1.0, 0.0, 0.0]]),
+        priority_node_indices=torch.tensor([2]),
+    )
+    with torch.no_grad():
+        out = model(action_candidate=torch.zeros(1, 1, 1), **common)
+    candidate = out["branches"]["candidate"]["node_flooding_rate"][:, :, 2]
+    no_control = out["branches"]["no_control"]["node_flooding_rate"][:, :, 2]
+    assert float((candidate - no_control).abs().max()) > 1.0e-6
+    assert out["metadata"]["action_effect_contract"] == "bidirectional_graph_propagated_action_effect_v3"
+    assert out["metadata"]["action_influence_bidirectional"] is True
+    assert out["metadata"]["global_action_identity_context"] is True
+    assert out["metadata"]["explicit_action_hydraulic_residuals"] is True
+
+
 def _engineering(ok: bool = True) -> EngineeringStatus:
     return EngineeringStatus(ok, ok, ok, ok, ok)
 

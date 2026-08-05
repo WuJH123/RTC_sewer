@@ -265,6 +265,32 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
             if rollout_dim == hidden_dim
             else nn.Linear(hidden_dim, rollout_dim, bias=False)
         )
+        # Control influence can propagate upstream as well as downstream.  The
+        # directed hydraulic edge list is retained for the GAT dynamics, but
+        # this separate incidence prior must be bidirectional.  On the frozen
+        # Wuhan graph, four directed hops reached only 1/8 PFV_CORE nodes;
+        # twelve undirected hops cover the complete actuator-to-PFV envelope.
+        self.action_diffusion_hops = 12
+        self.action_diffusion_decay = 0.6
+        self.action_diffusion_proj = nn.Sequential(
+            nn.Linear(1, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+        # Preserve actuator identity for remote PFV nodes.  The scalar graph
+        # diffusion is a locality prior; it is not sufficient by itself after
+        # long-path averaging across 36 facilities.
+        self.global_action_proj = nn.Sequential(
+            nn.Linear(n_facilities, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+        self.action_depth_residual = nn.Linear(hidden_dim, 1)
+        self.action_flood_residual = nn.Linear(hidden_dim, 1)
+        nn.init.zeros_(self.action_depth_residual.weight)
+        nn.init.zeros_(self.action_depth_residual.bias)
+        nn.init.zeros_(self.action_flood_residual.weight)
+        nn.init.zeros_(self.action_flood_residual.bias)
         self.state_to_hidden = nn.Linear(state_dim, hidden_dim)
         self.dynamics = nn.GRUCell(hidden_dim * 3, hidden_dim)
 
@@ -294,6 +320,40 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
             nn.Linear(hidden_dim, 1),
         )
 
+    def _diffuse_action_signal(
+        self,
+        action_schedule: torch.Tensor,
+        action_node_map: torch.Tensor,
+        edge_index: torch.Tensor,
+    ) -> torch.Tensor:
+        """Diffuse facility settings over a frozen graph for action context."""
+        B, H, _ = action_schedule.shape
+        N = action_node_map.shape[1]
+        direct = torch.einsum(
+            "bha,an->bhn", action_schedule, action_node_map.abs()
+        )
+        nodes = torch.arange(N, device=edge_index.device)
+        self_edges = torch.stack([nodes, nodes])
+        undirected_edges = torch.cat([edge_index, edge_index.flip(0)], dim=1)
+        edges = torch.cat([undirected_edges, self_edges], dim=1)
+        degree = torch.bincount(edges[1], minlength=N).to(action_schedule.dtype)
+        values = 1.0 / degree[edges[1]].clamp_min(1.0)
+        adjacency = torch.sparse_coo_tensor(
+            torch.stack([edges[1], edges[0]]),
+            values,
+            size=(N, N),
+            device=action_schedule.device,
+        ).coalesce()
+        current = direct.reshape(B * H, N)
+        total = current.clone()
+        weight = 1.0
+        for hop in range(1, self.action_diffusion_hops + 1):
+            current = torch.sparse.mm(adjacency, current.T).T
+            hop_weight = self.action_diffusion_decay**hop
+            total = total + hop_weight * current
+            weight += hop_weight
+        return (total / weight).reshape(B, H, N)
+
     def _rollout_branch(
         self,
         *,
@@ -317,6 +377,12 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
         action_embed = self.action_encoder(
             action_schedule, action_node_map
         )
+        action_signal = self._diffuse_action_signal(
+            action_schedule, action_node_map, edge_index
+        )
+        action_diffused_embed = self.action_diffusion_proj(
+            action_signal.unsqueeze(-1)
+        )
         batched_edge_index = _batch_edge_index(edge_index, B, N)
         h = self.state_to_hidden(initial_state).reshape(
             B * N, self.hidden_dim
@@ -332,7 +398,10 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
                 .expand(B, N, -1)
                 .reshape(B * N, -1)
             )
-            act_k = action_embed[:, k, :, :].reshape(B * N, -1)
+            act_k = (
+                action_embed[:, k, :, :] + action_diffused_embed[:, k, :, :]
+                + self.global_action_proj(action_schedule[:, k, :])[:, None, :]
+            ).reshape(B * N, -1)
             action_conditioned = h + act_k
             propagated = self.rollout_gat(action_conditioned, batched_edge_index)
             h_context = self.rollout_norm(
@@ -343,7 +412,11 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
             hidden_node = h.reshape(B, N, self.hidden_dim)
             hidden_steps.append(hidden_node)
 
-            raw_depth = self.depth_head(h).reshape(B, N)
+            action_node = act_k.reshape(B, N, self.hidden_dim)
+            raw_depth = (
+                self.depth_head(h).reshape(B, N)
+                + self.action_depth_residual(action_node).squeeze(-1)
+            )
             if prev_depth is None:
                 depth = torch.nn.functional.softplus(raw_depth)
             else:
@@ -352,6 +425,7 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
                 )
             flood = torch.nn.functional.softplus(
                 self.flood_head(h).reshape(B, N)
+                + self.action_flood_residual(action_node).squeeze(-1)
             )
             depths.append(depth)
             floods.append(flood)
@@ -564,7 +638,12 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
                 "volume_delta_integrated_from_rate_difference": True,
                 "peak_definition": "max_candidate_minus_max_dynamic_internal",
                 "future_graph_message_passing": True,
-                "action_effect_contract": "graph_propagated_action_effect_v1",
+                "action_effect_contract": "bidirectional_graph_propagated_action_effect_v3",
+                "action_influence_hops": self.action_diffusion_hops,
+                "action_influence_decay": self.action_diffusion_decay,
+                "action_influence_bidirectional": True,
+                "global_action_identity_context": True,
+                "explicit_action_hydraulic_residuals": True,
                 "dt_sec": self.dt_sec,
             },
         }

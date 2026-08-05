@@ -156,6 +156,29 @@ def main() -> int:
     train = _tensorise(train_f)
     val = _tensorise(val_f)
     cal = _tensorise(cal_f)
+    kpi_scales = {
+        key: max(float(train_f[key].astype(float).std()), 1.0)
+        for key in ("pfv_delta", "tfv_delta", "peak_delta")
+    }
+    trajectory_scales = {}
+    for quantity, prefix in (
+        ("depth", "depth"),
+        ("flood", "flood"),
+        ("storage_volume", "storage"),
+        ("facility_flow", "facility_flow"),
+        ("outfall_flow", "outfall_flow"),
+    ):
+        values = [
+            float(train[f"{prefix}_{branch}"].float().std())
+            for branch in ("candidate", "no_control", "dynamic_internal", "hold_previous")
+            if f"{prefix}_{branch}" in train
+        ]
+        if values:
+            trajectory_scales[quantity] = max(max(values), 1.0e-3)
+    trajectory_scales["action_effect"] = max(
+        float((train["flood_candidate"] - train["flood_no_control"]).float().std()),
+        1.0e-3,
+    )
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -196,10 +219,17 @@ def main() -> int:
             facility_flow=0.35,
             outfall_flow=0.35 if args.target_contract == "FULL_HYDRAULIC" else 0.0,
             kpi_consistency=0.75,
+            action_effect=2.0,
+            pfv_action_effect=4.0,
+            pfv_ranking=0.5,
+            tfv_ranking=0.5,
         ),
         require_storage_targets=True,
         require_facility_flow_targets=True,
         require_outfall_flow_targets=args.target_contract == "FULL_HYDRAULIC",
+        kpi_scales=kpi_scales,
+        trajectory_scales=trajectory_scales,
+        action_effect_indices=priority,
     )
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -287,6 +317,12 @@ def main() -> int:
         "train_rainfall_group_count": len(train_groups),
         "validation_rainfall_group_count": len(val_groups),
         "calibration_rainfall_group_count": len(cal_groups),
+        "kpi_loss_scales_train_only": kpi_scales,
+        "trajectory_loss_scales_train_only": trajectory_scales,
+        "action_effect_loss_weight": 2.0,
+        "pfv_action_effect_loss_weight": 4.0,
+        "pfv_ranking_loss_weight": 0.5,
+        "tfv_ranking_loss_weight": 0.5,
         "surrogate_model_sha256": _hash_model(model),
         "train": train_report,
         "validation": val_report,
