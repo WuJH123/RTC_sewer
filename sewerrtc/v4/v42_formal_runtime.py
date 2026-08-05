@@ -60,7 +60,11 @@ from sewerrtc.simulation.pyswmm_runner import (
 from sewerrtc.v4.v42_fast_e2e import make_causal_rainfall_forecast
 from sewerrtc.v4.v42_node_safety import priority_depth_limits_m
 from sewerrtc.v4.v42_priority_contract import get_pfv_core_node_indices
-from sewerrtc.v4.v42_trajectory_builder import _parse_inp_topology
+from sewerrtc.v4.v42_trajectory_builder import (
+    SURROGATE_ACTION_MAP_CONTRACT,
+    _parse_inp_topology,
+    build_surrogate_action_node_map,
+)
 
 
 FORMAL_OBJECTIVE_CONTRACT = "PROJECT6_V42_PFV_ONLY_TFV_MIN_MPC_V2"
@@ -166,6 +170,7 @@ class FormalModelBundle:
     edge_index: torch.Tensor
     node_static: torch.Tensor
     action_node_map: torch.Tensor
+    surrogate_action_node_map: torch.Tensor
     fallback_contract_sha256: str
 
     @property
@@ -367,11 +372,23 @@ def load_model_bundle(
     )
     gat.eval()
 
+    preferred_model_root = formal / "step2/models_action_diffusion_v1"
+    legacy_model_root = formal / "step2/models"
+    model_root = (
+        preferred_model_root
+        if all((preferred_model_root / f"seed_{seed}" / "formal_step2_report.json").exists() for seed in (17, 42, 73))
+        else legacy_model_root
+    )
     step2_models: list[MultiReferenceHydraulicSurrogate] = []
     step2_reports: list[dict[str, Any]] = []
     for seed in (17, 42, 73):
-        model_dir = formal / f"step2/models/seed_{seed}"
+        model_dir = model_root / f"seed_{seed}"
         report = _read_json(model_dir / "formal_step2_report.json")
+        if report.get("surrogate_action_map_contract") != SURROGATE_ACTION_MAP_CONTRACT:
+            raise RuntimeError(
+                "Formal Step2 checkpoint uses the endpoint-only action map; "
+                "retrain with the action-influence map before Core RTC"
+            )
         step2_reports.append(report)
         model = MultiReferenceHydraulicSurrogate(
             n_nodes=graph.n_nodes,
@@ -427,6 +444,9 @@ def load_model_bundle(
     if str(step1_report.get("sensor_layout_sha256", "")) != sensor_sha:
         raise RuntimeError("Formal runtime sensor layout differs from Formal Step1")
     priority_indices = get_pfv_core_node_indices(list(graph.node_ids))
+    surrogate_action_map = build_surrogate_action_node_map(graph)
+    if not np.count_nonzero(surrogate_action_map[:, priority_indices].sum(axis=0)) == len(priority_indices):
+        raise RuntimeError("surrogate action map does not cover every PFV_CORE8 node")
     priority_to_actuators = _build_priority_influence_map(root, graph, load_actuators(root))
     limits = priority_depth_limits_m(root, priority_indices)
     fallback_path = root / FORMAL_FALLBACK_CONTRACT
@@ -451,6 +471,9 @@ def load_model_bundle(
         node_static=torch.as_tensor(graph.node_static, dtype=torch.float32, device=device),
         action_node_map=torch.as_tensor(
             graph.action_node_map, dtype=torch.float32, device=device
+        ),
+        surrogate_action_node_map=torch.as_tensor(
+            surrogate_action_map, dtype=torch.float32, device=device
         ),
         fallback_contract_sha256=sha256_file(fallback_path),
     )
@@ -849,7 +872,7 @@ def predict_and_decide(
                 action_hold_previous=torch.as_tensor(hold, device=bundle.device),
                 edge_index=bundle.edge_index,
                 node_static=bundle.node_static,
-                action_node_map=bundle.action_node_map,
+                action_node_map=bundle.surrogate_action_node_map,
                 priority_node_indices=priority,
             )
             predictions.append(

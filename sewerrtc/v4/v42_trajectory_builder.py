@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
@@ -39,6 +40,8 @@ N_HORIZON_STEPS = 12
 HISTORY_INTERVAL_MIN = 5
 HORIZON_INTERVAL_MIN = 10
 TIME_ATOL_MIN = 1e-6
+SURROGATE_ACTION_MAP_CONTRACT = "undirected_khop_inverse_distance_v1_radius10"
+SURROGATE_ACTION_MAP_RADIUS = 10
 NODE_STATIC_COLS = [
     "invert",
     "max_depth",
@@ -55,6 +58,66 @@ BRANCH_ROLES = (
     "hold_previous",
 )
 REFERENCE_BRANCHES = BRANCH_ROLES[1:]
+
+
+def build_surrogate_action_node_map(
+    graph: dict[str, Any], *, radius: int = SURROGATE_ACTION_MAP_RADIUS
+) -> np.ndarray:
+    """Map each actuator to its bounded physical network influence domain.
+
+    The raw graph map contains only facility endpoints.  That is sufficient
+    for local action context, but it leaves downstream/upstream PFV nodes
+    action-blind.  The surrogate uses an undirected hydraulic influence
+    neighbourhood with inverse-distance weights; training and inference share
+    this deterministic map.
+    """
+    n_nodes = int(graph["n_nodes"])
+    n_facilities = int(graph["n_facilities"])
+    node_ids = [str(x) for x in graph["node_ids"]]
+    node_index = {node_id: i for i, node_id in enumerate(node_ids)}
+    edge_index = np.asarray(graph["edge_index"], dtype=np.int64)
+    if edge_index.shape[0] != 2:
+        raise ValueError("graph edge_index must have shape [2, E]")
+    adjacency = [set() for _ in range(n_nodes)]
+    for source, target in zip(edge_index[0], edge_index[1]):
+        u, v = int(source), int(target)
+        if not (0 <= u < n_nodes and 0 <= v < n_nodes):
+            raise ValueError("graph edge_index contains an out-of-range node")
+        # Backwater and storage effects are not strictly downstream-only.
+        adjacency[u].add(v)
+        adjacency[v].add(u)
+
+    endpoints = graph.get("facility_endpoints", [])
+    if len(endpoints) != n_facilities:
+        raise ValueError("graph facility endpoint count differs from n_facilities")
+    influence = np.zeros((n_facilities, n_nodes), dtype=np.float32)
+    for facility_index, endpoint in enumerate(endpoints):
+        starts = [
+            node_index[str(endpoint.get(name, ""))]
+            for name in ("from_node", "to_node")
+            if str(endpoint.get(name, "")) in node_index
+        ]
+        if not starts:
+            raise ValueError(
+                f"facility {facility_index} has no graph-resolvable endpoint"
+            )
+        distances = {node: 0 for node in starts}
+        queue: deque[int] = deque(starts)
+        while queue:
+            node = queue.popleft()
+            distance = distances[node]
+            if distance >= int(radius):
+                continue
+            for neighbour in adjacency[node]:
+                if neighbour not in distances:
+                    distances[neighbour] = distance + 1
+                    queue.append(neighbour)
+        for node, distance in distances.items():
+            influence[facility_index, node] = 1.0 / float(1 + distance)
+
+    if not np.isfinite(influence).all() or not np.any(influence):
+        raise ValueError("surrogate action influence map is empty or nonfinite")
+    return influence
 
 
 @dataclass

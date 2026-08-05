@@ -260,7 +260,7 @@ def predict_and_decide(
                 action_hold_previous=hold_tensor,
                 edge_index=bundle.edge_index,
                 node_static=bundle.node_static,
-                action_node_map=bundle.action_node_map,
+                action_node_map=bundle.surrogate_action_node_map,
                 priority_node_indices=priority,
             )
             pfv_delta = out["pfv_delta"].detach().cpu().numpy()

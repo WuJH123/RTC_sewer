@@ -43,7 +43,11 @@ from sewerrtc.v4.formal_f2 import FORMAL_GENERATION_ID, read_table
 from sewerrtc.v4.models_v42.hydraulic_multi_reference import MultiReferenceHydraulicSurrogate
 from sewerrtc.v4.models_v42.hydraulic_trajectory_losses import HydraulicLossWeights, HydraulicTrajectoryLoss
 from sewerrtc.v4.v42_priority_contract import get_pfv_core_node_indices
-from sewerrtc.v4.v42_trajectory_builder import _load_graph_topology
+from sewerrtc.v4.v42_trajectory_builder import (
+    SURROGATE_ACTION_MAP_CONTRACT,
+    _load_graph_topology,
+    build_surrogate_action_node_map,
+)
 
 
 def _rank(groups: list[str], seed: int) -> list[str]:
@@ -165,7 +169,9 @@ def main() -> int:
     graph = _load_graph_topology(args.project_root)
     edge_index = torch.from_numpy(graph["edge_index"].astype(np.int64)).to(device)
     node_static = torch.from_numpy(graph["node_static"].astype(np.float32)).to(device)
-    action_map = torch.from_numpy(graph["action_node_map"].astype(np.float32)).to(device)
+    action_map = torch.from_numpy(
+        build_surrogate_action_node_map(graph).astype(np.float32)
+    ).to(device)
     priority = torch.as_tensor(
         get_pfv_core_node_indices(list(graph["node_ids"])), dtype=torch.long, device=device
     )
@@ -276,6 +282,8 @@ def main() -> int:
         "storage_supervised": True,
         "facility_flow_supervised": True,
         "no_control_all_open_verified": True,
+        "surrogate_action_map_contract": SURROGATE_ACTION_MAP_CONTRACT,
+        "surrogate_action_map_nonzero": int(torch.count_nonzero(action_map).item()),
         "seed": args.seed,
         "split_seed": args.split_seed,
         "train_cases": len(train_f),
