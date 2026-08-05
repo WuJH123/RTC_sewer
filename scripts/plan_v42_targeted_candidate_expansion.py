@@ -7,8 +7,11 @@ plan.  It does not start SWMM and does not modify the control contract.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -25,6 +28,37 @@ LOAD_ORDER = {
     "NEAR_CAPACITY": 2,
     "SEVERE_OVERLOAD": 3,
 }
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _json_value(value: object) -> object:
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, (np.floating, np.integer)):
+        return value.item()
+    if pd.isna(value):
+        return None
+    return value
+
+
+def _prefix_hash(row: pd.Series) -> str:
+    payload = {
+        "rainfall_sha256": str(row["rainfall_sha256"]),
+        "event_id": str(row["event_id"]),
+        "checkpoint_min": float(row["checkpoint_min"]),
+        "history_depth": _json_value(row["history_depth"]),
+        "history_actions_readback": _json_value(row["history_actions_readback"]),
+        "rainfall_forecast": _json_value(row["rainfall_forecast"]),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _margin_slice(
@@ -143,6 +177,7 @@ def main() -> int:
     parser.add_argument("--states-csv", type=Path, required=True)
     parser.add_argument("--rows-csv", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--source-manifest", type=Path)
     parser.add_argument("--relative-margin", type=float, default=0.05)
     parser.add_argument("--absolute-margin-m3", type=float, default=100.0)
     parser.add_argument("--states-per-regime", type=int, default=6)
@@ -204,6 +239,34 @@ def main() -> int:
         lambda value: json.dumps(examples_by_state.get(value, []), separators=(",", ":"))
     )
 
+    default_manifest = (
+        PROJECT_ROOT
+        / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2/step2/FORMAL_F2_STEP2_CONTROL_CORE_MANIFEST.parquet"
+    )
+    parser_source_manifest = getattr(args, "source_manifest", None)
+    source_manifest = Path(parser_source_manifest) if parser_source_manifest else default_manifest
+    source = pd.read_parquet(
+        source_manifest,
+        columns=[
+            "state_key",
+            "event_id",
+            "rainfall_sha256",
+            "checkpoint_min",
+            "history_depth",
+            "history_actions_readback",
+            "rainfall_forecast",
+        ],
+    ).drop_duplicates("state_key", keep="first")
+    source = source.set_index(source["state_key"].astype(str))
+    plan["checkpoint_min"] = plan["state_key"].astype(str).map(
+        lambda value: float(source.loc[value, "checkpoint_min"])
+    )
+    if plan["checkpoint_min"].isna().any():
+        raise RuntimeError("selected state lacks checkpoint metadata in source manifest")
+    plan["prefix_state_sha256"] = plan["state_key"].astype(str).map(
+        lambda value: _prefix_hash(source.loc[value])
+    )
+
     args.output_dir.mkdir(parents=True, exist_ok=True)
     plan_path = args.output_dir / "TARGETED_CANDIDATE_EXPANSION_PLAN.csv"
     summary_path = args.output_dir / "TARGETED_CANDIDATE_EXPANSION_PLAN.json"
@@ -248,11 +311,45 @@ def main() -> int:
             "authoritative PFV-TFV Pareto audit"
         ),
         "plan_csv": str(plan_path),
+        "source_manifest": str(source_manifest),
     }
     summary_path.write_text(
         json.dumps(payload, indent=2, ensure_ascii=False, allow_nan=False),
         encoding="utf-8",
     )
+    git_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=str(PROJECT_ROOT), text=True
+    ).strip()
+    lock = {
+        "lock_id": "V42_TARGETED_CANDIDATE_EXPANSION_PLAN_LOCK_V1",
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "git_sha": git_sha,
+        "plan_sha256": _sha256(plan_path),
+        "pareto_source_sha256": {
+            "states_csv": _sha256(args.states_csv),
+            "rows_csv": _sha256(args.rows_csv),
+        },
+        "source_manifest": str(source_manifest),
+        "relative_margin_fraction": float(args.relative_margin),
+        "absolute_margin_m3": float(args.absolute_margin_m3),
+        "candidate_recipe": payload["candidate_recipe"],
+        "selected_states": plan[
+            [
+                "state_key",
+                "event_id",
+                "rainfall_sha256",
+                "checkpoint_min",
+                "prefix_state_sha256",
+                "selection_reason",
+            ]
+        ].to_dict(orient="records"),
+    }
+    lock_path = args.output_dir / "TARGETED_CANDIDATE_EXPANSION_LOCK.json"
+    lock_path.write_text(
+        json.dumps(lock, indent=2, ensure_ascii=False, allow_nan=False),
+        encoding="utf-8",
+    )
+    payload["lock_path"] = str(lock_path)
     print(json.dumps(payload, indent=2, ensure_ascii=False), flush=True)
     return 0
 
