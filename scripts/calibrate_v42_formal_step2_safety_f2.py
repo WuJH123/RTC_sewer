@@ -169,6 +169,12 @@ def main() -> int:
     )
     ap.add_argument("--seeds", type=int, nargs="+", default=[17, 42, 73])
     ap.add_argument("--alpha", type=float, default=0.05)
+    ap.add_argument(
+        "--pfv-ucb-method",
+        choices=("standardized_ensemble_conformal", "absolute_residual_one_sided_conformal"),
+        default="standardized_ensemble_conformal",
+        help="authoritative method; absolute residual is an explicit diagnostic experiment",
+    )
     ap.add_argument("--min-calibration-groups", type=int, default=8)
     ap.add_argument("--batch-size", type=int, default=4)
     ap.add_argument("--development-only", action="store_true")
@@ -334,6 +340,16 @@ def main() -> int:
     budget_std_resid = (
         actual_budget_metric - budget_mean
     ) / np.maximum(budget_std, eps)
+    # The ensemble spread is not a calibrated scale on this current-generation
+    # holdout: dividing by the small per-row spread turns a finite systematic
+    # bias into an extreme z-score and empties every online safe set.  Compute
+    # the one-sided absolute residual margin for an explicit diagnostic A/B;
+    # the default authoritative method remains the frozen standardized method
+    # until the alternative passes independent authoritative validation.
+    budget_residual = actual_budget_metric - budget_mean
+    budget_residual_margin = max(
+        0.0, _conformal_quantile(budget_residual, args.alpha)
+    )
     depth_std_resid = (
         actual_priority_depth - depth_mean
     ) / np.maximum(depth_std, eps)
@@ -343,7 +359,10 @@ def main() -> int:
     )
     confidence_z = float(z_pfv)
 
-    budget_metric_ucb = budget_mean + confidence_z * budget_std
+    if args.pfv_ucb_method == "absolute_residual_one_sided_conformal":
+        budget_metric_ucb = budget_mean + budget_residual_margin
+    else:
+        budget_metric_ucb = budget_mean + confidence_z * budget_std
     predicted_pfv_safe = budget_metric_ucb <= PFV_ABSOLUTE_ALLOWANCE_M3
     actual_pfv_safe = actual_budget_metric <= PFV_ABSOLUTE_ALLOWANCE_M3
     admission_risk = _admission_risk(frame, predicted_pfv_safe, actual_pfv_safe)
@@ -415,6 +434,13 @@ def main() -> int:
         "confidence_z": confidence_z,
         "pfv_standardized_conformal_z": z_pfv,
         "pfv_budget_metric_standardized_conformal_z": z_pfv,
+        "pfv_budget_metric_ucb_method": str(args.pfv_ucb_method),
+        "pfv_budget_metric_residual_margin_m3": (
+            float(budget_residual_margin)
+            if args.pfv_ucb_method == "absolute_residual_one_sided_conformal"
+            else None
+        ),
+        "pfv_budget_metric_standardized_conformal_z_diagnostic": float(z_pfv),
         "pfv_safety_statistic": "candidate_minus_1p05_no_control",
         "pfv_safety_inequality": "UCB(PFV_candidate-1.05*PFV_no_control)<=100m3",
         "pfv_budget_metric_std_scale": metric_scale,

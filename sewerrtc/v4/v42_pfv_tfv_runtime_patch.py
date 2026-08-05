@@ -44,6 +44,38 @@ GLOBAL_SINGLE_DELTA = 0.12
 BINARY_IDS = {"ADD301.2", "ADD301.3"}
 
 
+def _shared_batch_tensor(value: np.ndarray, batch_size: int, device: torch.device) -> torch.Tensor:
+    """Copy one shared input to the device, then expose it as a batch view."""
+    base = torch.as_tensor(np.asarray(value, dtype=np.float32), device=device)
+    return base.unsqueeze(0).expand(int(batch_size), *base.shape)
+
+
+def _pfv_budget_metric_ucb(
+    mean: np.ndarray,
+    std: np.ndarray,
+    calibration: dict[str, Any],
+) -> tuple[np.ndarray, str]:
+    """Return the frozen one-sided PFV UCB without changing the 100 m3 gate."""
+    raw_margin = calibration.get("pfv_budget_metric_residual_margin_m3", np.nan)
+    try:
+        margin = float(raw_margin)
+    except (TypeError, ValueError):
+        # Canonical standardized calibration records this optional field as
+        # JSON null; null means the diagnostic alternative is disabled.
+        margin = np.nan
+    if (
+        calibration.get("pfv_budget_metric_ucb_method")
+        == "absolute_residual_one_sided_conformal"
+        and np.isfinite(margin)
+        and margin >= 0.0
+    ):
+        return np.asarray(mean, dtype=float) + margin, "absolute_residual_one_sided_conformal"
+    z = float(calibration.get("confidence_z", np.nan))
+    if not np.isfinite(z) or z < 0.0:
+        raise RuntimeError("Formal Step2 PFV calibration margin is not finite")
+    return np.asarray(mean, dtype=float) + z * np.asarray(std, dtype=float), "standardized_ensemble_conformal_legacy"
+
+
 def _global_tfv_sequences(
     base: np.ndarray,
     actuators: pd.DataFrame,
@@ -215,37 +247,33 @@ def predict_and_decide(
 
     candidate = np.stack([x[1] for x in projected])
     n = len(candidate)
-    nc = np.repeat(
-        np.ones((1, base_runtime.HORIZON_STEPS, len(ids)), np.float32), n, axis=0
-    )
+    # These inputs are identical for every candidate.  Keep one device copy
+    # and broadcast it as a view; only the candidate tensor is materialized per
+    # row.  This removes repeated CPU allocation and H2D transfer per decision.
+    nc = np.ones((base_runtime.HORIZON_STEPS, len(ids)), np.float32)
     internal = np.repeat(
-        np.asarray(internal_current_action, np.float32)[None, None, :], n, axis=0
-    )
-    internal = np.repeat(internal, base_runtime.HORIZON_STEPS, axis=1)
-    hold = np.repeat(base[None, None, :], n, axis=0)
-    hold = np.repeat(hold, base_runtime.HORIZON_STEPS, axis=1)
-    history = np.repeat(np.asarray(state_history, np.float32)[None, :, :], n, axis=0)
-    hist_actions = np.repeat(
-        np.asarray(historical_actions, np.float32)[None, :, :], n, axis=0
-    )
-    rain = np.repeat(
-        np.asarray(rainfall_forecast, np.float32)[None, : base_runtime.HORIZON_STEPS],
-        n,
+        np.asarray(internal_current_action, np.float32)[None, :],
+        base_runtime.HORIZON_STEPS,
         axis=0,
     )
+    hold = np.repeat(base[None, :], base_runtime.HORIZON_STEPS, axis=0)
+    state_history_value = np.asarray(state_history, np.float32)
+    historical_actions_value = np.asarray(historical_actions, np.float32)
+    rainfall_value = np.asarray(rainfall_forecast, np.float32)[: base_runtime.HORIZON_STEPS]
     priority = torch.as_tensor(
         bundle.priority_indices, dtype=torch.long, device=bundle.device
     )
-    # Transfer each shared input once per decision, not once per ensemble
-    # member.  The tensors are small enough to remain resident for the three
-    # forward passes and this removes repeated CPU->GPU copies.
-    state_history_tensor = torch.as_tensor(history, device=bundle.device)
-    historical_actions_tensor = torch.as_tensor(hist_actions, device=bundle.device)
-    rainfall_tensor = torch.as_tensor(rain, device=bundle.device)
+    state_history_tensor = _shared_batch_tensor(
+        state_history_value, n, bundle.device
+    )
+    historical_actions_tensor = _shared_batch_tensor(
+        historical_actions_value, n, bundle.device
+    )
+    rainfall_tensor = _shared_batch_tensor(rainfall_value, n, bundle.device)
     candidate_tensor = torch.as_tensor(candidate, device=bundle.device)
-    no_control_tensor = torch.as_tensor(nc, device=bundle.device)
-    internal_tensor = torch.as_tensor(internal, device=bundle.device)
-    hold_tensor = torch.as_tensor(hold, device=bundle.device)
+    no_control_tensor = _shared_batch_tensor(nc, n, bundle.device)
+    internal_tensor = _shared_batch_tensor(internal, n, bundle.device)
+    hold_tensor = _shared_batch_tensor(hold, n, bundle.device)
 
     predictions: list[dict[str, np.ndarray]] = []
     with torch.inference_mode():
@@ -300,7 +328,9 @@ def predict_and_decide(
     # Independent uncertainty/OOD gates remain diagnostic only. The calibrated
     # scalar PFV budget metric is the sole hydraulic admission statistic.
     budget_metric_std = std["pfv_budget_metric"]
-    budget_metric_ucb = mean["pfv_budget_metric"] + z * budget_metric_std
+    budget_metric_ucb, pfv_ucb_method = _pfv_budget_metric_ucb(
+        mean["pfv_budget_metric"], budget_metric_std, bundle.step2_calibration
+    )
     uncertainty_scale = float(
         bundle.step2_calibration.get("pfv_budget_metric_std_scale", 1.0)
     )
@@ -358,6 +388,7 @@ def predict_and_decide(
                 metadata={
                     "ensemble_seed_count": len(bundle.step2_models),
                     "confidence_z": z,
+                    "pfv_budget_metric_ucb_method": pfv_ucb_method,
                     "dynamic_internal_action_forecast": "causal_current_native_rule_setting_persistence",
                     "no_control_action_forecast": "all_engineering36_open_training_contract",
                     "hold_action_forecast": "current_readback_persistence",

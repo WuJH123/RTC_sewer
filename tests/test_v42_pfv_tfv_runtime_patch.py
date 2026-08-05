@@ -8,8 +8,55 @@ from sewerrtc.control.pfvfirst_mpc_v42 import EngineeringStatus
 from sewerrtc.v4 import v42_pfv_tfv_runtime_patch as runtime_patch
 from sewerrtc.v4.v42_pfv_tfv_runtime_patch import (
     _global_tfv_sequences,
+    _pfv_budget_metric_ucb,
     _project_dedupe_and_cap,
+    _shared_batch_tensor,
 )
+
+
+def test_pfv_ucb_uses_explicit_absolute_residual_margin() -> None:
+    ucb, method = _pfv_budget_metric_ucb(
+        np.asarray([-2200.0, -2100.0]),
+        np.asarray([200.0, 200.0]),
+        {
+            "pfv_budget_metric_ucb_method": "absolute_residual_one_sided_conformal",
+            "pfv_budget_metric_residual_margin_m3": 2231.788,
+            "confidence_z": 18.5,
+        },
+    )
+    assert method == "absolute_residual_one_sided_conformal"
+    assert np.allclose(ucb, [31.788, 131.788], atol=1e-3)
+
+
+def test_pfv_ucb_keeps_standardized_method_as_default_fallback() -> None:
+    ucb, method = _pfv_budget_metric_ucb(
+        np.asarray([-2200.0]),
+        np.asarray([200.0]),
+        {"confidence_z": 18.5},
+    )
+    assert method == "standardized_ensemble_conformal_legacy"
+    assert np.allclose(ucb, [1500.0])
+
+
+def test_pfv_ucb_treats_null_experimental_margin_as_disabled() -> None:
+    ucb, method = _pfv_budget_metric_ucb(
+        np.asarray([-2200.0]),
+        np.asarray([200.0]),
+        {"pfv_budget_metric_residual_margin_m3": None, "confidence_z": 18.5},
+    )
+    assert method == "standardized_ensemble_conformal_legacy"
+    assert np.allclose(ucb, [1500.0])
+
+
+def test_shared_batch_tensor_reuses_values_without_changing_batch_content() -> None:
+    import torch
+
+    value = np.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+    batch = _shared_batch_tensor(value, 3, torch.device("cpu"))
+    assert tuple(batch.shape) == (3, 2, 2)
+    assert torch.equal(batch[0], batch[1])
+    assert torch.equal(batch[1], batch[2])
+    assert torch.equal(batch[0], torch.from_numpy(value))
 
 
 def test_global_tfv_candidates_cover_assets_outside_priority_domains() -> None:
