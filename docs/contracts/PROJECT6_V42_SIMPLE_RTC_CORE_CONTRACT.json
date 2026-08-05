@@ -1,0 +1,56 @@
+{
+  "contract_id": "PROJECT6_V42_SIMPLE_RTC_CORE_V1",
+  "scientific_goal": "real-time sewer control with PFV-safe TFV minimization",
+  "online_chain": [
+    "sparse_sensors",
+    "temporal_GAT_13_frame_causal_reconstruction",
+    "H120_multi_reference_hydraulic_surrogate",
+    "PFV_UCB_admission",
+    "minimum_predicted_TFV_selection",
+    "write_SWMM_target_setting_every_10_min",
+    "SWMM_readback",
+    "rolling_reoptimization"
+  ],
+  "hydraulic_hard_constraints": [
+    "UCB(PFV_candidate - 1.05 * PFV_no_control) <= 100 m3"
+  ],
+  "objective": "minimize_TFV_candidate_over_PFV_admitted_candidate_set",
+  "global_peak": "reporting_only",
+  "priority_depth": "diagnostic_only",
+  "OOD": "diagnostic_only",
+  "uncertainty": "used_only_in_PFV_UCB",
+  "engineering36": {
+    "role": "controllable_plant",
+    "hard_candidate_rejection": [
+      "finite_action_array",
+      "setting_within_0_1",
+      "binary_semantics_for_verified_binary_pumps",
+      "target_setting_writeable"
+    ],
+    "diagnostic_only": [
+      "K",
+      "rate",
+      "ramp",
+      "dwell",
+      "interlock"
+    ],
+    "control_interval_min": 10,
+    "prediction_horizon_min": 120,
+    "controllable_prefix_min": 30,
+    "execute_policy": "write_current_receding_horizon_action_then_readback_and_replan"
+  },
+  "model_policy": {
+    "reuse_existing_step1": true,
+    "reuse_existing_step2_seeds": [17, 42, 73],
+    "retraining_required": false,
+    "fresh_calibration_candidate_exact_hash_match_to_online_generator_required": false,
+    "calibration_candidate_lineage_role": "diagnostic_only",
+    "fresh_calibration_requirement": "causal_authoritative_SWMM_cases_with_valid_action/readback_and_no_future_truth"
+  },
+  "success_criteria": {
+    "core_runtime": "nonzero rolling MPC decisions with actual SWMM writes/readback",
+    "hydraulic_safety": "authoritative event PFV satisfies PFV_proposed <= 100 + 1.05 * PFV_no_control",
+    "performance": "report TFV difference/reduction versus Internal and other baselines",
+    "real_time": "report per-decision wall time against the 10-minute control interval; timing is performance evidence, not an additional hydraulic safety constraint"
+  }
+}
