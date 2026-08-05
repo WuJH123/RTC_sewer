@@ -57,6 +57,7 @@ def _preflight_core_step2_contract(project_root: Path) -> None:
     )
     expected = "causal_current_native_rule_readback_persistence"
     failures: list[str] = []
+    report_hashes: dict[str, str] = {}
     for seed in (17, 42, 73):
         report_path = model_root / f"seed_{seed}" / "formal_step2_report.json"
         if not report_path.exists():
@@ -67,6 +68,23 @@ def _preflight_core_step2_contract(project_root: Path) -> None:
             failures.append(f"seed_{seed}:dynamic_internal_action_input_contract")
         if report.get("future_dynamic_internal_action_input_used") is not False:
             failures.append(f"seed_{seed}:future_dynamic_internal_action_input_used")
+        report_hashes[str(seed)] = str(report.get("surrogate_model_sha256", ""))
+    calibration_path = formal.parent / "calibration/PFV_ONLY_SAFETY_CALIBRATION_CAUSAL_V2.json"
+    if not calibration_path.exists():
+        calibration_path = formal.parent / "calibration/PFV_ONLY_SAFETY_CALIBRATION.json"
+    if calibration_path.exists():
+        calibration = json.loads(calibration_path.read_text(encoding="utf-8"))
+        calibration_hashes = {
+            str(seed): str(value)
+            for seed, value in dict(calibration.get("model_hashes", {})).items()
+        }
+        if report_hashes and calibration_hashes != report_hashes:
+            failures.append(
+                "step2_calibration_model_hash_mismatch:"
+                f"{calibration_path.name}"
+            )
+    else:
+        failures.append("missing:PFV safety calibration")
     if failures:
         raise RuntimeError(
             "Core RTC preflight rejected stale/non-causal Step2 bundle; "

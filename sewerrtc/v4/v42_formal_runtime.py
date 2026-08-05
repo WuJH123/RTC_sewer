@@ -436,7 +436,11 @@ def load_model_bundle(
         formal / "calibration/STEP1_UNCERTAINTY_OOD_CALIBRATION.json"
     )
     if step2_calibration_path is None:
-        calibration_path = formal / "calibration/PFV_ONLY_SAFETY_CALIBRATION.json"
+        calibration_path = (
+            formal / "calibration/PFV_ONLY_SAFETY_CALIBRATION_CAUSAL_V2.json"
+            if model_root == causal_model_root
+            else formal / "calibration/PFV_ONLY_SAFETY_CALIBRATION.json"
+        )
         if not calibration_path.exists():
             # Current simple-core runs reuse the frozen Fresh Calibration12
             # artifact when the legacy Formal path is absent.
@@ -460,6 +464,19 @@ def load_model_bundle(
         raise RuntimeError("Formal runtime requires complete Calibration12 for Step1")
     if int(step2_calibration.get("calibration_rainfall_group_count", 0)) != 12:
         raise RuntimeError("Formal runtime requires complete Calibration12 for Step2")
+    expected_model_hashes = {
+        str(seed): str(report.get("surrogate_model_sha256", ""))
+        for seed, report in zip((17, 42, 73), step2_reports)
+    }
+    calibration_model_hashes = {
+        str(seed): str(value)
+        for seed, value in dict(step2_calibration.get("model_hashes", {})).items()
+    }
+    if expected_model_hashes != calibration_model_hashes:
+        raise RuntimeError(
+            "Formal Step2 safety calibration does not match the selected model "
+            f"bundle: {calibration_path}"
+        )
 
     _, sensor_indices, sensor_sha = _sensor_layout(
         graph.n_nodes, SENSOR_RATIO, SENSOR_LAYOUT_SEED
