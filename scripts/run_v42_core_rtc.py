@@ -13,6 +13,7 @@ K/rate/ramp/dwell/interlock are not used to reject candidates.
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import json
 from pathlib import Path
 from typing import Any
@@ -236,6 +237,177 @@ def _summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _core_worker(task: dict[str, Any]) -> dict[str, Any]:
+    """Run one isolated event/strategy; the parent alone writes the ledger."""
+    event = FormalEventInput(
+        role=str(task["role"]),
+        event_id=str(task["event_id"]),
+        rainfall_sha256=str(task["rainfall_sha256"]),
+        inp_path=Path(str(task["inp_path"])),
+        rain_duration_min=int(task["rain_duration_min"]),
+        simulation_duration_min=int(task["simulation_duration_min"]),
+    )
+    project_root = Path(str(task["project_root"]))
+    strategy = str(task["strategy"])
+    output_dir = Path(str(task["output_dir"]))
+    try:
+        if strategy == "Proposed":
+            result = orchestrator.run_proposed_event(
+                event,
+                project_root=project_root,
+                output_dir=output_dir,
+                state_source="gat_sparse_reconstruction",
+                device=str(task["device"]),
+                max_candidate_sequences=int(task["max_candidate_sequences"]),
+            )
+        else:
+            result = orchestrator.run_baseline_event(
+                event,
+                strategy=strategy,
+                project_root=project_root,
+                output_dir=output_dir,
+            )
+        return {"status": "pass", "result": result}
+    except Exception as exc:
+        return {
+            "status": "fail",
+            "error": f"{type(exc).__name__}: {exc}",
+            "detail_path": str(output_dir / "detail.csv"),
+        }
+
+
+def _run_core_parallel(
+    *,
+    project_root: Path,
+    role: str,
+    strategies: list[str],
+    device: str,
+    max_candidate_sequences: int,
+    workers: int,
+) -> list[dict[str, Any]]:
+    events = (
+        _load_core_calibration_events(project_root)
+        if role == "calibration"
+        else orchestrator.load_formal_event_inputs(project_root, role=role)
+    )
+    lock = orchestrator.policy_lock_payload(project_root)
+    policy_sha = orchestrator._policy_sha(project_root)
+    pending: list[dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
+    for event in events:
+        for strategy in strategies:
+            state_source = (
+                "gat_sparse_reconstruction"
+                if strategy == "Proposed"
+                else "swmm_native_or_rule_baseline"
+            )
+            model_sha = (
+                f"{lock['gat_model_sha256']}:{lock['model_sha256']}"
+                if strategy == "Proposed"
+                else "none"
+            )
+            task = {
+                "project_root": str(project_root),
+                "role": role,
+                "event_id": event.event_id,
+                "rainfall_sha256": event.rainfall_sha256,
+                "inp_path": str(event.inp_path),
+                "rain_duration_min": event.rain_duration_min,
+                "simulation_duration_min": event.simulation_duration_min,
+                "strategy": strategy,
+                "state_source": state_source,
+                "device": device,
+                "max_candidate_sequences": max_candidate_sequences,
+                "model_sha256": model_sha,
+                "policy_sha256": (
+                    policy_sha
+                    if strategy == "Proposed"
+                    else orchestrator.sha256_json({"strategy": strategy, "formal": True})
+                ),
+                "output_dir": str(
+                    orchestrator.FORMAL_ROOT
+                    / "paper_execution"
+                    / role
+                    / event.event_id
+                    / strategy
+                    / state_source
+                ),
+            }
+            if orchestrator._ledger_reusable(
+                event=event,
+                role=role,
+                strategy=strategy,
+                state_source=state_source,
+                model_sha256=model_sha,
+                policy_sha256=str(task["policy_sha256"]),
+            ):
+                print(
+                    f"[CORE] REUSE role={role} event={event.event_id} strategy={strategy}",
+                    flush=True,
+                )
+                results.append(
+                    orchestrator._read_json(Path(str(task["output_dir"])) / "run_result.json")
+                )
+            else:
+                pending.append(task)
+
+    if not pending:
+        return results
+    baseline_tasks = [x for x in pending if x["strategy"] != "Proposed"]
+    proposed_tasks = [x for x in pending if x["strategy"] == "Proposed"]
+    future_map: dict[Any, dict[str, Any]] = {}
+    max_baseline_workers = max(1, min(int(workers), 16, len(baseline_tasks) or 1))
+    with ProcessPoolExecutor(max_workers=max_baseline_workers) as baseline_pool, ProcessPoolExecutor(
+        max_workers=1
+    ) as proposed_pool:
+        for task in baseline_tasks:
+            future_map[baseline_pool.submit(_core_worker, task)] = task
+        for task in proposed_tasks:
+            future_map[proposed_pool.submit(_core_worker, task)] = task
+        failures: list[str] = []
+        for future in as_completed(future_map):
+            task = future_map[future]
+            payload = future.result()
+            status = str(payload.get("status", "fail"))
+            result = payload.get("result") if status == "pass" else None
+            detail = Path(str(payload.get("detail_path", task["output_dir"] + "/detail.csv")))
+            error = "" if status == "pass" else str(payload.get("error", "worker failed"))
+            row = {
+                "role": role,
+                "event_id": task["event_id"],
+                "rainfall_sha256": task["rainfall_sha256"],
+                "strategy": task["strategy"],
+                "state_source": task["state_source"],
+                "status": status,
+                "input_sha256": "",
+                "model_sha256": task["model_sha256"],
+                "policy_sha256": task["policy_sha256"],
+                "detail_path": str(detail),
+                "detail_sha256": orchestrator.sha256_file(detail) if detail.exists() else "",
+                "runtime_sec": float(result.get("runtime_sec", 0.0)) if result else 0.0,
+                "authority": "authoritative_swmm",
+                "error": error,
+            }
+            # Resolve the event input hash without retaining a second event map.
+            row["input_sha256"] = orchestrator.sha256_file(Path(str(task["inp_path"])))
+            orchestrator.append_csv(orchestrator.LEDGER, row)
+            if status != "pass" or not isinstance(result, dict):
+                failures.append(
+                    f"{task['event_id']} {task['strategy']}: {error or 'missing result'}"
+                )
+                continue
+            if task["strategy"] in {"No-control", "All-close"}:
+                orchestrator._validate_explicit_baseline(project_root, result, task["strategy"])
+            results.append(result)
+            print(
+                f"[CORE] PASS role={role} event={task['event_id']} strategy={task['strategy']}",
+                flush=True,
+            )
+    if failures:
+        raise RuntimeError("core RTC worker failure: " + failures[0])
+    return results
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
@@ -250,6 +422,12 @@ def main() -> int:
     )
     ap.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     ap.add_argument("--max-candidate-sequences", type=int, default=64)
+    ap.add_argument(
+        "--workers",
+        type=int,
+        default=16,
+        help="maximum concurrent CPU baseline SWMM workers; Proposed remains one GPU worker",
+    )
     ap.add_argument(
         "--strategies",
         default=",".join(DEFAULT_STRATEGIES),
@@ -284,13 +462,13 @@ def main() -> int:
         orchestrator.FORMAL_ROOT / "FORMAL_EXECUTION_LEDGER.csv"
     )
 
-    results = orchestrator._run_role(
+    results = _run_core_parallel(
         project_root=root,
         role=args.role,
         strategies=strategies,
-        state_source="gat_sparse_reconstruction",
         device=args.device,
         max_candidate_sequences=int(args.max_candidate_sequences),
+        workers=max(1, min(int(args.workers), 16)),
     )
     evidence = _summarize(results)
     evidence["role"] = args.role
