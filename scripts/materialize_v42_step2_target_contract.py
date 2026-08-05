@@ -102,14 +102,17 @@ def _extract(
 
 
 def _cached_detail(
-    cache: OrderedDict[str, pd.DataFrame], path: Path, max_items: int
+    cache: OrderedDict[str, pd.DataFrame],
+    path: Path,
+    max_items: int,
+    usecols: list[str],
 ) -> pd.DataFrame:
     key = str(path.resolve())
     if key in cache:
         value = cache.pop(key)
         cache[key] = value
         return value
-    value = pd.read_csv(path, low_memory=False)
+    value = pd.read_csv(path, usecols=usecols, low_memory=False)
     if value.empty:
         raise ValueError(f"empty detail: {path}")
     cache[key] = value
@@ -159,6 +162,9 @@ def main() -> int:
     facility_cols = _columns("flow:", facility_ids)
     outfall_cols = _columns("outfall_flow:", outfall_ids)
     require_outfall = args.target_contract == "FULL_HYDRAULIC"
+    detail_usecols = list(dict.fromkeys(["elapsed_min", *storage_cols, *facility_cols]))
+    if require_outfall:
+        detail_usecols.extend(outfall_cols)
 
     cache: OrderedDict[str, pd.DataFrame] = OrderedDict()
     records: list[dict[str, Any]] = []
@@ -191,7 +197,9 @@ def main() -> int:
             branch_outfall_available = True
             for branch in BRANCHES:
                 path = Path(str(row[f"source_detail_path_{branch}"]))
-                detail = _cached_detail(cache, path, args.detail_cache_items)
+                detail = _cached_detail(
+                    cache, path, args.detail_cache_items, detail_usecols
+                )
                 future = _exact_future(detail, checkpoint)
                 storage, storage_fraction = _extract(
                     future, storage_cols, required=True

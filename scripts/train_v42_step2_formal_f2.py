@@ -123,6 +123,12 @@ def main() -> int:
     ap.add_argument("--gat-layers", type=int, default=3)
     ap.add_argument("--lr", type=float, default=5e-4)
     ap.add_argument(
+        "--kpi-consistency-weight",
+        type=float,
+        default=0.75,
+        help="weight for trajectory-derived PFV/TFV/Peak consistency loss",
+    )
+    ap.add_argument(
         "--selection-metric",
         choices=("loss", "control"),
         default="loss",
@@ -137,6 +143,9 @@ def main() -> int:
         default="CONTROL_CORE",
     )
     args = ap.parse_args()
+
+    if args.kpi_consistency_weight < 0.0 or not np.isfinite(args.kpi_consistency_weight):
+        raise ValueError("--kpi-consistency-weight must be finite and non-negative")
 
     frame = read_table(args.manifest)
     if frame.empty:
@@ -228,7 +237,7 @@ def main() -> int:
             storage=0.35,
             facility_flow=0.35,
             outfall_flow=0.35 if args.target_contract == "FULL_HYDRAULIC" else 0.0,
-            kpi_consistency=0.75,
+            kpi_consistency=args.kpi_consistency_weight,
         ),
         require_storage_targets=True,
         require_facility_flow_targets=True,
@@ -317,6 +326,7 @@ def main() -> int:
         "surrogate_action_map_contract": SURROGATE_ACTION_MAP_CONTRACT,
         "surrogate_action_map_nonzero": int(torch.count_nonzero(action_map).item()),
         "model_selection_metric": args.selection_metric,
+        "kpi_consistency_weight": args.kpi_consistency_weight,
         "best_epoch": best_epoch,
         "seed": args.seed,
         "split_seed": args.split_seed,
