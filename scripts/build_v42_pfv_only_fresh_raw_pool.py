@@ -73,6 +73,53 @@ def main() -> int:
     metadata["source_manifest_sha256"] = sha256_file(source_path)
     metadata_path = args.output_dir / "FRESH_PFV_ONLY_METADATA_POOL.parquet"
     metadata.to_parquet(metadata_path, index=False)
+
+    # Keep fresh Calibration lineage isolated from the historical Formal ledger.
+    # One row per independent forcing is the authority consumed by the existing
+    # PFV calibrator; it is derived from the forcing-only selection plan/cases,
+    # never from control outcomes.
+    ledger = (
+        source[
+            [
+                "event_id",
+                "rainfall_group_key",
+                "rainfall_sha256",
+                "rain_duration_min",
+            ]
+        ]
+        .drop_duplicates()
+        .rename(columns={"rain_duration_min": "duration_min"})
+        .copy()
+    )
+    if len(ledger) != 12 or ledger["rainfall_group_key"].nunique() != 12:
+        raise RuntimeError("fresh Calibration lineage must contain 12 independent groups")
+    ledger["formal_generation_id"] = "PROJECT6_V42_FORMAL_F2"
+    ledger["formal_f2_role"] = "calibration"
+    ledger["historically_seen"] = False
+    ledger["historically_reserved"] = False
+    ledger["model_training_seen"] = False
+    ledger["source_datasets"] = "pfv_only_fresh_calibration"
+    ledger["historical_event_ids"] = ledger["event_id"]
+    ledger["inventory_event_id"] = ledger["event_id"]
+    ledger["rainfall_family"] = "fresh_pfv_only_calibration"
+    ledger = ledger[
+        [
+            "formal_generation_id",
+            "rainfall_group_key",
+            "rainfall_sha256",
+            "formal_f2_role",
+            "historically_seen",
+            "historically_reserved",
+            "model_training_seen",
+            "source_datasets",
+            "historical_event_ids",
+            "inventory_event_id",
+            "rainfall_family",
+            "duration_min",
+        ]
+    ].sort_values("rainfall_group_key")
+    ledger_path = args.output_dir / "FRESH_PFV_ONLY_EVENT_LEDGER.csv"
+    ledger.to_csv(ledger_path, index=False)
     audit = {
         "status": "pass",
         "formal_mainline_authorized": False,
@@ -81,6 +128,8 @@ def main() -> int:
         "source_manifest": str(source_path.resolve()),
         "source_manifest_sha256": sha256_file(source_path),
         "metadata_pool": str(metadata_path.resolve()),
+        "event_ledger": str(ledger_path.resolve()),
+        "event_ledger_sha256": sha256_file(ledger_path),
         "rows": int(len(source)),
         "rainfall_groups": int(source["rainfall_sha256"].astype(str).nunique()),
         "all_detail_paths_exist": True,

@@ -487,6 +487,102 @@ def _record_row(
     return row
 
 
+def _native_controls_contract(inp_path: str | Path) -> dict[str, Any]:
+    """Return a stable audit of the source INP native-control section."""
+    lines = Path(inp_path).read_text(encoding="utf-8", errors="replace").splitlines()
+    in_controls = False
+    section: list[str] = []
+    for raw in lines:
+        stripped = raw.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_controls = stripped[1:-1].strip().upper() == "CONTROLS"
+            continue
+        if in_controls:
+            section.append(raw.rstrip())
+    normalized = "\n".join(section).strip()
+    rules = [line for line in section if line.strip() and not line.lstrip().startswith(";")]
+    return {
+        "section_present": any(
+            line.strip().upper() == "[CONTROLS]" for line in lines
+        ),
+        "rule_count": len(rules),
+        "contract_sha256": hashlib.sha256(normalized.encode("utf-8")).hexdigest(),
+    }
+
+
+def _audit_baseline_contract(
+    detail: pd.DataFrame, strategy: str, inp_path: str | Path
+) -> dict[str, Any]:
+    """Audit actual baseline command/readback instead of metadata claims."""
+    command_cols = [str(c) for c in detail.columns if str(c).startswith("a:")]
+    readback_cols = [str(c) for c in detail.columns if str(c).startswith("setting:")]
+    command_ids = [c[2:] for c in command_cols]
+    readback_ids = [c[8:] for c in readback_cols]
+    columns_match = command_ids == readback_ids and bool(command_ids)
+    command = (
+        detail[command_cols].apply(pd.to_numeric, errors="coerce").to_numpy(float)
+        if columns_match
+        else np.empty((0, 0), dtype=float)
+    )
+    readback = (
+        detail[readback_cols].apply(pd.to_numeric, errors="coerce").to_numpy(float)
+        if columns_match
+        else np.empty((0, 0), dtype=float)
+    )
+    readback_finite = bool(readback.size and np.isfinite(readback).all())
+    target_write_verified = bool(
+        columns_match
+        and command.size
+        and np.isfinite(command).all()
+        and readback_finite
+        and np.allclose(command, readback, atol=1.0e-6, rtol=0.0)
+    )
+    expected = None
+    if strategy == "No-control":
+        expected = 1.0
+    elif strategy == "All-close":
+        expected = 0.0
+    physical_setting_verified = bool(
+        expected is not None
+        and readback_finite
+        and np.allclose(readback, expected, atol=1.0e-6, rtol=0.0)
+    )
+    native = _native_controls_contract(inp_path)
+    internal_native_rules_preserved = bool(
+        strategy != "Internal" or native["section_present"]
+    )
+    baseline_contract_pass = bool(
+        readback_finite
+        and internal_native_rules_preserved
+        and (
+            physical_setting_verified
+            if expected is not None
+            else strategy == "Internal"
+        )
+    )
+    return {
+        "readback_finite": readback_finite,
+        "target_write_verified": target_write_verified
+        if strategy != "Internal"
+        else None,
+        "physical_setting_verified": physical_setting_verified
+        if expected is not None
+        else None,
+        "no_control_all_open_contract": physical_setting_verified
+        if strategy == "No-control"
+        else None,
+        "all_close_zero_contract": physical_setting_verified
+        if strategy == "All-close"
+        else None,
+        "internal_native_rules_preserved": internal_native_rules_preserved,
+        "source_inp_sha256": sha256_file(inp_path),
+        "native_controls_section_present": native["section_present"],
+        "native_rule_count": native["rule_count"],
+        "native_rule_contract_sha256": native["contract_sha256"],
+        "baseline_contract_pass": baseline_contract_pass,
+    }
+
+
 def _is_decision_time(elapsed_min: float) -> bool:
     return elapsed_min >= 120.0 - 1.0e-6 and abs(
         elapsed_min / CONTROL_INTERVAL_MIN - round(elapsed_min / CONTROL_INTERVAL_MIN)
@@ -981,6 +1077,7 @@ def run_baseline_event(
     detail = pd.DataFrame(records)
     detail.to_csv(detail_path, index=False)
     kpis = compute_kpis(detail, priority_nodes, dt_sec=STATE_STEP_SEC)
+    baseline_contract = _audit_baseline_contract(detail, strategy, event.inp_path)
     result = {
         "status": "pass",
         "event_id": event.event_id,
@@ -992,9 +1089,7 @@ def run_baseline_event(
         "input_sha256": event.input_sha256,
         "kpis": kpis,
         "runtime_sec": time.time() - start,
-        "no_control_all_open_contract": strategy != "No-control" or True,
-        "all_close_zero_contract": strategy != "All-close" or True,
-        "internal_native_rules_preserved": strategy != "Internal" or True,
+        **baseline_contract,
     }
     (out_dir / "run_result.json").write_text(
         json.dumps(_json_safe(result), indent=2, ensure_ascii=False, allow_nan=False),
