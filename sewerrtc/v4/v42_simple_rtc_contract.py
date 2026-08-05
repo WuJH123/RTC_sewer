@@ -11,9 +11,9 @@ and the admitted candidate with the smallest predicted TFV is selected.
 Engineering36 is treated as the controllable plant, not as an additional set of
 scientific safety gates.  The runtime therefore keeps only what is necessary to
 issue a meaningful SWMM command: finite H12 action arrays, settings in [0, 1],
-valid binary semantics for the two binary pumps, H3 executable-prefix semantics,
-and target-setting write/readback.  K/rate/ramp/dwell/interlock are diagnostics
-only and cannot empty the PFV-safe set.
+valid binary semantics for the two verified binary pumps, H3 executable-prefix
+semantics, and target-setting write/readback. K/rate/ramp/dwell/interlock are
+diagnostics only and cannot empty the PFV-safe set.
 
 This module deliberately patches the existing production modules at runtime so
 legacy evidence readers can coexist while the active control path stays simple.
@@ -39,6 +39,7 @@ from sewerrtc.v4 import v42_formal_runtime as base_runtime
 CONTRACT_ID = "PROJECT6_V42_SIMPLE_RTC_CORE_V1"
 PFV_ABSOLUTE_ALLOWANCE_M3 = 100.0
 PFV_RELATIVE_ALLOWANCE_FRACTION = 0.05
+BINARY_IDS = {"ADD301.2", "ADD301.3"}
 
 
 def project_candidate_sequence_minimal(
@@ -49,8 +50,9 @@ def project_candidate_sequence_minimal(
     """Project to the minimal physical SWMM action domain.
 
     The first H3 is controllable; H4-H12 are held at the current readback because
-    the controller replans every 10 minutes.  No K/rate/ramp/dwell/interlock
-    rejection is applied.
+    the controller replans every 10 minutes. Only ADD301.2/ADD301.3 are forced
+    to binary settings; all other managed facilities remain continuous in [0,1].
+    No K/rate/ramp/dwell/interlock rejection is applied.
     """
     ids = actuators["actuator_id"].astype(str).tolist()
     current = np.asarray(current_action, dtype=np.float32).reshape(-1)
@@ -64,14 +66,18 @@ def project_candidate_sequence_minimal(
 
     seq = np.clip(seq, 0.0, 1.0)
     seq[base_runtime.CONTROLLABLE_PREFIX_STEPS :] = current[None, :]
-    for k in range(base_runtime.CONTROLLABLE_PREFIX_STEPS):
-        seq[k] = base_runtime._enforce_actuator_semantics(
-            seq[k], ids, actuators, "binary_unless_verified", ["add350.1"]
-        )
+    for aid in BINARY_IDS:
+        if aid in ids:
+            idx = ids.index(aid)
+            seq[: base_runtime.CONTROLLABLE_PREFIX_STEPS, idx] = np.where(
+                seq[: base_runtime.CONTROLLABLE_PREFIX_STEPS, idx] >= 0.5,
+                1.0,
+                0.0,
+            )
 
     bounds = bool(np.isfinite(seq).all() and np.all((seq >= 0.0) & (seq <= 1.0)))
     binary = True
-    for aid in ("ADD301.2", "ADD301.3"):
+    for aid in BINARY_IDS:
         if aid in ids:
             values = seq[: base_runtime.CONTROLLABLE_PREFIX_STEPS, ids.index(aid)]
             binary = binary and bool(
@@ -141,7 +147,9 @@ def _candidate_audit(
         ),
         maximum_priority_depth_exceedance_m=None,
         pfv_budget_metric_ucb_m3=(
-            float(budget_value) if budget_value is not None and np.isfinite(float(budget_value)) else None
+            float(budget_value)
+            if budget_value is not None and np.isfinite(float(budget_value))
+            else None
         ),
     )
 
@@ -157,7 +165,7 @@ def decide_simple_pfv_tfv_mpc(
     """Select minimum predicted TFV subject only to the PFV-UCB budget.
 
     Minimal action-domain validity is required so the command can be written to
-    SWMM.  K/rate/ramp/dwell/interlock are not candidate rejection reasons.
+    SWMM. K/rate/ramp/dwell/interlock are not candidate rejection reasons.
     """
     del weights
     margins = margins or SafetyMargins(
