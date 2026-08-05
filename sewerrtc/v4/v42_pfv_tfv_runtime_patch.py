@@ -41,6 +41,7 @@ from sewerrtc.v4 import v42_formal_runtime as base_runtime
 
 PFV_RELATIVE_ALLOWANCE_FRACTION = 0.05
 GLOBAL_SINGLE_DELTA = 0.12
+GLOBAL_SINGLE_EXTRA_DELTAS = (0.25, 0.50)
 BINARY_IDS = {"ADD301.2", "ADD301.3"}
 
 
@@ -104,20 +105,24 @@ def _global_tfv_sequences(
                 }
             )
             continue
-        for direction, delta in (("decrease", -GLOBAL_SINGLE_DELTA), ("increase", GLOBAL_SINGLE_DELTA)):
-            target = float(np.clip(current + delta, 0.0, 1.0))
-            if abs(target - current) <= 1.0e-7:
-                continue
-            seq = reference.copy()
-            seq[:prefix, idx] = target
-            result.append(
-                {
-                    "label": f"global_tfv_single|actuator={aid}|direction={direction}",
-                    "sequence": seq,
-                    "target_actuators": aid,
-                    "physical_rationale": "Global TFV search candidate; PFV is checked only by the calibrated admission gate.",
-                }
-            )
+        for magnitude in (GLOBAL_SINGLE_DELTA, *GLOBAL_SINGLE_EXTRA_DELTAS):
+            for direction, delta in (("decrease", -magnitude), ("increase", magnitude)):
+                target = float(np.clip(current + delta, 0.0, 1.0))
+                if abs(target - current) <= 1.0e-7:
+                    continue
+                seq = reference.copy()
+                seq[:prefix, idx] = target
+                label = f"global_tfv_single|actuator={aid}|direction={direction}"
+                if magnitude != GLOBAL_SINGLE_DELTA:
+                    label += f"|delta={magnitude:g}"
+                result.append(
+                    {
+                        "label": label,
+                        "sequence": seq,
+                        "target_actuators": aid,
+                        "physical_rationale": "Global TFV search candidate; PFV is checked only by the calibrated admission gate.",
+                    }
+                )
     return result
 
 
@@ -170,7 +175,10 @@ def _project_dedupe_and_cap(
         for item in ordered
         if item[0] in {"hold_native", "hold_only"}
         or item[0].startswith("global_binary_toggle")
-        or item[0].startswith("global_tfv_single")
+        or (
+            item[0].startswith("global_tfv_single")
+            and "|delta=" not in item[0]
+        )
     ]
     mandatory_keys = {item[0] for item in mandatory}
     requested = max(1, int(requested_cap))

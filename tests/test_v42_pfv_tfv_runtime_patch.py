@@ -73,6 +73,8 @@ def test_global_tfv_candidates_cover_assets_outside_priority_domains() -> None:
     assert any("actuator=ordinary_gate|direction=increase" in x for x in labels)
     assert any("global_binary_toggle|actuator=ADD301.2|target=1" in x for x in labels)
     assert any("global_tfv_single|actuator=add350.1|direction=decrease" in x for x in labels)
+    assert any("global_tfv_single|actuator=ordinary_gate|direction=decrease|delta=0.25" in x for x in labels)
+    assert any("global_tfv_single|actuator=ordinary_gate|direction=decrease|delta=0.5" in x for x in labels)
 
     for row in rows:
         sequence = np.asarray(row["sequence"], dtype=float)
