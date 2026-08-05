@@ -1158,6 +1158,11 @@ def run_proposed_event(
         current_action = _observed_action_from_links(link_objs, ids, actuators)
         command = current_action.copy()
         internal_iterator = iter(internal_sim)
+        initial = _frame(sim, node_objs, rain_obj, link_objs, ids, actuators)
+        if abs(float(initial["elapsed_min"])) <= 1.0e-6:
+            # Keep the real t=0 plant frame so the first t=120 decision has
+            # the complete causal t-120..t history (25 five-minute frames).
+            frames.append(initial)
         for _ in sim:
             try:
                 next(internal_iterator)
