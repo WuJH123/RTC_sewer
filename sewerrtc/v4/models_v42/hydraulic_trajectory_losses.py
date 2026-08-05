@@ -86,6 +86,27 @@ class HydraulicTrajectoryLoss(nn.Module):
         return nn.functional.smooth_l1_loss(pred[valid], target[valid], reduction="mean")
 
     @staticmethod
+    def _normalized_effect_smooth_l1(
+        pred: torch.Tensor, target: torch.Tensor
+    ) -> torch.Tensor:
+        """Compare action effects on their physical within-batch scale.
+
+        Action-effect flooding rates are commonly much smaller than 1 m3/s;
+        applying the default SmoothL1 beta in raw units makes their gradient
+        negligible beside absolute trajectory losses.  The target-derived
+        scale changes optimization conditioning only, not the trajectory/KPI
+        definitions or any online information.
+        """
+        if pred.shape != target.shape:
+            raise ValueError(
+                f"action-effect shape mismatch: {tuple(pred.shape)} vs {tuple(target.shape)}"
+            )
+        if not torch.isfinite(target).all():
+            raise ValueError("action-effect target contains NaN/Inf")
+        scale = target.detach().abs().median().clamp_min(1.0e-4)
+        return nn.functional.smooth_l1_loss(pred / scale, target / scale, reduction="mean")
+
+    @staticmethod
     def _target_key(branch: str, quantity: str) -> str:
         return f"trajectory_{quantity}_{HydraulicTrajectoryLoss.TARGET_PREFIX[branch]}"
 
@@ -287,7 +308,7 @@ class HydraulicTrajectoryLoss(nn.Module):
         candidate_target_flood = target[self._target_key("candidate", "flood")]
         for reference in ("no_control", "dynamic_internal", "hold_previous"):
             action_effect_terms.append(
-                self._masked_smooth_l1(
+                self._normalized_effect_smooth_l1(
                     candidate_flood - branches[reference]["node_flooding_rate"],
                     candidate_target_flood
                     - target[self._target_key(reference, "flood")],

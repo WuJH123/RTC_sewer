@@ -266,7 +266,11 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
             else nn.Linear(hidden_dim, rollout_dim, bias=False)
         )
         self.state_to_hidden = nn.Linear(state_dim, hidden_dim)
-        self.dynamics = nn.GRUCell(hidden_dim * 3, hidden_dim)
+        # Keep the absolute schedule for hydraulic state evolution, but also
+        # expose an explicit zero-based action delta.  The latter prevents a
+        # small candidate-vs-reference effect from being washed out by the
+        # much larger absolute trajectory loss.
+        self.dynamics = nn.GRUCell(hidden_dim * 4, hidden_dim)
 
         self.depth_head = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
@@ -275,6 +279,11 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
         )
         self.flood_head = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1),
+        )
+        self.action_effect_flood_head = nn.Sequential(
+            nn.Linear(hidden_dim * 2, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, 1),
         )
@@ -300,6 +309,7 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
         initial_state: torch.Tensor,
         rain_embed: torch.Tensor,
         action_schedule: torch.Tensor,
+        action_delta_schedule: torch.Tensor,
         action_node_map: torch.Tensor,
         edge_index: torch.Tensor,
         storage_indices: torch.Tensor,
@@ -317,6 +327,16 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
         action_embed = self.action_encoder(
             action_schedule, action_node_map
         )
+        delta_embed = self.action_encoder(
+            action_delta_schedule, action_node_map
+        )
+        zero_delta_embed = self.action_encoder(
+            torch.zeros_like(action_delta_schedule), action_node_map
+        )
+        # Exact zero for a branch whose schedule equals No-control, including
+        # the encoder bias.  This makes the residual a true counterfactual
+        # effect rather than another unconstrained branch head.
+        delta_embed = delta_embed - zero_delta_embed
         batched_edge_index = _batch_edge_index(edge_index, B, N)
         h = self.state_to_hidden(initial_state).reshape(
             B * N, self.hidden_dim
@@ -333,12 +353,13 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
                 .reshape(B * N, -1)
             )
             act_k = action_embed[:, k, :, :].reshape(B * N, -1)
+            delta_k = delta_embed[:, k, :, :].reshape(B * N, -1)
             action_conditioned = h + act_k
             propagated = self.rollout_gat(action_conditioned, batched_edge_index)
             h_context = self.rollout_norm(
                 propagated + self.rollout_skip(action_conditioned)
             ).relu()
-            inp = torch.cat([h_context, rain_k, act_k], dim=-1)
+            inp = torch.cat([h_context, rain_k, act_k, delta_k], dim=-1)
             h = self.dynamics(inp, h)
             hidden_node = h.reshape(B, N, self.hidden_dim)
             hidden_steps.append(hidden_node)
@@ -350,9 +371,14 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
                 depth = torch.relu(
                     prev_depth + 0.25 * torch.tanh(raw_depth)
                 )
-            flood = torch.nn.functional.softplus(
-                self.flood_head(h).reshape(B, N)
+            base_flood = self.flood_head(h).reshape(B, N)
+            zero_delta = torch.zeros_like(delta_k)
+            action_effect = self.action_effect_flood_head(
+                torch.cat([h, delta_k], dim=-1)
+            ) - self.action_effect_flood_head(
+                torch.cat([h, zero_delta], dim=-1)
             )
+            flood = torch.nn.functional.softplus(base_flood + action_effect.reshape(B, N))
             depths.append(depth)
             floods.append(flood)
             prev_depth = depth
@@ -498,10 +524,12 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
         branches: dict[str, dict[str, torch.Tensor]] = {}
         kpis: dict[str, HydraulicKPIBundle] = {}
         for name in self.BRANCHES:
+            action_schedule = schedules[name]
             branches[name] = self._rollout_branch(
                 initial_state=initial,
                 rain_embed=rain_embed,
-                action_schedule=schedules[name],
+                action_schedule=action_schedule,
+                action_delta_schedule=action_schedule - action_no_control,
                 action_node_map=action_node_map,
                 edge_index=edge_index,
                 storage_indices=storage_idx,
@@ -564,7 +592,9 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
                 "volume_delta_integrated_from_rate_difference": True,
                 "peak_definition": "max_candidate_minus_max_dynamic_internal",
                 "future_graph_message_passing": True,
-                "action_effect_contract": "graph_propagated_action_effect_v1",
+                "action_effect_contract": "explicit_no_control_delta_residual_v2",
+                "action_delta_reference": "no_control",
+                "action_delta_zero_reference_enforced": True,
                 "dt_sec": self.dt_sec,
             },
         }

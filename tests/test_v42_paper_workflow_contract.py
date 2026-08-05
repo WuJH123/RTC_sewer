@@ -161,6 +161,10 @@ def test_multireference_surrogate_rolls_four_branches_and_derives_kpis():
     assert torch.allclose(out["peak_delta"], expected_peak)
     assert out["metadata"]["role"] == "hydraulic_surrogate_not_policy"
     assert out["metadata"]["kpis_derived_from_flooding_rate_trajectory"] is True
+    assert out["metadata"]["action_effect_contract"] == "explicit_no_control_delta_residual_v2"
+    assert out["metadata"]["action_delta_reference"] == "no_control"
+    assert model.dynamics.input_size == model.hidden_dim * 4
+    assert model.action_effect_flood_head[0].in_features == model.hidden_dim * 2
 
 
 def test_multireference_rollout_propagates_action_to_remote_pfv_node():

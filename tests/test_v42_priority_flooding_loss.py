@@ -101,6 +101,22 @@ def test_action_effect_loss_is_zero_for_matching_candidate_reference_deltas() ->
     assert float(losses["action_effect_trajectory"]) == 0.0
 
 
+def test_action_effect_loss_is_scale_invariant_for_small_flooding_rates() -> None:
+    small_target = torch.tensor([[[1.0e-3, 2.0e-3]]])
+    small_pred = small_target * 2.0
+    large_target = small_target * 1000.0
+    large_pred = large_target * 2.0
+    small = HydraulicTrajectoryLoss._normalized_effect_smooth_l1(
+        small_pred, small_target
+    )
+    large = HydraulicTrajectoryLoss._normalized_effect_smooth_l1(
+        large_pred, large_target
+    )
+    assert torch.isfinite(small)
+    assert torch.isfinite(large)
+    assert torch.allclose(small, large, rtol=1.0e-5, atol=1.0e-6)
+
+
 def test_tfv_direction_loss_penalizes_wrong_improvement_direction() -> None:
     branches = {}
     target = {}
