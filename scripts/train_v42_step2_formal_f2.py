@@ -276,7 +276,12 @@ def main() -> int:
         model.train()
         running = 0.0
         seen = 0
-        for idx in _batch_indices(len(train_f), args.batch_size, shuffle=True, seed=args.seed + epoch):
+        for idx in _batch_indices(
+            int(train["history_depth"].shape[0]),
+            args.batch_size,
+            shuffle=True,
+            seed=args.seed + epoch,
+        ):
             batch = _slice(train, idx)
             optimizer.zero_grad(set_to_none=True)
             prediction = _forward(model, batch, graph_tensors, priority, device)
@@ -354,9 +359,9 @@ def main() -> int:
         "best_epoch": best_epoch,
         "seed": args.seed,
         "split_seed": args.split_seed,
-        "train_cases": len(train_f),
-        "validation_cases": len(val_f),
-        "calibration_cases": len(cal_f),
+        "train_cases": int(train["history_depth"].shape[0]),
+        "validation_cases": int(val["history_depth"].shape[0]),
+        "calibration_cases": int(cal["history_depth"].shape[0]),
         "train_rainfall_groups": train_groups,
         "validation_rainfall_groups": val_groups,
         "calibration_rainfall_groups": cal_groups,

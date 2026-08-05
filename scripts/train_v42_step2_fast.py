@@ -337,7 +337,12 @@ def main() -> int:
         model.train()
         running = 0.0
         seen = 0
-        for idx in _batch_indices(len(train_f), args.batch_size, shuffle=True, seed=args.seed + epoch):
+        for idx in _batch_indices(
+            int(train["history_depth"].shape[0]),
+            args.batch_size,
+            shuffle=True,
+            seed=args.seed + epoch,
+        ):
             batch = _slice(train, idx)
             optimizer.zero_grad(set_to_none=True)
             pred = _forward(model, batch, graph_tensors, priority_idx, device)
@@ -379,8 +384,8 @@ def main() -> int:
         "storage_supervised": bool(has_storage),
         "facility_flow_supervised": bool(has_facility),
         "trajectory_first": True,
-        "train_cases": int(len(train_f)),
-        "validation_cases": int(len(val_f)),
+        "train_cases": int(train["history_depth"].shape[0]),
+        "validation_cases": int(val["history_depth"].shape[0]),
         "train_rainfall_groups": train_groups,
         "validation_rainfall_groups": val_groups,
         "model_sha256": model_sha,
