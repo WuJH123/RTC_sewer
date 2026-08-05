@@ -356,7 +356,9 @@ def _run_core_parallel(
     baseline_tasks = [x for x in pending if x["strategy"] != "Proposed"]
     proposed_tasks = [x for x in pending if x["strategy"] == "Proposed"]
     future_map: dict[Any, dict[str, Any]] = {}
-    max_baseline_workers = max(1, min(int(workers), 16, len(baseline_tasks) or 1))
+    # ponytail: four spawned workers avoid Windows PyTorch DLL/pagefile
+    # exhaustion; raise only after a measured RAM-safe benchmark.
+    max_baseline_workers = max(1, min(int(workers), 4, len(baseline_tasks) or 1))
     with ProcessPoolExecutor(max_workers=max_baseline_workers) as baseline_pool, ProcessPoolExecutor(
         max_workers=1
     ) as proposed_pool:
@@ -426,7 +428,7 @@ def main() -> int:
         "--workers",
         type=int,
         default=16,
-        help="maximum concurrent CPU baseline SWMM workers; Proposed remains one GPU worker",
+        help="requested CPU baseline workers (hardware-safe cap=4); Proposed remains one GPU worker",
     )
     ap.add_argument(
         "--strategies",
