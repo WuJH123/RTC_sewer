@@ -79,7 +79,7 @@ def _predict_next_step(
     )
     depth: list[np.ndarray] = []
     flood: list[np.ndarray] = []
-    with torch.no_grad():
+    with torch.inference_mode():
         for model in bundle.step2_models:
             out = model(
                 state_history=torch.as_tensor(

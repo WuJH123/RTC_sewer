@@ -30,7 +30,6 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
-import torch
 
 from sewerrtc.control.action_sequence_generator import generate_action_sequences
 from sewerrtc.control.formal_baselines_f2 import (
@@ -49,7 +48,6 @@ from sewerrtc.control.pfvfirst_mpc_v42 import (
     decide_pfvfirst_mpc,
 )
 from sewerrtc.network.influence_domain import build_priority_influence_domains
-from sewerrtc.models.temporal_sparse_gat_v42 import TemporalSparseGATReconstructorV42
 from sewerrtc.simulation.kpi_metrics import compute_kpis
 from sewerrtc.simulation.pyswmm_runner import (
     _as_float,
@@ -59,11 +57,10 @@ from sewerrtc.simulation.pyswmm_runner import (
     _node_max_depth,
     _observed_action_from_links,
 )
-from sewerrtc.v4.models_v42.hydraulic_multi_reference import MultiReferenceHydraulicSurrogate
 from sewerrtc.v4.v42_fast_e2e import make_causal_rainfall_forecast
 from sewerrtc.v4.v42_node_safety import priority_depth_limits_m
 from sewerrtc.v4.v42_priority_contract import get_pfv_core_node_indices
-from sewerrtc.v4.v42_step1_dataset import _parse_inp_topology, _sensor_layout, load_graph_assets
+from sewerrtc.v4.v42_trajectory_builder import _parse_inp_topology
 
 
 FORMAL_OBJECTIVE_CONTRACT = "PROJECT6_V42_PFV_ONLY_TFV_MIN_MPC_V2"
@@ -320,6 +317,13 @@ def load_actuators(project_root: str | Path) -> pd.DataFrame:
     return frame
 
 
+def _load_baseline_graph_assets(project_root: str | Path) -> dict[str, Any]:
+    """Load only the numpy/pandas graph fields needed by SWMM baselines."""
+    from sewerrtc.v4.v42_trajectory_builder import _load_graph_topology
+
+    return _load_graph_topology(Path(project_root))
+
+
 @lru_cache(maxsize=4)
 def load_model_bundle(
     project_root: str | Path,
@@ -327,6 +331,16 @@ def load_model_bundle(
     *,
     step2_calibration_path: str | Path | None = None,
 ) -> FormalModelBundle:
+    import torch
+
+    from sewerrtc.models.temporal_sparse_gat_v42 import (
+        TemporalSparseGATReconstructorV42,
+    )
+    from sewerrtc.v4.models_v42.hydraulic_multi_reference import (
+        MultiReferenceHydraulicSurrogate,
+    )
+    from sewerrtc.v4.v42_step1_dataset import _sensor_layout, load_graph_assets
+
     root = Path(project_root)
     formal = root / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2"
     graph = load_graph_assets(root)
@@ -609,6 +623,8 @@ def reconstruct_history(
     history.  True-state mode is diagnostic only and uses the last 13 SWMM
     states directly.
     """
+    import torch
+
     if state_source == "true_state":
         if len(frames) < 13:
             raise RuntimeError("true-state diagnostic requires 13 historical frames")
@@ -638,7 +654,7 @@ def reconstruct_history(
             mask[i, j, bundle.sensor_indices] = 1.0
             rainfall[i, j] = float(item["rain"])
             actions[i, j] = np.asarray(item["action"], np.float32)
-    with torch.no_grad():
+    with torch.inference_mode():
         out = bundle.gat(
             sparse_depth_history=torch.as_tensor(sparse, device=bundle.device),
             sensor_mask_history=torch.as_tensor(mask, device=bundle.device),
@@ -773,6 +789,8 @@ def predict_and_decide(
     max_candidate_sequences: int = 64,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """Run ensemble H120 prediction and the canonical PFV-budgeted selector."""
+    import torch
+
     ids = actuators["actuator_id"].astype(str).tolist()
     base = np.asarray(current_action, np.float32)
     generated = generate_action_sequences(
@@ -816,7 +834,7 @@ def predict_and_decide(
     )
     priority = torch.as_tensor(bundle.priority_indices, dtype=torch.long, device=bundle.device)
     predictions: list[dict[str, np.ndarray]] = []
-    with torch.no_grad():
+    with torch.inference_mode():
         for model in bundle.step2_models:
             out = model(
                 state_history=torch.as_tensor(history, device=bundle.device),
@@ -994,11 +1012,14 @@ def run_baseline_event(
 
     root = Path(project_root)
     actuators = load_actuators(root)
-    graph = load_graph_assets(root)
+    graph = _load_baseline_graph_assets(root)
     ids = actuators["actuator_id"].astype(str).tolist()
-    if ids != [str(x) for x in graph.facility_ids]:
+    if ids != [str(x) for x in graph["facility_ids"]]:
         raise RuntimeError("Formal baseline actuator order differs from graph order")
-    priority_nodes = [str(graph.node_ids[i]) for i in get_pfv_core_node_indices(list(graph.node_ids))]
+    priority_nodes = [
+        str(graph["node_ids"][i])
+        for i in get_pfv_core_node_indices(list(graph["node_ids"]))
+    ]
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     detail_path = out_dir / "detail.csv"
@@ -1031,7 +1052,7 @@ def run_baseline_event(
                 initial_hold=initial_hold,
                 node_depth=np.asarray([_as_float(node_objs[n].depth, 0.0) for n in node_ids]),
                 node_full_depth=full_depth,
-                action_node_map=np.asarray(graph.action_node_map, np.float32),
+                action_node_map=np.asarray(graph["action_node_map"], np.float32),
                 binary_indices=binary_indices,
             )
             command = _enforce_actuator_semantics(
@@ -1051,7 +1072,7 @@ def run_baseline_event(
                     initial_hold=initial_hold,
                     node_depth=np.asarray(pre["depth"], np.float32),
                     node_full_depth=full_depth,
-                    action_node_map=np.asarray(graph.action_node_map, np.float32),
+                    action_node_map=np.asarray(graph["action_node_map"], np.float32),
                     binary_indices=binary_indices,
                 )
                 desired = _enforce_actuator_semantics(

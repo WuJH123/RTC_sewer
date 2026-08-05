@@ -26,22 +26,14 @@ from sewerrtc.v4.v42_simple_rtc_contract import (
     apply_simple_rtc_contract,
 )
 
-# Apply the simplified semantics before importing the production entrypoint.
-apply_simple_rtc_contract()
-import scripts.run_v42_formal_production_f2 as production  # noqa: E402
-from sewerrtc.v4.v42_formal_runtime import FormalEventInput  # noqa: E402
-
-# Re-apply after production import in case a legacy module rebound a global.
-apply_simple_rtc_contract()
-
-orchestrator = production.orchestrator
-
 
 DEFAULT_STRATEGIES = ("Proposed", "No-control", "Internal", "Hold")
 
 
 def _load_core_calibration_events(project_root: Path) -> list[FormalEventInput]:
     """Resolve Fresh Calibration12's three branch rows into 12 SWMM events."""
+    from sewerrtc.v4.v42_formal_runtime import FormalEventInput
+
     manifest = (
         project_root
         / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2"
@@ -239,6 +231,8 @@ def _summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _core_worker(task: dict[str, Any]) -> dict[str, Any]:
     """Run one isolated event/strategy; the parent alone writes the ledger."""
+    from sewerrtc.v4.v42_formal_runtime import FormalEventInput
+
     event = FormalEventInput(
         role=str(task["role"]),
         event_id=str(task["event_id"]),
@@ -252,7 +246,10 @@ def _core_worker(task: dict[str, Any]) -> dict[str, Any]:
     output_dir = Path(str(task["output_dir"]))
     try:
         if strategy == "Proposed":
-            result = orchestrator.run_proposed_event(
+            apply_simple_rtc_contract()
+            import scripts.run_v42_formal_production_f2 as production
+
+            result = production.run_proposed_event(
                 event,
                 project_root=project_root,
                 output_dir=output_dir,
@@ -261,7 +258,9 @@ def _core_worker(task: dict[str, Any]) -> dict[str, Any]:
                 max_candidate_sequences=int(task["max_candidate_sequences"]),
             )
         else:
-            result = orchestrator.run_baseline_event(
+            from sewerrtc.v4.v42_formal_runtime_safe import run_baseline_event
+
+            result = run_baseline_event(
                 event,
                 strategy=strategy,
                 project_root=project_root,
@@ -285,6 +284,9 @@ def _run_core_parallel(
     max_candidate_sequences: int,
     workers: int,
 ) -> list[dict[str, Any]]:
+    import scripts.run_v42_formal_production_f2 as production
+
+    orchestrator = production.orchestrator
     events = (
         _load_core_calibration_events(project_root)
         if role == "calibration"
@@ -356,9 +358,9 @@ def _run_core_parallel(
     baseline_tasks = [x for x in pending if x["strategy"] != "Proposed"]
     proposed_tasks = [x for x in pending if x["strategy"] == "Proposed"]
     future_map: dict[Any, dict[str, Any]] = {}
-    # ponytail: four spawned workers avoid Windows PyTorch DLL/pagefile
-    # exhaustion; raise only after a measured RAM-safe benchmark.
-    max_baseline_workers = max(1, min(int(workers), 4, len(baseline_tasks) or 1))
+    # Benchmark result: 8 workers is the best Windows throughput point; 16 was
+    # only 7.9% faster and increased contention without a useful wall-time gain.
+    max_baseline_workers = max(1, min(int(workers), 8, len(baseline_tasks) or 1))
     with ProcessPoolExecutor(max_workers=max_baseline_workers) as baseline_pool, ProcessPoolExecutor(
         max_workers=1
     ) as proposed_pool:
@@ -427,8 +429,8 @@ def main() -> int:
     ap.add_argument(
         "--workers",
         type=int,
-        default=16,
-        help="requested CPU baseline workers (hardware-safe cap=4); Proposed remains one GPU worker",
+        default=8,
+        help="CPU baseline workers (measured cap=8); Proposed remains one GPU worker",
     )
     ap.add_argument(
         "--strategies",
@@ -439,6 +441,10 @@ def main() -> int:
     args = ap.parse_args()
 
     root = args.project_root.resolve()
+    apply_simple_rtc_contract()
+    import scripts.run_v42_formal_production_f2 as production
+
+    orchestrator = production.orchestrator
     strategies = [
         item.strip() for item in str(args.strategies).split(",") if item.strip()
     ]

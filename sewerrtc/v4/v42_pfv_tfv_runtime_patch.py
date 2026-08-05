@@ -238,7 +238,7 @@ def predict_and_decide(
     )
 
     predictions: list[dict[str, np.ndarray]] = []
-    with torch.no_grad():
+    with torch.inference_mode():
         for model in bundle.step2_models:
             out = model(
                 state_history=torch.as_tensor(history, device=bundle.device),
