@@ -31,6 +31,49 @@ from sewerrtc.v4.v42_simple_rtc_contract import (
 DEFAULT_STRATEGIES = ("Proposed", "No-control", "Internal", "Hold")
 
 
+def _preflight_core_step2_contract(project_root: Path) -> None:
+    """Reject stale Step2 bundles before any baseline SWMM worker starts."""
+    formal = (
+        project_root
+        / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2/step2"
+    )
+    causal = formal / "models_action_causal_controlaware_v2"
+    preferred = formal / "models_action_diffusion_v1"
+    legacy = formal / "models"
+    model_root = (
+        causal
+        if all(
+            (causal / f"seed_{seed}" / "formal_step2_report.json").exists()
+            for seed in (17, 42, 73)
+        )
+        else (
+            preferred
+            if all(
+                (preferred / f"seed_{seed}" / "formal_step2_report.json").exists()
+                for seed in (17, 42, 73)
+            )
+            else legacy
+        )
+    )
+    expected = "causal_current_native_rule_readback_persistence"
+    failures: list[str] = []
+    for seed in (17, 42, 73):
+        report_path = model_root / f"seed_{seed}" / "formal_step2_report.json"
+        if not report_path.exists():
+            failures.append(f"missing:{report_path}")
+            continue
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        if report.get("dynamic_internal_action_input_contract") != expected:
+            failures.append(f"seed_{seed}:dynamic_internal_action_input_contract")
+        if report.get("future_dynamic_internal_action_input_used") is not False:
+            failures.append(f"seed_{seed}:future_dynamic_internal_action_input_used")
+    if failures:
+        raise RuntimeError(
+            "Core RTC preflight rejected stale/non-causal Step2 bundle; "
+            "no SWMM workers were started: " + ", ".join(failures)
+        )
+
+
 def _load_core_calibration_events(project_root: Path) -> list[FormalEventInput]:
     """Resolve Fresh Calibration12's three branch rows into 12 SWMM events."""
     from sewerrtc.v4.v42_formal_runtime import FormalEventInput
@@ -572,6 +615,7 @@ def main() -> int:
     args = ap.parse_args()
 
     root = args.project_root.resolve()
+    _preflight_core_step2_contract(root)
     apply_simple_rtc_contract()
     import scripts.run_v42_formal_production_f2 as production
 

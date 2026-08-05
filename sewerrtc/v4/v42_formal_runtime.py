@@ -373,12 +373,23 @@ def load_model_bundle(
     )
     gat.eval()
 
+    causal_model_root = formal / "step2/models_action_causal_controlaware_v2"
     preferred_model_root = formal / "step2/models_action_diffusion_v1"
     legacy_model_root = formal / "step2/models"
     model_root = (
-        preferred_model_root
-        if all((preferred_model_root / f"seed_{seed}" / "formal_step2_report.json").exists() for seed in (17, 42, 73))
-        else legacy_model_root
+        causal_model_root
+        if all(
+            (causal_model_root / f"seed_{seed}" / "formal_step2_report.json").exists()
+            for seed in (17, 42, 73)
+        )
+        else (
+            preferred_model_root
+            if all(
+                (preferred_model_root / f"seed_{seed}" / "formal_step2_report.json").exists()
+                for seed in (17, 42, 73)
+            )
+            else legacy_model_root
+        )
     )
     step2_models: list[MultiReferenceHydraulicSurrogate] = []
     step2_reports: list[dict[str, Any]] = []
@@ -389,6 +400,17 @@ def load_model_bundle(
             raise RuntimeError(
                 "Formal Step2 checkpoint uses the endpoint-only action map; "
                 "retrain with the action-influence map before Core RTC"
+            )
+        # Core RTC supplies only the checkpoint native-rule readback persisted
+        # through H12.  Old reports without this provenance used future action
+        # schedules and must fail closed before SWMM execution.
+        if report.get("dynamic_internal_action_input_contract") != (
+            "causal_current_native_rule_readback_persistence"
+        ) or report.get("future_dynamic_internal_action_input_used") is not False:
+            raise RuntimeError(
+                "Formal Step2 checkpoint is not compatible with the causal "
+                "Dynamic-Internal input contract; retrain before Core RTC: "
+                f"{model_dir}"
             )
         step2_reports.append(report)
         model = MultiReferenceHydraulicSurrogate(
