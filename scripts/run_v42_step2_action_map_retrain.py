@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -32,6 +33,7 @@ def main() -> int:
     status_path = args.output_root / "ACTION_MAP_RETRAIN_STATUS.json"
     status = {
         "status": "running",
+        "pid": os.getpid(),
         "started_at": time.time(),
         "current_seed": None,
         "completed_seeds": [],
