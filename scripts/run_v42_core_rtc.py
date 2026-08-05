@@ -248,6 +248,12 @@ def _core_worker(task: dict[str, Any]) -> dict[str, Any]:
     try:
         if strategy == "Proposed":
             apply_simple_rtc_contract()
+            # The Proposed worker is GPU-bound.  Keep PyTorch's CPU thread
+            # pool from competing with the 16 independent SWMM workers.
+            import torch
+
+            if str(task["device"]).lower() in {"auto", "cuda"} and torch.cuda.is_available():
+                torch.set_num_threads(1)
             import scripts.run_v42_formal_production_f2 as production
 
             result = production.run_proposed_event(
