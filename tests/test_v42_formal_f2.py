@@ -17,6 +17,7 @@ from sewerrtc.v4.formal_f2 import (
     source_acceptance_mask,
     split_overlap_matrix,
 )
+from sewerrtc.v4.v42_formal_runtime import load_formal_event_inputs
 
 
 def _accepted(event: str, rain: str, state: str, action: str) -> dict:
@@ -30,6 +31,34 @@ def _accepted(event: str, rain: str, state: str, action: str) -> dict:
     for col in ACCEPTANCE_GATE_COLUMNS:
         row[col] = True
     return row
+
+
+def test_formal_calibration_loader_uses_event_manifest_not_case_rows(tmp_path: Path) -> None:
+    formal = tmp_path / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2"
+    inputs = formal / "evaluation_inputs"
+    plan_dir = formal / "evaluation_plan"
+    inputs.mkdir(parents=True)
+    plan_dir.mkdir(parents=True)
+    inp = tmp_path / "calibration.inp"
+    inp.write_text("[TITLE]\ncalibration\n", encoding="utf-8")
+    event = {
+        "event_id": "cal-1",
+        "rainfall_sha256": "rain-1",
+        "inp_path": str(inp),
+        "rain_duration_min": 120,
+        "simulation_duration_min": 240,
+    }
+    pd.DataFrame([event]).to_csv(inputs / "calibration_event_input_manifest.csv", index=False)
+    pd.DataFrame([event, event]).to_csv(inputs / "calibration_case_manifest.csv", index=False)
+    (plan_dir / "calibration_plan.json").write_text(
+        json.dumps({"events": [{"event_id": "cal-1", "rainfall_sha256": "rain-1"}]}),
+        encoding="utf-8",
+    )
+
+    loaded = load_formal_event_inputs(tmp_path, role="calibration")
+
+    assert len(loaded) == 1
+    assert loaded[0].event_id == "cal-1"
 
 
 def test_formal_f2_group_splits_are_rainfall_isolated() -> None:

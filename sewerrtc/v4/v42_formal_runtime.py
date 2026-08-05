@@ -236,15 +236,26 @@ def load_formal_event_inputs(
 ) -> list[FormalEventInput]:
     """Resolve one frozen held-out role to local authoritative INP files.
 
-    ``evaluation_inputs/<role>_case_manifest.csv`` is a deployment manifest,
-    not a scientific selector.  Its rainfall/event identities must equal the
-    already-frozen plan.  Required columns are ``event_id``, ``rainfall_sha256``,
-    ``inp_path``, ``rain_duration_min`` and ``simulation_duration_min``.
+    The event-input manifest is a deployment manifest, not a scientific
+    selector.  Its rainfall/event identities must equal the already-frozen
+    plan.  Calibration also has a case-level manifest with one row per
+    candidate/checkpoint; that manifest is intentionally not used here.
+    Required columns are ``event_id``, ``rainfall_sha256``, ``inp_path``,
+    ``rain_duration_min`` and ``simulation_duration_min``.
     """
     root = Path(project_root)
     formal = root / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2"
     plan_path = Path(evaluation_plan) if evaluation_plan else formal / "evaluation_plan" / f"{role}_plan.json"
-    manifest_path = Path(input_manifest) if input_manifest else formal / "evaluation_inputs" / f"{role}_case_manifest.csv"
+    if input_manifest:
+        manifest_path = Path(input_manifest)
+    elif role == "calibration":
+        # The case manifest has repeated event identities (one row per
+        # candidate/checkpoint).  Production execution is event-level and
+        # must consume the explicit 12-row deployment manifest instead of
+        # silently deduplicating candidate rows.
+        manifest_path = formal / "evaluation_inputs" / "calibration_event_input_manifest.csv"
+    else:
+        manifest_path = formal / "evaluation_inputs" / f"{role}_case_manifest.csv"
     if not plan_path.exists():
         raise FileNotFoundError(plan_path)
     if not manifest_path.exists():
