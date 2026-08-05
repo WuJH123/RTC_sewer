@@ -26,6 +26,8 @@ def main() -> int:
     ap.add_argument("--manifest", type=Path, required=True)
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--states", type=int, default=10)
+    ap.add_argument("--model-root", type=Path)
+    ap.add_argument("--seeds", nargs="+", type=int, default=[17, 42, 73])
     args = ap.parse_args()
 
     frame = read_table(args.manifest)
@@ -48,12 +50,12 @@ def main() -> int:
     batch = {key: value.to(device) for key, value in _tensorise(selected).items()}
 
     predictions = []
-    for seed in (17, 42, 73):
-        model_path = (
-            args.project_root
-            / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2"
-            / f"step2/models/seed_{seed}/best_model.pt"
-        )
+    model_root = args.model_root or (
+        args.project_root
+        / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2/step2/models"
+    )
+    for seed in args.seeds:
+        model_path = model_root / f"seed_{seed}/best_model.pt"
         model = MultiReferenceHydraulicSurrogate(
             n_nodes=int(graph["n_nodes"]),
             n_facilities=int(graph["n_facilities"]),
@@ -100,6 +102,10 @@ def main() -> int:
                 ),
             }
         )
+    label_pfv_median = float(np.median([x["label_pfv_std_m3"] for x in rows]))
+    predicted_pfv_median = float(
+        np.median([x["predicted_pfv_range_m3"] for x in rows])
+    )
     result = {
         "audit_id": "V42_STEP2_ACTION_SENSITIVITY_V1",
         "read_only": True,
@@ -110,14 +116,17 @@ def main() -> int:
         "states_audited": len(rows),
         "rows_audited": int(len(selected)),
         "state_rows": rows,
-        "median_label_pfv_std_m3": float(np.median([x["label_pfv_std_m3"] for x in rows])),
+        "median_label_pfv_std_m3": label_pfv_median,
         "median_label_tfv_std_m3": float(np.median([x["label_tfv_std_m3"] for x in rows])),
-        "median_predicted_pfv_range_m3": float(np.median([x["predicted_pfv_range_m3"] for x in rows])),
+        "median_predicted_pfv_range_m3": predicted_pfv_median,
+        "predicted_to_label_pfv_sensitivity_ratio": predicted_pfv_median
+        / max(label_pfv_median, 1.0e-12),
         "median_predicted_tfv_range_m3": float(np.median([x["predicted_tfv_range_m3"] for x in rows])),
         "model_hashes": {str(item["seed"]): item["model_sha256"] for item in predictions},
         "interpretation": (
-            "candidate actions reach the model, but PFV action sensitivity is collapsed "
-            "when predicted PFV range is zero while labels vary"
+            "candidate actions reach the model, but PFV action sensitivity remains "
+            "collapsed when predicted PFV variation is orders of magnitude below "
+            "within-state labels"
         ),
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
