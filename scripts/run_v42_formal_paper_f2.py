@@ -723,7 +723,7 @@ def main() -> int:
         elif stage == "exact":
             stage_exact(project_root, args.device, args.max_candidate_sequences)
         elif stage == "surrogate":
-            stage_surrogate()
+            stage_surrogate(project_root, args.device, args.max_candidate_sequences)
         elif stage == "gat":
             stage_gat(project_root, args.device, args.max_candidate_sequences)
         elif stage == "lock":
