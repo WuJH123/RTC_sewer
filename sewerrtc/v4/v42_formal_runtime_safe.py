@@ -302,6 +302,11 @@ def run_proposed_event(
         current_action = _observed_action_from_links(link_objs, ids, actuators)
         command = shadow_initial.copy()
         _write_and_verify_target(link_objs, ids, command)
+        initial = _frame(sim, node_objs, rain_obj, link_objs, ids, actuators)
+        if abs(float(initial["elapsed_min"])) <= 1.0e-6:
+            # Preserve the real t=0 frame so the first t=120 decision has the
+            # complete causal t-120..t plant history.
+            frames.append(initial)
         for _ in sim:
             pre = _frame(sim, node_objs, rain_obj, link_objs, ids, actuators)
             frames.append(pre)
