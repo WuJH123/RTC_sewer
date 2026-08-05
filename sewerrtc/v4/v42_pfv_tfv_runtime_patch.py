@@ -236,18 +236,28 @@ def predict_and_decide(
     priority = torch.as_tensor(
         bundle.priority_indices, dtype=torch.long, device=bundle.device
     )
+    # Transfer each shared input once per decision, not once per ensemble
+    # member.  The tensors are small enough to remain resident for the three
+    # forward passes and this removes repeated CPU->GPU copies.
+    state_history_tensor = torch.as_tensor(history, device=bundle.device)
+    historical_actions_tensor = torch.as_tensor(hist_actions, device=bundle.device)
+    rainfall_tensor = torch.as_tensor(rain, device=bundle.device)
+    candidate_tensor = torch.as_tensor(candidate, device=bundle.device)
+    no_control_tensor = torch.as_tensor(nc, device=bundle.device)
+    internal_tensor = torch.as_tensor(internal, device=bundle.device)
+    hold_tensor = torch.as_tensor(hold, device=bundle.device)
 
     predictions: list[dict[str, np.ndarray]] = []
     with torch.inference_mode():
         for model in bundle.step2_models:
             out = model(
-                state_history=torch.as_tensor(history, device=bundle.device),
-                historical_actions=torch.as_tensor(hist_actions, device=bundle.device),
-                rainfall_forecast=torch.as_tensor(rain, device=bundle.device),
-                action_candidate=torch.as_tensor(candidate, device=bundle.device),
-                action_no_control=torch.as_tensor(nc, device=bundle.device),
-                action_dynamic_internal=torch.as_tensor(internal, device=bundle.device),
-                action_hold_previous=torch.as_tensor(hold, device=bundle.device),
+                state_history=state_history_tensor,
+                historical_actions=historical_actions_tensor,
+                rainfall_forecast=rainfall_tensor,
+                action_candidate=candidate_tensor,
+                action_no_control=no_control_tensor,
+                action_dynamic_internal=internal_tensor,
+                action_hold_previous=hold_tensor,
                 edge_index=bundle.edge_index,
                 node_static=bundle.node_static,
                 action_node_map=bundle.action_node_map,

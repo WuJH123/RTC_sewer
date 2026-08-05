@@ -358,9 +358,10 @@ def _run_core_parallel(
     baseline_tasks = [x for x in pending if x["strategy"] != "Proposed"]
     proposed_tasks = [x for x in pending if x["strategy"] == "Proposed"]
     future_map: dict[Any, dict[str, Any]] = {}
-    # Benchmark result: 8 workers is the best Windows throughput point; 16 was
-    # only 7.9% faster and increased contention without a useful wall-time gain.
-    max_baseline_workers = max(1, min(int(workers), 8, len(baseline_tasks) or 1))
+    # The 16-job SWMM benchmark completed with zero failures and was 7.9%
+    # faster than 8 workers on this machine.  Keep the user-selectable cap at
+    # 16 so the full Core run can use the available CPU when enough tasks exist.
+    max_baseline_workers = max(1, min(int(workers), 16, len(baseline_tasks) or 1))
     with ProcessPoolExecutor(max_workers=max_baseline_workers) as baseline_pool, ProcessPoolExecutor(
         max_workers=1
     ) as proposed_pool:
@@ -429,8 +430,8 @@ def main() -> int:
     ap.add_argument(
         "--workers",
         type=int,
-        default=8,
-        help="CPU baseline workers (measured cap=8); Proposed remains one GPU worker",
+        default=16,
+        help="CPU baseline workers (measured safe cap=16); Proposed remains one GPU worker",
     )
     ap.add_argument(
         "--strategies",

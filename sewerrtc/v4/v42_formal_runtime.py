@@ -305,6 +305,7 @@ def load_formal_event_inputs(
     return sorted(result, key=lambda x: (x.rainfall_sha256, x.event_id))
 
 
+@lru_cache(maxsize=4)
 def load_actuators(project_root: str | Path) -> pd.DataFrame:
     root = Path(project_root)
     path = root / "outputs/audit_v8_storage_variablepump/actuator_table.csv"
@@ -317,6 +318,7 @@ def load_actuators(project_root: str | Path) -> pd.DataFrame:
     return frame
 
 
+@lru_cache(maxsize=4)
 def _load_baseline_graph_assets(project_root: str | Path) -> dict[str, Any]:
     """Load only the numpy/pandas graph fields needed by SWMM baselines."""
     from sewerrtc.v4.v42_trajectory_builder import _load_graph_topology
@@ -760,8 +762,9 @@ def project_candidate_sequence(
     return seq.astype(np.float32), engineering, k_count, executable
 
 
-def _uncertainty_normalizers(bundle: FormalModelBundle) -> tuple[float, float, float]:
-    manifest_path = Path(str(bundle.step2_calibration.get("calibration_manifest", "")))
+@lru_cache(maxsize=4)
+def _uncertainty_normalizers(manifest_path_value: str) -> tuple[float, float, float]:
+    manifest_path = Path(manifest_path_value)
     if not manifest_path.exists():
         raise FileNotFoundError(
             "Step2 calibration manifest is required to reconstruct the frozen uncertainty-score normalization"
@@ -867,7 +870,9 @@ def predict_and_decide(
     z = float(bundle.step2_calibration.get("confidence_z", np.nan))
     if not np.isfinite(z):
         raise RuntimeError("Formal Step2 calibration confidence_z is not finite")
-    scales = _uncertainty_normalizers(bundle)
+    scales = _uncertainty_normalizers(
+        str(bundle.step2_calibration.get("calibration_manifest", ""))
+    )
     # V2 uses uncertainty only for the one-sided PFV UCB. TFV/Peak uncertainty
     # remains available as diagnostic output but cannot reject or rank actions.
     uncertainty_score = np.abs(std["pfv_delta"] / scales[0])
