@@ -85,7 +85,10 @@ def _tensorise(frame: pd.DataFrame) -> dict[str, torch.Tensor]:
         "peak_delta": torch.as_tensor(frame["peak_delta"].to_numpy(np.float32)),
     }
     for branch in BRANCHES:
-        data[f"action_{branch}"] = _stack(frame, f"action_{branch}_readback")
+        action_column = f"action_{branch}_readback"
+        if branch == "dynamic_internal" and "action_dynamic_internal_input_readback" in frame:
+            action_column = "action_dynamic_internal_input_readback"
+        data[f"action_{branch}"] = _stack(frame, action_column)
         data[f"depth_{branch}"] = _stack(frame, f"trajectory_depth_{branch}")
         data[f"flood_{branch}"] = _stack(frame, f"trajectory_flood_{branch}")
 

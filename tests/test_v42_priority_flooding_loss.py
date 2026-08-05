@@ -1,11 +1,42 @@
 from __future__ import annotations
 
+import json
+
+import numpy as np
+import pandas as pd
 import torch
 
 from sewerrtc.v4.models_v42.hydraulic_trajectory_losses import (
     HydraulicLossWeights,
     HydraulicTrajectoryLoss,
 )
+
+
+def test_step2_dynamic_internal_input_is_causal(tmp_path) -> None:
+    from scripts.train_v42_step2_formal_f2 import _add_causal_dynamic_internal_input
+
+    detail = tmp_path / "dynamic_internal.csv"
+    columns = ["elapsed_min", *[f"setting:{i}" for i in range(36)]]
+    rows = [[120.0, *([0.25] * 36)], [130.0, *([0.75] * 36)]]
+    pd.DataFrame(rows, columns=columns).to_csv(detail, index=False)
+    future = np.repeat(np.asarray([[0.75] * 36], dtype=np.float32), 12, axis=0)
+    frame = pd.DataFrame(
+        {
+            "source_detail_path_dynamic_internal": [str(detail)],
+            "checkpoint_min": [120.0],
+            "action_dynamic_internal_readback": [json.dumps(future.tolist())],
+        }
+    )
+    repaired = _add_causal_dynamic_internal_input(frame, tmp_path)
+    actual = np.asarray(
+        json.loads(repaired.iloc[0]["action_dynamic_internal_input_readback"]),
+        dtype=np.float32,
+    )
+    expected = np.repeat(np.asarray([[0.25] * 36], dtype=np.float32), 12, axis=0)
+    np.testing.assert_array_equal(actual, expected)
+    assert repaired.iloc[0]["dynamic_internal_action_input_contract"] == (
+        "causal_current_native_rule_readback_persistence"
+    )
 
 
 def test_priority_flooding_weight_targets_selected_nodes() -> None:
@@ -68,3 +99,72 @@ def test_action_effect_loss_is_zero_for_matching_candidate_reference_deltas() ->
     )
     losses = loss_fn(pred, target)
     assert float(losses["action_effect_trajectory"]) == 0.0
+
+
+def test_tfv_direction_loss_penalizes_wrong_improvement_direction() -> None:
+    branches = {}
+    target = {}
+    for name in HydraulicTrajectoryLoss.BRANCHES:
+        value = torch.zeros(2, 1, 2)
+        branches[name] = {"node_depth": value, "node_flooding_rate": value}
+        target[f"trajectory_depth_{name}"] = value.clone()
+        target[f"trajectory_flood_{name}"] = value.clone()
+    target.update(
+        {
+            "pfv_delta": torch.zeros(2),
+            "tfv_delta": torch.tensor([-100.0, 100.0]),
+            "peak_delta": torch.zeros(2),
+        }
+    )
+    wrong = {
+        "branches": branches,
+        "pfv_delta": torch.zeros(2),
+        "tfv_delta": torch.tensor([100.0, 100.0]),
+        "peak_delta": torch.zeros(2),
+    }
+    right = dict(wrong)
+    right["tfv_delta"] = torch.tensor([-100.0, 100.0])
+    loss_fn = HydraulicTrajectoryLoss(
+        HydraulicLossWeights(tfv_direction=1.0),
+        require_storage_targets=False,
+        require_facility_flow_targets=False,
+        require_outfall_flow_targets=False,
+    )
+    assert float(loss_fn(wrong, target)["tfv_direction"]) > float(
+        loss_fn(right, target)["tfv_direction"]
+    )
+
+
+def test_tfv_ranking_loss_prefers_true_within_state_order() -> None:
+    branches = {}
+    target = {}
+    for name in HydraulicTrajectoryLoss.BRANCHES:
+        value = torch.zeros(3, 1, 2)
+        branches[name] = {"node_depth": value, "node_flooding_rate": value}
+        target[f"trajectory_depth_{name}"] = value.clone()
+        target[f"trajectory_flood_{name}"] = value.clone()
+    target.update(
+        {
+            "pfv_delta": torch.zeros(3),
+            "tfv_delta": torch.tensor([-100.0, 0.0, 100.0]),
+            "peak_delta": torch.zeros(3),
+            "_state_index": torch.zeros(3, dtype=torch.long),
+        }
+    )
+    wrong = {
+        "branches": branches,
+        "pfv_delta": torch.zeros(3),
+        "tfv_delta": torch.tensor([100.0, 0.0, -100.0]),
+        "peak_delta": torch.zeros(3),
+    }
+    right = dict(wrong)
+    right["tfv_delta"] = torch.tensor([-100.0, 0.0, 100.0])
+    loss_fn = HydraulicTrajectoryLoss(
+        HydraulicLossWeights(tfv_ranking=1.0),
+        require_storage_targets=False,
+        require_facility_flow_targets=False,
+        require_outfall_flow_targets=False,
+    )
+    assert float(loss_fn(wrong, target)["tfv_ranking"]) > float(
+        loss_fn(right, target)["tfv_ranking"]
+    )

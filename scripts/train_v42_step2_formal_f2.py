@@ -23,6 +23,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import torch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -107,6 +108,87 @@ def _selection_key(validation: dict, metric: str) -> tuple[float, ...]:
     raise ValueError(f"unsupported Step2 selection metric: {metric}")
 
 
+def _grouped_state_batches(frame, batch_size: int, seed: int) -> list[np.ndarray]:
+    """Keep same-state candidates together for the optional ranking loss."""
+    groups = list(frame.groupby(frame["state_key"].astype(str), sort=True).groups.values())
+    rng = np.random.RandomState(seed)
+    rng.shuffle(groups)
+    batches: list[np.ndarray] = []
+    current: list[int] = []
+    for positions in groups:
+        values = np.asarray(list(positions), dtype=int)
+        for start in range(0, len(values), batch_size):
+            chunk = values[start : start + batch_size]
+            if current and len(current) + len(chunk) > batch_size:
+                batches.append(np.asarray(current, dtype=int))
+                current = []
+            current.extend(chunk.tolist())
+            if len(current) == batch_size:
+                batches.append(np.asarray(current, dtype=int))
+                current = []
+    if current:
+        batches.append(np.asarray(current, dtype=int))
+    return batches
+
+
+def _add_causal_dynamic_internal_input(
+    frame: pd.DataFrame, project_root: Path
+) -> pd.DataFrame:
+    """Replace future native-rule actions with the action known at checkpoint.
+
+    The future dynamic-internal trajectory remains a training target.  Only
+    the model input is changed to the causal online contract used by runtime:
+    current native-rule readback persisted through H12.
+    """
+    required = {"source_detail_path_dynamic_internal", "checkpoint_min"}
+    missing = sorted(required.difference(frame.columns))
+    if missing:
+        raise RuntimeError(
+            "causal Dynamic-Internal input requires source detail lineage: "
+            + ", ".join(missing)
+        )
+    out = frame.copy()
+    cache: dict[tuple[str, float], str] = {}
+    for (raw_path, raw_checkpoint), rows in out.groupby(
+        ["source_detail_path_dynamic_internal", "checkpoint_min"], sort=False
+    ):
+        path = Path(str(raw_path))
+        if not path.is_absolute():
+            path = project_root / path
+        key = (str(path.resolve()), float(raw_checkpoint))
+        if key not in cache:
+            with path.open("r", encoding="utf-8-sig", errors="replace") as handle:
+                header = handle.readline().rstrip("\r\n").split(",")
+            setting_columns = [
+                column for column in header if column.casefold().startswith("setting:")
+            ]
+            if len(setting_columns) != 36:
+                raise RuntimeError(
+                    f"{path}: expected 36 setting columns, got {len(setting_columns)}"
+                )
+            detail = pd.read_csv(path, usecols=["elapsed_min", *setting_columns])
+            elapsed = pd.to_numeric(detail["elapsed_min"], errors="coerce").to_numpy(
+                np.float64
+            )
+            matches = np.flatnonzero(
+                np.isclose(elapsed, float(raw_checkpoint), atol=1.0e-8, rtol=0.0)
+            )
+            if len(matches) != 1:
+                raise RuntimeError(
+                    f"{path}: checkpoint {raw_checkpoint} has {len(matches)} exact rows"
+                )
+            current = detail.iloc[int(matches[0])][setting_columns].to_numpy(np.float32)
+            if not np.isfinite(current).all():
+                raise RuntimeError(f"{path}: non-finite current native-rule action")
+            sequence = np.repeat(current[None, :], 12, axis=0)
+            cache[key] = json.dumps(sequence.tolist(), allow_nan=False, separators=(",", ":"))
+        out.loc[rows.index, "action_dynamic_internal_input_readback"] = cache[key]
+    out["dynamic_internal_action_input_contract"] = (
+        "causal_current_native_rule_readback_persistence"
+    )
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--project-root", type=Path, default=PROJECT_ROOT)
@@ -142,6 +224,18 @@ def main() -> int:
         help="optional weight for candidate-vs-reference flooding effect supervision",
     )
     ap.add_argument(
+        "--tfv-direction-weight",
+        type=float,
+        default=0.0,
+        help="optional class-balanced loss weight for the sign of derived TFV delta",
+    )
+    ap.add_argument(
+        "--tfv-ranking-weight",
+        type=float,
+        default=0.0,
+        help="optional same-state pairwise ranking loss weight for derived TFV delta",
+    )
+    ap.add_argument(
         "--selection-metric",
         choices=("loss", "control"),
         default="loss",
@@ -163,10 +257,15 @@ def main() -> int:
         raise ValueError("--priority-flooding-weight must be finite and non-negative")
     if args.action_effect_weight < 0.0 or not np.isfinite(args.action_effect_weight):
         raise ValueError("--action-effect-weight must be finite and non-negative")
+    if args.tfv_direction_weight < 0.0 or not np.isfinite(args.tfv_direction_weight):
+        raise ValueError("--tfv-direction-weight must be finite and non-negative")
+    if args.tfv_ranking_weight < 0.0 or not np.isfinite(args.tfv_ranking_weight):
+        raise ValueError("--tfv-ranking-weight must be finite and non-negative")
 
     frame = read_table(args.manifest)
     if frame.empty:
         raise ValueError("formal Step2 target manifest is empty")
+    frame = _add_causal_dynamic_internal_input(frame, args.project_root)
     for column in (
         "training_admission_authorized",
         "raw_independent_oracle_all_pass",
@@ -177,6 +276,7 @@ def main() -> int:
     for column, expected in {
         "state_source": "gat_sparse_reconstruction",
         "history_input_contract": "gat_compatible_causal_state",
+        "dynamic_internal_action_input_contract": "causal_current_native_rule_readback_persistence",
         "reconstructor_contract": "formal_temporal_v42",
         "reconstructed_history_contract": "PROJECT6_V42_CAUSAL_RECONSTRUCTED_HISTORY_V1",
     }.items():
@@ -210,9 +310,24 @@ def main() -> int:
     train_f, val_f, cal_f, train_groups, val_groups, cal_groups = _split(
         frame, args.split_seed, args.min_train_groups
     )
+    state_codes = {
+        state: i for i, state in enumerate(sorted(frame["state_key"].astype(str).unique()))
+    }
     train = _tensorise(train_f)
     val = _tensorise(val_f)
     cal = _tensorise(cal_f)
+    train["_state_index"] = torch.as_tensor(
+        [state_codes[str(x)] for x in train_f["state_key"]], dtype=torch.long
+    )
+    grouped_batch_plan = None
+    if args.tfv_ranking_weight > 0.0:
+        train_for_batches = train_f.reset_index(drop=True)
+        grouped_batch_plan = {
+            epoch: _grouped_state_batches(
+                train_for_batches, args.batch_size, args.seed + epoch
+            )
+            for epoch in range(1, args.epochs + 1)
+        }
     del frame, train_f, val_f, cal_f
     gc.collect()
 
@@ -259,6 +374,8 @@ def main() -> int:
             kpi_consistency=args.kpi_consistency_weight,
             priority_flooding=args.priority_flooding_weight,
             action_effect=args.action_effect_weight,
+            tfv_direction=args.tfv_direction_weight,
+            tfv_ranking=args.tfv_ranking_weight,
         ),
         require_storage_targets=True,
         require_facility_flow_targets=True,
@@ -276,16 +393,23 @@ def main() -> int:
         model.train()
         running = 0.0
         seen = 0
-        for idx in _batch_indices(
-            int(train["history_depth"].shape[0]),
-            args.batch_size,
-            shuffle=True,
-            seed=args.seed + epoch,
-        ):
+        batches = (
+            grouped_batch_plan[epoch]
+            if args.tfv_ranking_weight > 0.0
+            else _batch_indices(
+                int(train["history_depth"].shape[0]),
+                args.batch_size,
+                shuffle=True,
+                seed=args.seed + epoch,
+            )
+        )
+        for idx in batches:
             batch = _slice(train, idx)
             optimizer.zero_grad(set_to_none=True)
             prediction = _forward(model, batch, graph_tensors, priority, device)
             target = _targets(batch, device)
+            if args.tfv_ranking_weight > 0.0:
+                target["_state_index"] = batch["_state_index"].to(device)
             losses = loss_fn(prediction, target)
             loss = loss_fn.total(losses)
             loss.backward()
@@ -339,6 +463,8 @@ def main() -> int:
         "raw_independent_oracle_all_pass": True,
         "action_authority": "actual_readback_setting",
         "history_input_contract": "gat_compatible_causal_state",
+        "dynamic_internal_action_input_contract": "causal_current_native_rule_readback_persistence",
+        "future_dynamic_internal_action_input_used": False,
         "rainfall_group_isolated_split": True,
         "formal_target_domain_only": True,
         "step2_target_contract": args.target_contract,
@@ -356,6 +482,8 @@ def main() -> int:
         "kpi_consistency_weight": args.kpi_consistency_weight,
         "priority_flooding_weight": args.priority_flooding_weight,
         "action_effect_weight": args.action_effect_weight,
+        "tfv_direction_weight": args.tfv_direction_weight,
+        "tfv_ranking_weight": args.tfv_ranking_weight,
         "best_epoch": best_epoch,
         "seed": args.seed,
         "split_seed": args.split_seed,
