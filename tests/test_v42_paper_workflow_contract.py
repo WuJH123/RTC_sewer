@@ -163,6 +163,44 @@ def test_multireference_surrogate_rolls_four_branches_and_derives_kpis():
     assert out["metadata"]["kpis_derived_from_flooding_rate_trajectory"] is True
 
 
+def test_multireference_rollout_propagates_action_to_remote_pfv_node():
+    torch.manual_seed(4)
+    model = MultiReferenceHydraulicSurrogate(
+        n_nodes=5,
+        n_facilities=1,
+        state_feature_dim=1,
+        static_feature_dim=2,
+        hidden_dim=8,
+        gat_heads=2,
+        gat_layers=1,
+        horizon=6,
+        dt_sec=600.0,
+        dropout=0.0,
+    )
+    edge_index = torch.tensor(
+        [[0, 1, 1, 2, 2, 3, 3, 4], [1, 0, 2, 1, 3, 2, 4, 3]],
+        dtype=torch.long,
+    )
+    common = dict(
+        state_history=torch.rand(1, 13, 5),
+        historical_actions=torch.rand(1, 13, 1),
+        rainfall_forecast=torch.rand(1, 6),
+        action_no_control=torch.ones(1, 6, 1),
+        action_dynamic_internal=torch.ones(1, 6, 1),
+        action_hold_previous=torch.ones(1, 6, 1),
+        edge_index=edge_index,
+        node_static=torch.rand(5, 2),
+        action_node_map=torch.tensor([[1.0, 0.0, 0.0, 0.0, 0.0]]),
+        priority_node_indices=torch.tensor([2]),
+    )
+    with torch.no_grad():
+        out = model(action_candidate=torch.zeros(1, 6, 1), **common)
+    candidate = out["branches"]["candidate"]["node_flooding_rate"][:, :, 2]
+    no_control = out["branches"]["no_control"]["node_flooding_rate"][:, :, 2]
+    assert float((candidate - no_control).abs().max()) > 1.0e-6
+    assert out["metadata"]["future_graph_message_passing"] is True
+
+
 def _engineering(ok: bool = True) -> EngineeringStatus:
     return EngineeringStatus(ok, ok, ok, ok, ok)
 

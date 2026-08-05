@@ -246,6 +246,25 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
             hidden_dim=hidden_dim,
             horizon=horizon,
         )
+        # Action effects must propagate through the frozen hydraulic graph
+        # during the forecast, not only at the two facility endpoint nodes.
+        # Without this layer, PFV nodes outside an actuator's direct incidence
+        # receive no candidate-action signal in the node-wise rollout.
+        per_head = max(4, hidden_dim // gat_heads)
+        rollout_dim = per_head * gat_heads
+        self.rollout_gat = GATConv(
+            hidden_dim,
+            per_head,
+            heads=gat_heads,
+            dropout=dropout,
+            add_self_loops=True,
+        )
+        self.rollout_norm = nn.LayerNorm(rollout_dim)
+        self.rollout_skip = (
+            nn.Identity()
+            if rollout_dim == hidden_dim
+            else nn.Linear(hidden_dim, rollout_dim, bias=False)
+        )
         self.state_to_hidden = nn.Linear(state_dim, hidden_dim)
         self.dynamics = nn.GRUCell(hidden_dim * 3, hidden_dim)
 
@@ -282,6 +301,7 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
         rain_embed: torch.Tensor,
         action_schedule: torch.Tensor,
         action_node_map: torch.Tensor,
+        edge_index: torch.Tensor,
         storage_indices: torch.Tensor,
         outfall_indices: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
@@ -297,6 +317,7 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
         action_embed = self.action_encoder(
             action_schedule, action_node_map
         )
+        batched_edge_index = _batch_edge_index(edge_index, B, N)
         h = self.state_to_hidden(initial_state).reshape(
             B * N, self.hidden_dim
         )
@@ -312,7 +333,12 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
                 .reshape(B * N, -1)
             )
             act_k = action_embed[:, k, :, :].reshape(B * N, -1)
-            inp = torch.cat([h, rain_k, act_k], dim=-1)
+            action_conditioned = h + act_k
+            propagated = self.rollout_gat(action_conditioned, batched_edge_index)
+            h_context = self.rollout_norm(
+                propagated + self.rollout_skip(action_conditioned)
+            ).relu()
+            inp = torch.cat([h_context, rain_k, act_k], dim=-1)
             h = self.dynamics(inp, h)
             hidden_node = h.reshape(B, N, self.hidden_dim)
             hidden_steps.append(hidden_node)
@@ -477,6 +503,7 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
                 rain_embed=rain_embed,
                 action_schedule=schedules[name],
                 action_node_map=action_node_map,
+                edge_index=edge_index,
                 storage_indices=storage_idx,
                 outfall_indices=outfall_idx,
             )
@@ -536,6 +563,8 @@ class MultiReferenceHydraulicSurrogate(nn.Module):
                 "kpis_derived_from_flooding_rate_trajectory": True,
                 "volume_delta_integrated_from_rate_difference": True,
                 "peak_definition": "max_candidate_minus_max_dynamic_internal",
+                "future_graph_message_passing": True,
+                "action_effect_contract": "graph_propagated_action_effect_v1",
                 "dt_sec": self.dt_sec,
             },
         }
