@@ -180,8 +180,13 @@ def main() -> int:
         choices=("CONTROL_CORE", "FULL_HYDRAULIC"),
         default="CONTROL_CORE",
     )
-    ap.add_argument("--step1-cache-dir", type=Path, default=None)
-    ap.add_argument("--step1-num-workers", type=int, default=0)
+    ap.add_argument(
+        "--step1-cache-dir",
+        type=Path,
+        default=PROJECT_ROOT
+        / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2/cache/step1_projected",
+    )
+    ap.add_argument("--step1-num-workers", type=int, default=3)
     ap.add_argument(
         "--step1-persistent-workers",
         action=argparse.BooleanOptionalAction,
