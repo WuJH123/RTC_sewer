@@ -256,6 +256,7 @@ def _core_worker(task: dict[str, Any]) -> dict[str, Any]:
                 state_source="gat_sparse_reconstruction",
                 device=str(task["device"]),
                 max_candidate_sequences=int(task["max_candidate_sequences"]),
+                internal_shadow_detail_path=task.get("internal_shadow_detail_path"),
             )
         else:
             from sewerrtc.v4.v42_formal_runtime_safe import run_baseline_event
@@ -335,6 +336,8 @@ def _run_core_parallel(
                     / state_source
                 ),
             }
+            if strategy == "Internal":
+                task["detail_path"] = str(Path(str(task["output_dir"])) / "detail.csv")
             if orchestrator._ledger_reusable(
                 event=event,
                 role=role,
@@ -357,57 +360,76 @@ def _run_core_parallel(
         return results
     baseline_tasks = [x for x in pending if x["strategy"] != "Proposed"]
     proposed_tasks = [x for x in pending if x["strategy"] == "Proposed"]
-    future_map: dict[Any, dict[str, Any]] = {}
+    failures: list[str] = []
+    internal_shadow_paths: dict[str, str] = {}
+
+    def consume(future: Any, task: dict[str, Any]) -> None:
+        payload = future.result()
+        status = str(payload.get("status", "fail"))
+        result = payload.get("result") if status == "pass" else None
+        detail = Path(str(payload.get("detail_path", task["output_dir"] + "/detail.csv")))
+        error = "" if status == "pass" else str(payload.get("error", "worker failed"))
+        row = {
+            "role": role,
+            "event_id": task["event_id"],
+            "rainfall_sha256": task["rainfall_sha256"],
+            "strategy": task["strategy"],
+            "state_source": task["state_source"],
+            "status": status,
+            "input_sha256": "",
+            "model_sha256": task["model_sha256"],
+            "policy_sha256": task["policy_sha256"],
+            "detail_path": str(detail),
+            "detail_sha256": orchestrator.sha256_file(detail) if detail.exists() else "",
+            "runtime_sec": float(result.get("runtime_sec", 0.0)) if result else 0.0,
+            "authority": "authoritative_swmm",
+            "error": error,
+        }
+        row["input_sha256"] = orchestrator.sha256_file(Path(str(task["inp_path"])))
+        orchestrator.append_csv(orchestrator.LEDGER, row)
+        if status != "pass" or not isinstance(result, dict):
+            failures.append(f"{task['event_id']} {task['strategy']}: {error or 'missing result'}")
+            return
+        if task["strategy"] == "Internal":
+            internal_shadow_paths[task["event_id"]] = str(detail)
+        if task["strategy"] in {"No-control", "All-close"}:
+            orchestrator._validate_explicit_baseline(project_root, result, task["strategy"])
+        results.append(result)
+        print(
+            f"[CORE] PASS role={role} event={task['event_id']} strategy={task['strategy']}",
+            flush=True,
+        )
+
     # The 16-job SWMM benchmark completed with zero failures and was 7.9%
-    # faster than 8 workers on this machine.  Keep the user-selectable cap at
-    # 16 so the full Core run can use the available CPU when enough tasks exist.
+    # faster than 8 workers on this machine. Keep the user-selectable cap at
+    # 16. Complete baselines first so Proposed can reuse each event's exact
+    # Internal detail as its causal shadow instead of running duplicate SWMM.
     max_baseline_workers = max(1, min(int(workers), 16, len(baseline_tasks) or 1))
-    with ProcessPoolExecutor(max_workers=max_baseline_workers) as baseline_pool, ProcessPoolExecutor(
-        max_workers=1
-    ) as proposed_pool:
+    with ProcessPoolExecutor(max_workers=max_baseline_workers) as baseline_pool:
+        future_map = {}
         for task in baseline_tasks:
             future_map[baseline_pool.submit(_core_worker, task)] = task
-        for task in proposed_tasks:
-            future_map[proposed_pool.submit(_core_worker, task)] = task
-        failures: list[str] = []
         for future in as_completed(future_map):
-            task = future_map[future]
-            payload = future.result()
-            status = str(payload.get("status", "fail"))
-            result = payload.get("result") if status == "pass" else None
-            detail = Path(str(payload.get("detail_path", task["output_dir"] + "/detail.csv")))
-            error = "" if status == "pass" else str(payload.get("error", "worker failed"))
-            row = {
-                "role": role,
-                "event_id": task["event_id"],
-                "rainfall_sha256": task["rainfall_sha256"],
-                "strategy": task["strategy"],
-                "state_source": task["state_source"],
-                "status": status,
-                "input_sha256": "",
-                "model_sha256": task["model_sha256"],
-                "policy_sha256": task["policy_sha256"],
-                "detail_path": str(detail),
-                "detail_sha256": orchestrator.sha256_file(detail) if detail.exists() else "",
-                "runtime_sec": float(result.get("runtime_sec", 0.0)) if result else 0.0,
-                "authority": "authoritative_swmm",
-                "error": error,
-            }
-            # Resolve the event input hash without retaining a second event map.
-            row["input_sha256"] = orchestrator.sha256_file(Path(str(task["inp_path"])))
-            orchestrator.append_csv(orchestrator.LEDGER, row)
-            if status != "pass" or not isinstance(result, dict):
-                failures.append(
-                    f"{task['event_id']} {task['strategy']}: {error or 'missing result'}"
-                )
-                continue
-            if task["strategy"] in {"No-control", "All-close"}:
-                orchestrator._validate_explicit_baseline(project_root, result, task["strategy"])
-            results.append(result)
-            print(
-                f"[CORE] PASS role={role} event={task['event_id']} strategy={task['strategy']}",
-                flush=True,
+            consume(future, future_map[future])
+
+    for task in proposed_tasks:
+        shadow = internal_shadow_paths.get(task["event_id"])
+        if shadow is None:
+            # Covers an already-reusable Internal row, without retaining a
+            # second event/task index in the parent.
+            shadow = str(
+                Path(task["output_dir"]).parent.parent
+                / "Internal"
+                / "swmm_native_or_rule_baseline"
+                / "detail.csv"
             )
+        if Path(shadow).exists():
+            task["internal_shadow_detail_path"] = shadow
+
+    with ProcessPoolExecutor(max_workers=1) as proposed_pool:
+        future_map = {proposed_pool.submit(_core_worker, task): task for task in proposed_tasks}
+        for future in as_completed(future_map):
+            consume(future, future_map[future])
     if failures:
         raise RuntimeError("core RTC worker failure: " + failures[0])
     return results

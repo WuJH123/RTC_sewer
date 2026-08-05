@@ -237,6 +237,7 @@ def run_proposed_event(
     device: str = "auto",
     max_candidate_sequences: int = 64,
     step2_calibration_path: str | Path | None = None,
+    internal_shadow_detail_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Run rule-free Proposed plant plus causal native-rule Internal shadow."""
     from pyswmm import Links, Nodes, RainGages, Simulation
@@ -266,12 +267,20 @@ def run_proposed_event(
     # native Internal shadow to completion first, then expose only its current
     # readback row while the rule-free Proposed plant advances.
     shadow_dir = out_dir / "_internal_shadow"
-    shadow_result = _run_baseline_event(
-        event,
-        strategy="Internal",
-        project_root=root,
-        output_dir=shadow_dir,
-    )
+    if internal_shadow_detail_path is None:
+        shadow_result = _run_baseline_event(
+            event,
+            strategy="Internal",
+            project_root=root,
+            output_dir=shadow_dir,
+        )
+        shadow_reused = False
+    else:
+        shadow_path = Path(internal_shadow_detail_path)
+        if not shadow_path.exists():
+            raise FileNotFoundError(f"reusable Internal shadow detail not found: {shadow_path}")
+        shadow_result = {"detail_path": str(shadow_path), "strategy": "Internal"}
+        shadow_reused = True
     shadow = pd.read_csv(shadow_result["detail_path"], low_memory=False)
     shadow_setting_cols = [f"setting:{aid}" for aid in ids]
     missing_shadow = [c for c in shadow_setting_cols if c not in shadow.columns]
@@ -445,6 +454,7 @@ def run_proposed_event(
         "internal_shadow_native_controls_preserved": True,
         "internal_shadow_future_state_used_online": False,
         "internal_shadow_detail_path": str(shadow_result["detail_path"]),
+        "internal_shadow_reused": shadow_reused,
         "target_write_verified_count": target_write_verified_count,
         "target_write_all_decisions_verified": bool(
             decisions and target_write_verified_count == len(decisions)

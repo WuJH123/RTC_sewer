@@ -169,6 +169,7 @@ class FormalModelBundle:
     priority_depth_limits: np.ndarray
     edge_index: torch.Tensor
     node_static: torch.Tensor
+    link_static: torch.Tensor
     action_node_map: torch.Tensor
     surrogate_action_node_map: torch.Tensor
     fallback_contract_sha256: str
@@ -469,6 +470,7 @@ def load_model_bundle(
         priority_depth_limits=np.asarray(limits, dtype=np.float64),
         edge_index=torch.as_tensor(graph.edge_index, dtype=torch.long, device=device),
         node_static=torch.as_tensor(graph.node_static, dtype=torch.float32, device=device),
+        link_static=torch.as_tensor(graph.link_static, dtype=torch.float32, device=device),
         action_node_map=torch.as_tensor(
             graph.action_node_map, dtype=torch.float32, device=device
         ),
@@ -685,12 +687,8 @@ def reconstruct_history(
             sensor_mask_history=torch.as_tensor(mask, device=bundle.device),
             rainfall_history=torch.as_tensor(rainfall, device=bundle.device),
             historical_actions=torch.as_tensor(actions, device=bundle.device),
-            node_static=torch.as_tensor(
-                bundle.graph.node_static, dtype=torch.float32, device=bundle.device
-            ),
-            link_static=torch.as_tensor(
-                bundle.graph.link_static, dtype=torch.float32, device=bundle.device
-            ),
+            node_static=bundle.node_static,
+            link_static=bundle.link_static,
             edge_index=bundle.edge_index,
             action_node_map=bundle.action_node_map,
         )
@@ -858,18 +856,27 @@ def predict_and_decide(
     rain = np.repeat(
         np.asarray(rainfall_forecast, np.float32)[None, :HORIZON_STEPS], n, axis=0
     )
+    # Create the batch tensors once per decision. Recreating the same H120
+    # inputs for each ensemble member adds needless CPU->GPU copies.
+    state_history_t = torch.as_tensor(history, device=bundle.device)
+    historical_actions_t = torch.as_tensor(hist_actions, device=bundle.device)
+    rainfall_t = torch.as_tensor(rain, device=bundle.device)
+    candidate_t = torch.as_tensor(candidate, device=bundle.device)
+    no_control_t = torch.as_tensor(nc, device=bundle.device)
+    internal_t = torch.as_tensor(internal, device=bundle.device)
+    hold_t = torch.as_tensor(hold, device=bundle.device)
     priority = torch.as_tensor(bundle.priority_indices, dtype=torch.long, device=bundle.device)
     predictions: list[dict[str, np.ndarray]] = []
     with torch.inference_mode():
         for model in bundle.step2_models:
             out = model(
-                state_history=torch.as_tensor(history, device=bundle.device),
-                historical_actions=torch.as_tensor(hist_actions, device=bundle.device),
-                rainfall_forecast=torch.as_tensor(rain, device=bundle.device),
-                action_candidate=torch.as_tensor(candidate, device=bundle.device),
-                action_no_control=torch.as_tensor(nc, device=bundle.device),
-                action_dynamic_internal=torch.as_tensor(internal, device=bundle.device),
-                action_hold_previous=torch.as_tensor(hold, device=bundle.device),
+                state_history=state_history_t,
+                historical_actions=historical_actions_t,
+                rainfall_forecast=rainfall_t,
+                action_candidate=candidate_t,
+                action_no_control=no_control_t,
+                action_dynamic_internal=internal_t,
+                action_hold_previous=hold_t,
                 edge_index=bundle.edge_index,
                 node_static=bundle.node_static,
                 action_node_map=bundle.surrogate_action_node_map,
