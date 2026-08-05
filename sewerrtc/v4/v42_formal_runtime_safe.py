@@ -302,6 +302,13 @@ def run_proposed_event(
         current_action = _observed_action_from_links(link_objs, ids, actuators)
         command = shadow_initial.copy()
         _write_and_verify_target(link_objs, ids, command)
+        # PySWMM's iterator yields its first post-step row at t=5 min.  Keep
+        # the actual t=0 plant state so the first decision at t=120 has the
+        # required 25 frames (t-120..t), rather than 24.
+        initial_frame = _frame(sim, node_objs, rain_obj, link_objs, ids, actuators)
+        if abs(float(initial_frame["elapsed_min"])) > 1.0e-6:
+            raise RuntimeError("Formal plant did not expose a t=0 causal frame")
+        frames.append(initial_frame)
         for _ in sim:
             pre = _frame(sim, node_objs, rain_obj, link_objs, ids, actuators)
             frames.append(pre)
