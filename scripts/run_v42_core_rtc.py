@@ -287,6 +287,7 @@ def _run_core_parallel(
     workers: int,
     event_limit: int | None = None,
     pipeline_proposed: bool = True,
+    proposed_workers: int = 1,
 ) -> list[dict[str, Any]]:
     import scripts.run_v42_formal_production_f2 as production
 
@@ -435,9 +436,11 @@ def _run_core_parallel(
     baseline_started = time.perf_counter()
     proposed_started: float | None = None
 
-    # Keep one GPU process.  It persists across events, so the model bundle
-    # remains cached in that process while CPU SWMM workers continue.
-    with ProcessPoolExecutor(max_workers=1) as proposed_pool:
+    # Keep the GPU worker count bounded: each process owns a full GAT+ensemble
+    # bundle.  Two is the only supported upper bound on the 8 GB card; callers
+    # can benchmark it without changing the default one-process behavior.
+    proposed_worker_count = max(1, min(int(proposed_workers), 2, len(proposed_tasks) or 1))
+    with ProcessPoolExecutor(max_workers=proposed_worker_count) as proposed_pool:
         def submit_proposed(task: dict[str, Any]) -> None:
             nonlocal proposed_started
             event_id = str(task["event_id"])
@@ -451,7 +454,7 @@ def _run_core_parallel(
             if proposed_started is None:
                 proposed_started = time.perf_counter()
                 print(
-                    f"[CORE] Proposed GPU pipeline started workers=1 event={event_id}",
+                    f"[CORE] Proposed GPU pipeline started workers={proposed_worker_count} event={event_id}",
                     flush=True,
                 )
 
@@ -554,6 +557,12 @@ def main() -> int:
         default=True,
         help="overlap one persistent GPU Proposed worker with CPU SWMM baselines",
     )
+    ap.add_argument(
+        "--proposed-workers",
+        type=int,
+        default=1,
+        help="bounded GPU Proposed workers (1 default; 2 is the safe benchmark cap on 8 GB VRAM)",
+    )
     args = ap.parse_args()
 
     root = args.project_root.resolve()
@@ -599,6 +608,7 @@ def main() -> int:
         workers=max(1, min(int(args.workers), 16)),
         event_limit=args.event_limit,
         pipeline_proposed=bool(args.pipeline_proposed),
+        proposed_workers=max(1, min(int(args.proposed_workers), 2)),
     )
     evidence = _summarize(results)
     evidence["role"] = args.role
