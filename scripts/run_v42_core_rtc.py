@@ -307,8 +307,11 @@ def _core_worker(task: dict[str, Any]) -> dict[str, Any]:
     strategy = str(task["strategy"])
     output_dir = Path(str(task["output_dir"]))
     try:
+        # Windows ProcessPool workers spawn fresh interpreters; the parent's
+        # in-process Simple Core patch is not inherited by baseline workers.
+        # Apply it before importing any runtime function in every worker.
+        apply_simple_rtc_contract()
         if strategy == "Proposed":
-            apply_simple_rtc_contract()
             # The Proposed worker is GPU-bound.  Keep PyTorch's CPU thread
             # pool from competing with the 16 independent SWMM workers.
             import torch
