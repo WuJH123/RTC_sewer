@@ -1016,7 +1016,27 @@ def predict_and_decide(
     }
 
 
-def _node_full_depths(node_ids: list[str], node_objs: Mapping[str, Any]) -> np.ndarray:
+def _node_full_depths(
+    node_ids: list[str],
+    node_objs: Mapping[str, Any],
+    *,
+    inp_path: str | Path | None = None,
+) -> np.ndarray:
+    """Return deterministic physical capacities for filling-degree baselines.
+
+    PySWMM versions do not expose the same node capacity attribute set.  The
+    frozen INP is the authority when available; live attributes are only the
+    compatibility fallback for callers without an INP path.
+    """
+    if inp_path is not None:
+        parsed_nodes, _ = _parse_inp_topology(Path(inp_path))
+        parsed = {
+            str(row.node_id): float(row.max_depth)
+            for row in parsed_nodes.itertuples(index=False)
+            if np.isfinite(float(row.max_depth)) and float(row.max_depth) > 1.0e-6
+        }
+        if all(str(node_id) in parsed for node_id in node_ids):
+            return np.asarray([parsed[str(node_id)] for node_id in node_ids], dtype=np.float32)
     return np.asarray([_node_max_depth(node_objs[n]) for n in node_ids], dtype=np.float32)
 
 
@@ -1098,7 +1118,7 @@ def run_baseline_event(
         current = _observed_action_from_links(link_objs, ids, actuators)
         initial_hold = current.copy()
         binary_indices = [ids.index(x) for x in ("ADD301.2", "ADD301.3") if x in ids]
-        full_depth = _node_full_depths(node_ids, node_objs)
+        full_depth = _node_full_depths(node_ids, node_objs, inp_path=event.inp_path)
         command = current.copy()
         # Force explicit non-native Formal baselines before the first hydraulic
         # advance. Internal alone leaves the frozen SWMM rule engine untouched.
