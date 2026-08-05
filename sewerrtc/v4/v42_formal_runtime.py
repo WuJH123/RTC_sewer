@@ -377,11 +377,16 @@ def load_model_bundle(
     step1_calibration = _read_json(
         formal / "calibration/STEP1_UNCERTAINTY_OOD_CALIBRATION.json"
     )
-    calibration_path = (
-        formal / "calibration/PFV_ONLY_SAFETY_CALIBRATION.json"
-        if step2_calibration_path is None
-        else Path(step2_calibration_path)
-    )
+    if step2_calibration_path is None:
+        calibration_path = formal / "calibration/PFV_ONLY_SAFETY_CALIBRATION.json"
+        if not calibration_path.exists():
+            # Current simple-core runs reuse the frozen Fresh Calibration12
+            # artifact when the legacy Formal path is absent.
+            fresh_path = formal / "pfv_only_v2/FRESH_PFV_ONLY_SAFETY_CALIBRATION.json"
+            if fresh_path.exists():
+                calibration_path = fresh_path
+    else:
+        calibration_path = Path(step2_calibration_path)
     step2_calibration = _read_json(calibration_path)
     if step2_calibration_path is not None and (
         step2_calibration.get("development_only") is not True

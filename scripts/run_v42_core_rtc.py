@@ -97,17 +97,6 @@ def _load_core_calibration_events(project_root: Path) -> list[FormalEventInput]:
     return sorted(events, key=lambda event: (event.rainfall_sha256, event.event_id))
 
 
-def _fresh_pfv_calibration_path(project_root: Path) -> Path:
-    path = (
-        project_root
-        / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2"
-        / "pfv_only_v2/FRESH_PFV_ONLY_SAFETY_CALIBRATION.json"
-    )
-    if not path.exists():
-        raise FileNotFoundError(path)
-    return path
-
-
 def _event_map(results: list[dict[str, Any]]) -> dict[str, dict[str, dict[str, Any]]]:
     out: dict[str, dict[str, dict[str, Any]]] = {}
     for result in results:
@@ -286,14 +275,6 @@ def main() -> int:
     # The Fresh Calibration case manifest has one row per candidate branch;
     # core RTC needs one authoritative SWMM input per event.
     orchestrator.load_formal_event_inputs = _load_core_events
-    legacy_proposed = orchestrator.run_proposed_event
-
-    def _run_core_proposed(*args, **kwargs):
-        kwargs.setdefault("step2_calibration_path", _fresh_pfv_calibration_path(root))
-        return legacy_proposed(*args, **kwargs)
-
-    orchestrator.run_proposed_event = _run_core_proposed
-
     # Set runner roots exactly as the Formal orchestrator expects, but do not
     # invoke the legacy Stage18 engineering gate or candidate-lineage blocker.
     orchestrator.OUTPUT_ROOT = root / "outputs/project6_dual_reference_v4/final_v4"
