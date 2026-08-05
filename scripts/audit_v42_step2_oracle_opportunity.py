@@ -33,7 +33,13 @@ def _arr(value: object) -> np.ndarray:
     return np.asarray(json.loads(str(value)), dtype=np.float64)
 
 
-def _model_predictions(frame: pd.DataFrame, root: Path, model_root: Path, seed: int, batch_size: int) -> tuple[np.ndarray, np.ndarray, str]:
+def _model_predictions(
+    frame: pd.DataFrame,
+    root: Path,
+    model_root: Path,
+    seeds: list[int],
+    batch_size: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, str]]:
     graph = _load_graph_topology(root)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     action_map = build_surrogate_action_node_map(graph).astype(np.float32)
@@ -48,34 +54,45 @@ def _model_predictions(frame: pd.DataFrame, root: Path, model_root: Path, seed: 
         get_pfv_core_node_indices(list(graph["node_ids"])), dtype=torch.long, device=device
     )
     tensor_data = _tensorise(frame)
-    model = MultiReferenceHydraulicSurrogate(
-        n_nodes=int(graph["n_nodes"]),
-        n_facilities=int(graph["n_facilities"]),
-        state_feature_dim=1,
-        static_feature_dim=int(graph["node_static"].shape[1]),
-        hidden_dim=64,
-        gat_heads=4,
-        gat_layers=3,
-        horizon=12,
-    ).to(device)
-    path = model_root / f"seed_{seed}" / "best_model.pt"
-    if not path.exists():
-        path = model_root / "best_model.pt"
-    model.load_state_dict(torch.load(path, map_location=device, weights_only=True))
-    model.eval()
-    pfv, tfv = [], []
-    with torch.inference_mode():
-        for start in range(0, len(frame), batch_size):
-            idx = torch.arange(start, min(start + batch_size, len(frame)), dtype=torch.long)
-            batch = {key: value.index_select(0, idx) for key, value in tensor_data.items()}
-            out = _forward(model, batch, graph_tensors, priority, device)
-            pfv.append(out["pfv_delta"].detach().cpu().numpy())
-            tfv.append(out["tfv_delta"].detach().cpu().numpy())
-    digest = _hash_model(model)
-    del model
+    pfv_by_seed, tfv_by_seed, nc_by_seed, hashes = [], [], [], {}
+    for seed in seeds:
+        model = MultiReferenceHydraulicSurrogate(
+            n_nodes=int(graph["n_nodes"]),
+            n_facilities=int(graph["n_facilities"]),
+            state_feature_dim=1,
+            static_feature_dim=int(graph["node_static"].shape[1]),
+            hidden_dim=64,
+            gat_heads=4,
+            gat_layers=3,
+            horizon=12,
+        ).to(device)
+        path = model_root / f"seed_{seed}" / "best_model.pt"
+        if not path.exists():
+            path = model_root / "best_model.pt"
+        model.load_state_dict(torch.load(path, map_location=device, weights_only=True))
+        model.eval()
+        pfv, tfv, nc = [], [], []
+        with torch.inference_mode():
+            for start in range(0, len(frame), batch_size):
+                idx = torch.arange(start, min(start + batch_size, len(frame)), dtype=torch.long)
+                batch = {key: value.index_select(0, idx) for key, value in tensor_data.items()}
+                out = _forward(model, batch, graph_tensors, priority, device)
+                pfv.append(out["pfv_delta"].detach().cpu().numpy())
+                tfv.append(out["tfv_delta"].detach().cpu().numpy())
+                nc.append(out["kpi_no_control"]["pfv_m3"].detach().cpu().numpy())
+        pfv_by_seed.append(np.concatenate(pfv))
+        tfv_by_seed.append(np.concatenate(tfv))
+        nc_by_seed.append(np.concatenate(nc))
+        hashes[str(seed)] = _hash_model(model)
+        del model
     if device.type == "cuda":
         torch.cuda.empty_cache()
-    return np.concatenate(pfv), np.concatenate(tfv), digest
+    return (
+        np.stack(pfv_by_seed),
+        np.stack(tfv_by_seed),
+        np.stack(nc_by_seed),
+        hashes,
+    )
 
 
 def main() -> int:
@@ -85,6 +102,8 @@ def main() -> int:
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--model-root", type=Path)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--seeds", type=int, nargs="+")
+    ap.add_argument("--calibration", type=Path)
     ap.add_argument("--batch-size", type=int, default=8)
     args = ap.parse_args()
 
@@ -112,15 +131,46 @@ def main() -> int:
     frame["actual_safe"] = actual_safe
     frame["actual_nonhold"] = nonhold
 
-    predicted_pfv = predicted_tfv = None
-    model_hash = None
+    predicted_pfv = predicted_tfv = predicted_nc = predicted_ucb = None
+    predicted_budget_mean = predicted_budget_std = None
+    predicted_mean_safe_count = None
+    model_hashes = None
+    calibration = None
     if args.model_root:
-        predicted_pfv, predicted_tfv, model_hash = _model_predictions(
-            frame, args.project_root, args.model_root, args.seed, args.batch_size
+        seeds = args.seeds or [args.seed]
+        predicted_pfv, predicted_tfv, predicted_nc, model_hashes = _model_predictions(
+            frame, args.project_root, args.model_root, seeds, args.batch_size
         )
-        frame["predicted_pfv_delta_m3"] = predicted_pfv
-        frame["predicted_tfv_delta_m3"] = predicted_tfv
-        frame["predicted_safe"] = np.isfinite(predicted_pfv) & (predicted_pfv <= budget)
+        predicted_pfv_mean = predicted_pfv.mean(axis=0)
+        predicted_tfv_mean = predicted_tfv.mean(axis=0)
+        predicted_nc_mean = predicted_nc.mean(axis=0)
+        predicted_budget_mean = predicted_pfv_mean - 0.05 * np.maximum(predicted_nc_mean, 0.0)
+        predicted_mean_safe_count = int(np.sum(np.isfinite(predicted_budget_mean) & (predicted_budget_mean <= 100.0)))
+        if args.calibration:
+            calibration = json.loads(args.calibration.read_text(encoding="utf-8"))
+            expected = {str(k): str(v) for k, v in calibration.get("model_hashes", {}).items()}
+            if expected != model_hashes:
+                raise RuntimeError(
+                    "model/calibration SHA mismatch; refusing to apply PFV UCB: "
+                    f"expected={expected} actual={model_hashes}"
+                )
+            if predicted_pfv.shape[0] < 2:
+                raise RuntimeError("PFV UCB requires at least two matched model seeds")
+            predicted_budget_std = (
+                predicted_pfv - 0.05 * np.maximum(predicted_nc, 0.0)
+            ).std(axis=0, ddof=1)
+            predicted_ucb = predicted_budget_mean + float(calibration["confidence_z"]) * predicted_budget_std
+            predicted_safe = np.isfinite(predicted_ucb) & (predicted_ucb <= 100.0)
+        else:
+            predicted_budget_std = np.zeros(len(frame), dtype=float)
+            predicted_safe = np.isfinite(predicted_pfv_mean) & (predicted_pfv_mean <= budget)
+        frame["predicted_pfv_delta_m3"] = predicted_pfv_mean
+        frame["predicted_tfv_delta_m3"] = predicted_tfv_mean
+        frame["predicted_pfv_budget_mean_m3"] = predicted_budget_mean
+        frame["predicted_pfv_budget_std_m3"] = predicted_budget_std
+        if predicted_ucb is not None:
+            frame["predicted_pfv_budget_ucb_m3"] = predicted_ucb
+        frame["predicted_safe"] = predicted_safe
 
     rows = []
     selected_rows = []
@@ -133,10 +183,10 @@ def main() -> int:
         oracle_tfv = float(np.min(actual_tfv[oracle_idx])) if len(oracle_idx) else None
         selected_idx = None
         if predicted_pfv is not None:
-            pred_safe = np.isfinite(predicted_pfv[indices]) & (predicted_pfv[indices] <= budget[indices])
+            pred_safe = np.asarray(frame.loc[indices, "predicted_safe"], dtype=bool)
             if pred_safe.any():
                 local = np.flatnonzero(pred_safe)
-                selected_idx = int(indices[local[np.argmin(predicted_tfv[indices[local]])]])
+                selected_idx = int(indices[local[np.argmin(frame.loc[indices[local], "predicted_tfv_delta_m3"].to_numpy())]])
         selected_actual_tfv = float(actual_tfv[selected_idx]) if selected_idx is not None else None
         selected_actual_pfv = float(actual_pfv[selected_idx]) if selected_idx is not None else None
         regret = selected_actual_tfv - oracle_tfv if selected_actual_tfv is not None and oracle_tfv is not None else None
@@ -162,8 +212,9 @@ def main() -> int:
             "actual_safe_tfv_improving_count": int(safe_improving.sum()),
             "oracle_best_tfv_delta_m3": oracle_tfv,
             "oracle_tfv_gain_m3": -oracle_tfv if oracle_tfv is not None else None,
-            "predicted_safe_count": int(np.sum(predicted_pfv[indices] <= budget[indices])) if predicted_pfv is not None else None,
+            "predicted_safe_count": int(np.sum(frame.loc[indices, "predicted_safe"])) if predicted_pfv is not None else None,
             "predicted_selection_available": selected_idx is not None,
+            "predicted_ucb_used": predicted_ucb is not None,
             "selected_actual_safe": bool(actual_safe[selected_idx]) if selected_idx is not None else None,
             "selected_actual_tfv_delta_m3": selected_actual_tfv,
             "selection_regret_m3": regret,
@@ -197,8 +248,24 @@ def main() -> int:
         "positive_oracle_gain_states": len(positive_oracle_gains),
         "mean_positive_oracle_gain_m3": float(np.mean(positive_oracle_gains)) if positive_oracle_gains else None,
         "median_positive_oracle_gain_m3": float(np.median(positive_oracle_gains)) if positive_oracle_gains else None,
-        "model_seed": args.seed if predicted_pfv is not None else None,
-        "model_sha256": model_hash,
+        "model_seeds": (args.seeds or [args.seed]) if predicted_pfv is not None else None,
+        "model_hashes": model_hashes,
+        "calibration": str(args.calibration) if args.calibration else None,
+        "calibration_model_hash_match": bool(calibration is not None and model_hashes == {str(k): str(v) for k, v in calibration.get("model_hashes", {}).items()}) if calibration else None,
+        "calibration_confidence_z": float(calibration["confidence_z"]) if calibration else None,
+        "predicted_mean_safe_count": predicted_mean_safe_count,
+        "predicted_budget_mean_quantiles_m3": (
+            [float(x) for x in np.quantile(predicted_budget_mean, [0.0, 0.5, 0.9, 1.0])]
+            if predicted_budget_mean is not None else None
+        ),
+        "predicted_budget_std_quantiles_m3": (
+            [float(x) for x in np.quantile(predicted_budget_std, [0.0, 0.5, 0.9, 1.0])]
+            if predicted_budget_std is not None else None
+        ),
+        "predicted_ucb_quantiles_m3": (
+            [float(x) for x in np.quantile(predicted_ucb, [0.0, 0.5, 0.9, 1.0])]
+            if predicted_ucb is not None else None
+        ),
         "predicted_selection_states": int(sum(item["predicted_selection_available"] for item in rows)),
         "predicted_selection_actual_safe_states": int(sum(item["selected_actual_safe"] is True for item in rows)),
         "predicted_selection_false_safe_rate": (
