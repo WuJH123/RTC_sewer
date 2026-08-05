@@ -22,6 +22,7 @@ class HydraulicLossWeights:
     kpi_consistency: float = 0.2
     priority_flooding: float = 0.0
     action_effect: float = 0.0
+    pfv_ranking: float = 0.0
     tfv_direction: float = 0.0
     tfv_ranking: float = 0.0
 
@@ -87,6 +88,38 @@ class HydraulicTrajectoryLoss(nn.Module):
     @staticmethod
     def _target_key(branch: str, quantity: str) -> str:
         return f"trajectory_{quantity}_{HydraulicTrajectoryLoss.TARGET_PREFIX[branch]}"
+
+    @staticmethod
+    def _pairwise_rank_loss(
+        prediction: torch.Tensor,
+        target: torch.Tensor,
+        group_id: torch.Tensor | None,
+    ) -> torch.Tensor:
+        if group_id is None:
+            return prediction.sum() * 0.0
+        terms: list[torch.Tensor] = []
+        for group in torch.unique(group_id.reshape(-1)):
+            idx = torch.nonzero(group_id.reshape(-1) == group, as_tuple=False).reshape(-1)
+            if idx.numel() < 2:
+                continue
+            target_group = target.reshape(-1).index_select(0, idx)
+            prediction_group = prediction.reshape(-1).index_select(0, idx)
+            scale = target_group.detach().abs().median().clamp_min(1.0)
+            target_diff = target_group[None, :] - target_group[:, None]
+            prediction_diff = prediction_group[None, :] - prediction_group[:, None]
+            upper = torch.triu(
+                torch.ones_like(target_diff, dtype=torch.bool), diagonal=1
+            )
+            informative = upper & (target_diff.abs() > 1.0e-6)
+            if bool(informative.any()):
+                margin = (
+                    target_diff[informative].sign()
+                    * prediction_diff[informative]
+                    / scale
+                )
+                terms.append(nn.functional.softplus(-margin).mean())
+        # ponytail: O(states*candidates^2); candidate caps keep this bounded.
+        return torch.stack(terms).mean() if terms else prediction.sum() * 0.0
 
     def _require_target_group(
         self,
@@ -223,30 +256,16 @@ class HydraulicTrajectoryLoss(nn.Module):
             losses["tfv_direction"] = direction
         else:
             losses["tfv_direction"] = zero
-        group_index = target.get("_state_index")
-        ranking_terms: list[torch.Tensor] = []
-        if group_index is not None and "tfv_delta" in target:
-            groups = group_index.reshape(-1)
-            tfv_target = target["tfv_delta"].reshape(-1)
-            tfv_pred = pred["tfv_delta"].reshape(-1)
-            for group in torch.unique(groups):
-                idx = torch.nonzero(groups == group, as_tuple=False).reshape(-1)
-                if idx.numel() < 2:
-                    continue
-                target_group = tfv_target.index_select(0, idx)
-                pred_group = tfv_pred.index_select(0, idx)
-                target_diff = target_group[None, :] - target_group[:, None]
-                pred_diff = pred_group[None, :] - pred_group[:, None]
-                upper = torch.triu(
-                    torch.ones_like(target_diff, dtype=torch.bool), diagonal=1
-                )
-                informative = upper & (target_diff.abs() > 1.0)
-                if bool(informative.any()):
-                    scale = target_group.detach().abs().median().clamp_min(1.0)
-                    margin = target_diff[informative].sign() * pred_diff[informative] / scale
-                    ranking_terms.append(nn.functional.softplus(-margin).mean())
+        group_index = target.get("state_group_id", target.get("_state_index"))
+        losses["pfv_ranking"] = (
+            self._pairwise_rank_loss(pred["pfv_delta"], target["pfv_delta"], group_index)
+            if "pfv_delta" in pred and "pfv_delta" in target
+            else zero
+        )
         losses["tfv_ranking"] = (
-            torch.stack(ranking_terms).mean() if ranking_terms else zero
+            self._pairwise_rank_loss(pred["tfv_delta"], target["tfv_delta"], group_index)
+            if "tfv_delta" in pred and "tfv_delta" in target
+            else zero
         )
         priority_terms: list[torch.Tensor] = []
         if self.priority_node_indices is not None and self.priority_node_indices.numel():
@@ -288,6 +307,7 @@ class HydraulicTrajectoryLoss(nn.Module):
             + w.kpi_consistency * losses["derived_kpi_consistency"]
             + w.priority_flooding * losses["priority_flooding_trajectory"]
             + w.action_effect * losses["action_effect_trajectory"]
+            + w.pfv_ranking * losses["pfv_ranking"]
             + w.tfv_direction * losses["tfv_direction"]
             + w.tfv_ranking * losses["tfv_ranking"]
         )

@@ -236,6 +236,12 @@ def main() -> int:
         help="optional same-state pairwise ranking loss weight for derived TFV delta",
     )
     ap.add_argument(
+        "--pfv-ranking-weight",
+        type=float,
+        default=0.0,
+        help="optional same-state pairwise ranking loss weight for derived PFV delta",
+    )
+    ap.add_argument(
         "--selection-metric",
         choices=("loss", "control"),
         default="loss",
@@ -261,6 +267,8 @@ def main() -> int:
         raise ValueError("--tfv-direction-weight must be finite and non-negative")
     if args.tfv_ranking_weight < 0.0 or not np.isfinite(args.tfv_ranking_weight):
         raise ValueError("--tfv-ranking-weight must be finite and non-negative")
+    if args.pfv_ranking_weight < 0.0 or not np.isfinite(args.pfv_ranking_weight):
+        raise ValueError("--pfv-ranking-weight must be finite and non-negative")
 
     frame = read_table(args.manifest)
     if frame.empty:
@@ -320,7 +328,7 @@ def main() -> int:
         [state_codes[str(x)] for x in train_f["state_key"]], dtype=torch.long
     )
     grouped_batch_plan = None
-    if args.tfv_ranking_weight > 0.0:
+    if args.pfv_ranking_weight > 0.0 or args.tfv_ranking_weight > 0.0:
         train_for_batches = train_f.reset_index(drop=True)
         grouped_batch_plan = {
             epoch: _grouped_state_batches(
@@ -374,6 +382,7 @@ def main() -> int:
             kpi_consistency=args.kpi_consistency_weight,
             priority_flooding=args.priority_flooding_weight,
             action_effect=args.action_effect_weight,
+            pfv_ranking=args.pfv_ranking_weight,
             tfv_direction=args.tfv_direction_weight,
             tfv_ranking=args.tfv_ranking_weight,
         ),
@@ -395,7 +404,7 @@ def main() -> int:
         seen = 0
         batches = (
             grouped_batch_plan[epoch]
-            if args.tfv_ranking_weight > 0.0
+            if args.pfv_ranking_weight > 0.0 or args.tfv_ranking_weight > 0.0
             else _batch_indices(
                 int(train["history_depth"].shape[0]),
                 args.batch_size,
@@ -408,7 +417,7 @@ def main() -> int:
             optimizer.zero_grad(set_to_none=True)
             prediction = _forward(model, batch, graph_tensors, priority, device)
             target = _targets(batch, device)
-            if args.tfv_ranking_weight > 0.0:
+            if args.pfv_ranking_weight > 0.0 or args.tfv_ranking_weight > 0.0:
                 target["_state_index"] = batch["_state_index"].to(device)
             losses = loss_fn(prediction, target)
             loss = loss_fn.total(losses)
@@ -483,6 +492,7 @@ def main() -> int:
         "priority_flooding_weight": args.priority_flooding_weight,
         "action_effect_weight": args.action_effect_weight,
         "tfv_direction_weight": args.tfv_direction_weight,
+        "pfv_ranking_weight": args.pfv_ranking_weight,
         "tfv_ranking_weight": args.tfv_ranking_weight,
         "best_epoch": best_epoch,
         "seed": args.seed,

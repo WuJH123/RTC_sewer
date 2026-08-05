@@ -168,3 +168,38 @@ def test_tfv_ranking_loss_prefers_true_within_state_order() -> None:
     assert float(loss_fn(wrong, target)["tfv_ranking"]) > float(
         loss_fn(right, target)["tfv_ranking"]
     )
+
+
+def test_pfv_ranking_loss_prefers_true_within_state_order() -> None:
+    branches = {}
+    target = {}
+    for name in HydraulicTrajectoryLoss.BRANCHES:
+        value = torch.zeros(3, 1, 2)
+        branches[name] = {"node_depth": value, "node_flooding_rate": value}
+        target[f"trajectory_depth_{name}"] = value.clone()
+        target[f"trajectory_flood_{name}"] = value.clone()
+    target.update(
+        {
+            "pfv_delta": torch.tensor([-100.0, 0.0, 100.0]),
+            "tfv_delta": torch.zeros(3),
+            "peak_delta": torch.zeros(3),
+            "_state_index": torch.zeros(3, dtype=torch.long),
+        }
+    )
+    wrong = {
+        "branches": branches,
+        "pfv_delta": torch.tensor([100.0, 0.0, -100.0]),
+        "tfv_delta": torch.zeros(3),
+        "peak_delta": torch.zeros(3),
+    }
+    right = dict(wrong)
+    right["pfv_delta"] = target["pfv_delta"]
+    loss_fn = HydraulicTrajectoryLoss(
+        HydraulicLossWeights(pfv_ranking=1.0),
+        require_storage_targets=False,
+        require_facility_flow_targets=False,
+        require_outfall_flow_targets=False,
+    )
+    assert float(loss_fn(wrong, target)["pfv_ranking"]) > float(
+        loss_fn(right, target)["pfv_ranking"]
+    )
