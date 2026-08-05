@@ -1,6 +1,6 @@
 """Compile Formal Step1/Step2 evidence after current-generation calibration.
 
-Formal Step2 can now be authorised under one of two explicit target contracts:
+Formal Step2 can be authorised under one of two explicit target contracts:
 
 CONTROL_CORE
     Requires real SWMM supervision for node depth, node flooding, storage volume
@@ -12,7 +12,9 @@ FULL_HYDRAULIC
 
 Both contracts require three model seeds, causal GAT history, raw four-reference
 admission, current-generation Calibration, and zero rainfall-group overlap
-between model development and held-out evaluation roles.
+between model development and held-out evaluation roles. The PFV-only Formal V2
+line additionally requires calibration of the complete budget statistic
+``PFV_candidate - 1.05 * PFV_no_control`` rather than only the raw PFV delta.
 """
 from __future__ import annotations
 
@@ -28,6 +30,9 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from sewerrtc.v4.formal_f2 import FORMAL_GENERATION_ID, read_table, sha256_file
 from sewerrtc.v4.paper_workflow_v42 import CONTRACT_ID
+
+PFV_SAFETY_STATISTIC = "candidate_minus_1p05_no_control"
+CONTROL_OBJECTIVE_CONTRACT = "PROJECT6_V42_PFV_ONLY_TFV_MIN_MPC_V2"
 
 
 def _json(path: Path) -> dict:
@@ -73,8 +78,29 @@ def _assert_step2_target_contract(reports: list[dict]) -> str:
             "Missing targets must not be zero-filled."
         )
     if any(r.get("no_control_all_open_verified") is not True for r in reports):
-        raise RuntimeError("Formal Step2 has not verified all-open No-control semantics")
+        raise RuntimeError("Formal Step2 has not verified the current all-open No-control training contract")
     return contract
+
+
+def _assert_pfv_budget_calibration(step2_cal: dict) -> None:
+    if step2_cal.get("status") != "pass" or step2_cal.get("safety_calibrated") is not True:
+        raise RuntimeError(
+            "Formal F2 Step2 PFV safety calibration has not passed on current Calibration holdout"
+        )
+    if step2_cal.get("pfv_safety_statistic") != PFV_SAFETY_STATISTIC:
+        raise RuntimeError(
+            "Formal F2 Step2 calibration does not use the complete candidate-minus-1.05*No-control PFV budget statistic"
+        )
+    if int(step2_cal.get("pfv_predicted_safe_count", 0)) <= 0:
+        raise RuntimeError("Formal F2 Step2 calibration admits no PFV-safe candidates")
+    alpha = float(step2_cal.get("alpha", 0.05))
+    for key in (
+        "pfv_false_safe_rate_among_admitted",
+        "pfv_event_balanced_false_safe_rate_among_admitted",
+    ):
+        value = step2_cal.get(key)
+        if value is None or float(value) > alpha + 1.0e-12:
+            raise RuntimeError(f"Formal F2 Step2 calibration {key} exceeds alpha")
 
 
 def main() -> int:
@@ -122,12 +148,8 @@ def main() -> int:
     gat_audit = _json(
         args.formal_root / "step2" / "FORMAL_F2_STEP2_GAT_HISTORY_AUDIT.json"
     )
-    gat_manifest = (
-        args.formal_root / "step2" / "FORMAL_F2_STEP2_GAT_MANIFEST.parquet"
-    )
-    ledger = read_table(
-        args.formal_root / "prepare" / "FORMAL_F2_EVENT_LEDGER.csv"
-    )
+    gat_manifest = args.formal_root / "step2" / "FORMAL_F2_STEP2_GAT_MANIFEST.parquet"
+    ledger = read_table(args.formal_root / "prepare" / "FORMAL_F2_EVENT_LEDGER.csv")
 
     if any(r.get("status") != "pass" for r in step1_reports + step2_reports):
         raise RuntimeError("one or more Formal F2 model seed reports are not pass")
@@ -140,10 +162,7 @@ def main() -> int:
         raise RuntimeError(
             "Formal F2 Step1 uncertainty/OOD calibration has not passed on current Calibration holdout"
         )
-    if step2_cal.get("status") != "pass" or step2_cal.get("safety_calibrated") is not True:
-        raise RuntimeError(
-            "Formal F2 Step2 PFV/depth safety calibration has not passed on current Calibration holdout"
-        )
+    _assert_pfv_budget_calibration(step2_cal)
     if str(step2_cal.get("step2_target_contract", "")) != target_contract:
         raise RuntimeError("Step2 safety calibration target contract differs from trained models")
     if raw_audit.get("status") != "pass" or raw_audit.get("raw_independent_oracle_all_pass") is not True:
@@ -207,17 +226,13 @@ def main() -> int:
     if not current_cal_groups.issubset(eval_roles["calibration"]):
         raise RuntimeError("calibration reports are not tied to current F2 Calibration ledger")
 
-    primary_idx = (
-        args.seeds.index(args.primary_seed) if args.primary_seed in args.seeds else None
-    )
+    primary_idx = args.seeds.index(args.primary_seed) if args.primary_seed in args.seeds else None
     if primary_idx is None:
         raise ValueError("primary seed must be among --seeds")
     step1_primary = step1_reports[primary_idx]
     step2_primary = step2_reports[primary_idx]
     ensemble_gat_hash = _combined_model_hash(step1_reports, "gat_model_sha256")
-    ensemble_surrogate_hash = _combined_model_hash(
-        step2_reports, "surrogate_model_sha256"
-    )
+    ensemble_surrogate_hash = _combined_model_hash(step2_reports, "surrogate_model_sha256")
     sample_lineage_sha = sha256_file(gat_manifest)
 
     step1_evidence = {
@@ -229,6 +244,7 @@ def main() -> int:
         "formal_reconstructor": "TemporalSparseGATReconstructorV42",
         "reconstructor_contract": "formal_temporal_v42",
         "current_generation_training": True,
+        "new_formal_training": True,
         "rainfall_group_isolated_split": True,
         "action_authority": "actual_readback_setting",
         "uncertainty_calibrated": True,
@@ -277,12 +293,14 @@ def main() -> int:
         "model_seeds": args.seeds,
         "train_rainfall_group_count": int(step2_primary["train_rainfall_group_count"]),
         "safety_calibrated": True,
-        "control_objective_contract": "PROJECT6_V42_PFV_ONLY_TFV_MIN_MPC_V2",
+        "control_objective_contract": CONTROL_OBJECTIVE_CONTRACT,
         "pfv_budget_applied": True,
+        "pfv_safety_statistic": PFV_SAFETY_STATISTIC,
+        "pfv_safety_inequality": step2_cal.get("pfv_safety_inequality"),
         "objective": "minimize_TFV_subject_to_PFV_budget",
         "priority_depth_hard_gate": False,
         "global_peak_objective_term": False,
-        "uncertainty_role": "PFV_UCB_only",
+        "uncertainty_role": "PFV_budget_UCB_only",
         "OOD_role": "diagnostic_only",
         "independent_OOD_gate": False,
         "independent_uncertainty_gate": False,
@@ -290,11 +308,20 @@ def main() -> int:
             args.formal_root / "calibration" / "PFV_ONLY_SAFETY_CALIBRATION.json"
         ),
         "confidence_z": step2_cal.get("confidence_z"),
-        "pfv_false_safe_rate_calibration": step2_cal.get("pfv_false_safe_rate"),
-        "priority_depth_false_safe_rate_calibration": step2_cal.get(
+        "pfv_false_safe_rate_calibration": step2_cal.get("pfv_false_safe_rate_marginal"),
+        "pfv_false_safe_rate_among_admitted_calibration": step2_cal.get(
+            "pfv_false_safe_rate_among_admitted"
+        ),
+        "pfv_event_balanced_false_safe_rate_among_admitted_calibration": step2_cal.get(
+            "pfv_event_balanced_false_safe_rate_among_admitted"
+        ),
+        "pfv_predicted_safe_count_calibration": step2_cal.get("pfv_predicted_safe_count"),
+        "priority_depth_false_safe_rate_calibration_diagnostic_only": step2_cal.get(
             "priority_depth_false_safe_rate"
         ),
-        "joint_false_safe_rate_calibration": step2_cal.get("joint_false_safe_rate"),
+        "joint_false_safe_rate_calibration_diagnostic_only": step2_cal.get(
+            "joint_false_safe_rate_diagnostic_only"
+        ),
         "peak_is_hard_safety_constraint": False,
         "peak_delta_ensemble_mae_m3s": step2_cal.get("peak_delta_ensemble_mae_m3s"),
         "uncertainty_limit": step2_cal.get("uncertainty_limit_99"),
@@ -315,6 +342,7 @@ def main() -> int:
         "status": "pass",
         "split_policy": "current_generation_rainfall_group_holdout",
         "step2_target_contract": target_contract,
+        "pfv_safety_statistic": PFV_SAFETY_STATISTIC,
         "step1_evidence": str(step1_path),
         "step2_evidence": str(step2_path),
         "primary_gat_model_sha256": step1_evidence["gat_model_sha256"],

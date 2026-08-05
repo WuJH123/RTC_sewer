@@ -1,8 +1,10 @@
-"""Compile Formal F2 Step3 PFV-budgeted/TFV-first MPC evidence.
+"""Compile Formal F2 Step3 PFV-budgeted / TFV-minimising MPC evidence.
 
 No caller can assert engineering legality by setting booleans here. The supplied
 authoritative audit must come from projected/written/readback schedules and prove
-Engineering36/H12/K<=8 plus calibrated GAT/surrogate lineage.
+Engineering36/H12/K<=8 plus calibrated GAT/surrogate lineage. The compiler also
+requires the Formal V2 complete PFV budget statistic before it can authorise
+Step3 evidence.
 """
 from __future__ import annotations
 
@@ -19,6 +21,7 @@ from sewerrtc.v4.formal_f2 import FORMAL_GENERATION_ID, sha256_file
 from sewerrtc.v4.paper_workflow_v42 import CONTRACT_ID
 
 CONTROL_OBJECTIVE_CONTRACT = "PROJECT6_V42_PFV_ONLY_TFV_MIN_MPC_V2"
+PFV_SAFETY_STATISTIC = "candidate_minus_1p05_no_control"
 
 
 def _json(path: Path) -> dict:
@@ -77,6 +80,8 @@ def main() -> int:
         or audit.get("tfv_reference") != "dynamic_internal"
     ):
         raise RuntimeError("Step3 execution audit reference contract mismatch")
+    if audit.get("peak_reference") != "reporting_only":
+        raise RuntimeError("Step3 audit does not prove Global Peak is reporting-only")
     if audit.get("peak_is_hard_safety_constraint") is not False:
         raise RuntimeError("Step3 audit still treats Peak as a hard zero-tolerance gate")
     if audit.get("global_peak_objective_term") is not False:
@@ -95,6 +100,16 @@ def main() -> int:
         raise RuntimeError("Step3 GAT hash does not match Formal Step1 evidence")
     if audit.get("surrogate_model_sha256") != step2.get("surrogate_model_sha256"):
         raise RuntimeError("Step3 surrogate hash does not match Formal Step2 evidence")
+    if step1.get("uncertainty_calibrated") is not True or step1.get("ood_calibrated") is not True:
+        raise RuntimeError("Step3 cannot link to an uncalibrated Step1 model")
+    if step2.get("safety_calibrated") is not True:
+        raise RuntimeError("Step3 cannot link to an uncalibrated Step2 safety model")
+    if step2.get("pfv_safety_statistic") != PFV_SAFETY_STATISTIC:
+        raise RuntimeError("Step3 Step2 evidence uses the wrong PFV safety statistic")
+    if not str(step1.get("calibration_evidence_sha256", "")).strip():
+        raise RuntimeError("Step1 calibration evidence hash is missing")
+    if not str(step2.get("safety_calibration_sha256", "")).strip():
+        raise RuntimeError("Step2 safety calibration evidence hash is missing")
 
     payload = {
         "contract_id": CONTRACT_ID,
@@ -108,10 +123,12 @@ def main() -> int:
         "pfv_absolute_allowance_m3": 100.0,
         "pfv_relative_allowance_fraction": 0.05,
         "pfv_budget_applied": True,
+        "pfv_safety_statistic": PFV_SAFETY_STATISTIC,
         "objective": "minimize_TFV_subject_to_PFV_budget",
         "priority_depth_hard_gate": False,
         "global_peak_objective_term": False,
         "peak_is_hard_safety_constraint": False,
+        "peak_reference": "reporting_only",
         "peak_role": "reporting_only",
         "peak_penalty_weight": 0.0,
         "action_penalty_weight": 0.0,
@@ -128,13 +145,15 @@ def main() -> int:
         "engineering_status_derived_from_execution": True,
         "changed_facilities_derived_from_executed_action": True,
         "readback_verified": True,
-        "uncertainty_role": "PFV_UCB_only",
+        "uncertainty_role": "PFV_budget_UCB_only",
         "OOD_role": "diagnostic_only",
         "independent_OOD_gate": False,
         "independent_uncertainty_gate": False,
+        "uncertainty_and_ood_linked_to_calibrated_models": True,
         "gat_model_sha256": step1["gat_model_sha256"],
         "surrogate_model_sha256": step2["surrogate_model_sha256"],
-        "safety_calibration_sha256": step2.get("safety_calibration_sha256"),
+        "step1_calibration_sha256": step1["calibration_evidence_sha256"],
+        "safety_calibration_sha256": step2["safety_calibration_sha256"],
         "confidence_z": step2.get("confidence_z"),
         "uncertainty_limit": step2.get("uncertainty_limit"),
         "engineering_audit_sha256": sha256_file(args.engineering_audit),
