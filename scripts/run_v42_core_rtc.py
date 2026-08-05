@@ -16,6 +16,7 @@ import argparse
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import json
 from pathlib import Path
+import time
 from typing import Any
 
 import numpy as np
@@ -284,6 +285,8 @@ def _run_core_parallel(
     device: str,
     max_candidate_sequences: int,
     workers: int,
+    event_limit: int | None = None,
+    pipeline_proposed: bool = True,
 ) -> list[dict[str, Any]]:
     import scripts.run_v42_formal_production_f2 as production
 
@@ -293,6 +296,12 @@ def _run_core_parallel(
         if role == "calibration"
         else orchestrator.load_formal_event_inputs(project_root, role=role)
     )
+    if event_limit is not None:
+        events = events[: max(1, int(event_limit))]
+        print(
+            f"[CORE] development event subset={len(events)} of full={12 if role == 'calibration' else 'role inventory'}",
+            flush=True,
+        )
     lock = orchestrator.policy_lock_payload(project_root)
     policy_sha = orchestrator._policy_sha(project_root)
     pending: list[dict[str, Any]] = []
@@ -359,6 +368,12 @@ def _run_core_parallel(
     if not pending:
         return results
     baseline_tasks = [x for x in pending if x["strategy"] != "Proposed"]
+    # Internal is the only baseline needed as the Proposed causal shadow.
+    # Queue all Internal tasks first so the single GPU worker can start events
+    # as soon as possible; No-control/Hold continue filling the CPU pool.
+    baseline_tasks.sort(
+        key=lambda task: (task["strategy"] != "Internal", str(task["event_id"]))
+    )
     proposed_tasks = [x for x in pending if x["strategy"] == "Proposed"]
     failures: list[str] = []
     internal_shadow_paths: dict[str, str] = {}
@@ -402,34 +417,94 @@ def _run_core_parallel(
 
     # The 16-job SWMM benchmark completed with zero failures and was 7.9%
     # faster than 8 workers on this machine. Keep the user-selectable cap at
-    # 16. Complete baselines first so Proposed can reuse each event's exact
-    # Internal detail as its causal shadow instead of running duplicate SWMM.
+    # 16. The GPU Proposed worker is pipelined behind each event's Internal
+    # result, so CPU SWMM work and GPU inference overlap without duplicating
+    # the native Internal shadow.
     max_baseline_workers = max(1, min(int(workers), 16, len(baseline_tasks) or 1))
-    with ProcessPoolExecutor(max_workers=max_baseline_workers) as baseline_pool:
-        future_map = {}
-        for task in baseline_tasks:
-            future_map[baseline_pool.submit(_core_worker, task)] = task
-        for future in as_completed(future_map):
-            consume(future, future_map[future])
+    def expected_internal_shadow(task: dict[str, Any]) -> str:
+        return str(
+            Path(task["output_dir"]).parent.parent
+            / "Internal"
+            / "swmm_native_or_rule_baseline"
+            / "detail.csv"
+        )
 
-    for task in proposed_tasks:
-        shadow = internal_shadow_paths.get(task["event_id"])
-        if shadow is None:
-            # Covers an already-reusable Internal row, without retaining a
-            # second event/task index in the parent.
-            shadow = str(
-                Path(task["output_dir"]).parent.parent
-                / "Internal"
-                / "swmm_native_or_rule_baseline"
-                / "detail.csv"
-            )
-        if Path(shadow).exists():
-            task["internal_shadow_detail_path"] = shadow
+    proposed_by_event = {str(task["event_id"]): task for task in proposed_tasks}
+    proposed_submitted: set[str] = set()
+    proposed_futures: dict[Any, dict[str, Any]] = {}
+    baseline_started = time.perf_counter()
+    proposed_started: float | None = None
 
+    # Keep one GPU process.  It persists across events, so the model bundle
+    # remains cached in that process while CPU SWMM workers continue.
     with ProcessPoolExecutor(max_workers=1) as proposed_pool:
-        future_map = {proposed_pool.submit(_core_worker, task): task for task in proposed_tasks}
-        for future in as_completed(future_map):
-            consume(future, future_map[future])
+        def submit_proposed(task: dict[str, Any]) -> None:
+            nonlocal proposed_started
+            event_id = str(task["event_id"])
+            if event_id in proposed_submitted:
+                return
+            shadow = internal_shadow_paths.get(event_id) or expected_internal_shadow(task)
+            if Path(shadow).exists():
+                task["internal_shadow_detail_path"] = shadow
+            proposed_futures[proposed_pool.submit(_core_worker, task)] = task
+            proposed_submitted.add(event_id)
+            if proposed_started is None:
+                proposed_started = time.perf_counter()
+                print(
+                    f"[CORE] Proposed GPU pipeline started workers=1 event={event_id}",
+                    flush=True,
+                )
+
+        # If Internal is already reusable, or was not requested, start Proposed
+        # immediately. Pending Internal events are submitted as soon as their
+        # authoritative detail becomes available below.
+        pending_internal_events = {
+            str(task["event_id"])
+            for task in baseline_tasks
+            if task["strategy"] == "Internal"
+        }
+        if pipeline_proposed:
+            for task in proposed_tasks:
+                event_id = str(task["event_id"])
+                if event_id not in pending_internal_events:
+                    submit_proposed(task)
+
+        with ProcessPoolExecutor(max_workers=max_baseline_workers) as baseline_pool:
+            print(
+                f"[CORE] CPU baseline pipeline started workers={max_baseline_workers} tasks={len(baseline_tasks)}",
+                flush=True,
+            )
+            future_map = {
+                baseline_pool.submit(_core_worker, task): task
+                for task in baseline_tasks
+            }
+            for future in as_completed(future_map):
+                task = future_map[future]
+                consume(future, task)
+                if pipeline_proposed and task["strategy"] == "Internal":
+                    proposed = proposed_by_event.get(str(task["event_id"]))
+                    if proposed is not None:
+                        submit_proposed(proposed)
+
+        print(
+            f"[CORE] CPU baseline pipeline done elapsed_sec={time.perf_counter() - baseline_started:.1f}",
+            flush=True,
+        )
+
+        # With no Internal task (or after an Internal failure), allow the
+        # Proposed worker to fall back to its own causal Internal shadow. This
+        # preserves the existing fail-closed error handling while avoiding a
+        # deadlock in partial/resume runs.
+        for task in proposed_tasks:
+            submit_proposed(task)
+
+        for future in as_completed(proposed_futures):
+            consume(future, proposed_futures[future])
+        if proposed_started is not None:
+            print(
+                f"[CORE] Proposed GPU pipeline done elapsed_sec={time.perf_counter() - proposed_started:.1f}",
+                flush=True,
+            )
     if failures:
         raise RuntimeError("core RTC worker failure: " + failures[0])
     return results
@@ -466,6 +541,18 @@ def main() -> int:
         type=Path,
         default=None,
         help="isolated Core output root; preserves earlier runs when supplied",
+    )
+    ap.add_argument(
+        "--event-limit",
+        type=int,
+        default=None,
+        help="development-only prefix of resolved events for a performance benchmark",
+    )
+    ap.add_argument(
+        "--pipeline-proposed",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="overlap one persistent GPU Proposed worker with CPU SWMM baselines",
     )
     args = ap.parse_args()
 
@@ -510,6 +597,8 @@ def main() -> int:
         device=args.device,
         max_candidate_sequences=int(args.max_candidate_sequences),
         workers=max(1, min(int(args.workers), 16)),
+        event_limit=args.event_limit,
+        pipeline_proposed=bool(args.pipeline_proposed),
     )
     evidence = _summarize(results)
     evidence["role"] = args.role
