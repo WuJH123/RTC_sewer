@@ -24,6 +24,7 @@ import json
 import math
 import time
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -319,6 +320,7 @@ def load_actuators(project_root: str | Path) -> pd.DataFrame:
     return frame
 
 
+@lru_cache(maxsize=4)
 def load_model_bundle(
     project_root: str | Path,
     device_name: str = "auto",
