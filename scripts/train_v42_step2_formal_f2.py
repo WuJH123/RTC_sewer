@@ -85,6 +85,27 @@ def _split(frame, seed: int, min_train: int):
     )
 
 
+def _selection_key(validation: dict, metric: str) -> tuple[float, ...]:
+    """Return a deterministic checkpoint-selection key.
+
+    ``loss`` preserves the historical Formal default.  ``control`` is an
+    explicit repair mode: validation PFV/TFV direction and error are selected
+    before the aggregate hydraulic loss, without changing training targets or
+    the runtime PFV gate.
+    """
+    if metric == "loss":
+        return (float(validation["loss"]),)
+    if metric == "control":
+        return (
+            -float(validation["pfv_delta_sign_accuracy"]),
+            -float(validation["tfv_delta_sign_accuracy"]),
+            float(validation["pfv_delta_mae"]),
+            float(validation["tfv_delta_mae"]),
+            float(validation["loss"]),
+        )
+    raise ValueError(f"unsupported Step2 selection metric: {metric}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--project-root", type=Path, default=PROJECT_ROOT)
@@ -101,6 +122,12 @@ def main() -> int:
     ap.add_argument("--hidden-dim", type=int, default=64)
     ap.add_argument("--gat-layers", type=int, default=3)
     ap.add_argument("--lr", type=float, default=5e-4)
+    ap.add_argument(
+        "--selection-metric",
+        choices=("loss", "control"),
+        default="loss",
+        help="checkpoint selection; control is an explicit PFV/TFV repair mode",
+    )
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--split-seed", type=int, default=42)
     ap.add_argument("--min-train-groups", type=int, default=65)
@@ -211,7 +238,8 @@ def main() -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     best_path = args.output_dir / "best_model.pt"
     history = []
-    best_loss = float("inf")
+    best_key: tuple[float, ...] | None = None
+    best_epoch = None
     stale = 0
     for epoch in range(1, args.epochs + 1):
         model.train()
@@ -237,10 +265,14 @@ def main() -> int:
             "train_loss": running / max(1, seen),
             "validation": validation,
         }
+        selection_key = _selection_key(validation, args.selection_metric)
+        row["selection_metric"] = args.selection_metric
+        row["selection_key"] = list(selection_key)
         history.append(row)
         print(json.dumps(row, allow_nan=False), flush=True)
-        if float(validation["loss"]) < best_loss:
-            best_loss = float(validation["loss"])
+        if best_key is None or selection_key < best_key:
+            best_key = selection_key
+            best_epoch = epoch
             stale = 0
             torch.save(model.state_dict(), best_path)
         else:
@@ -284,6 +316,8 @@ def main() -> int:
         "no_control_all_open_verified": True,
         "surrogate_action_map_contract": SURROGATE_ACTION_MAP_CONTRACT,
         "surrogate_action_map_nonzero": int(torch.count_nonzero(action_map).item()),
+        "model_selection_metric": args.selection_metric,
+        "best_epoch": best_epoch,
         "seed": args.seed,
         "split_seed": args.split_seed,
         "train_cases": len(train_f),
