@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 from sewerrtc.v4.v42_simple_rtc_contract import (
     CONTRACT_ID,
@@ -27,6 +28,7 @@ from sewerrtc.v4.v42_simple_rtc_contract import (
 # Apply the simplified semantics before importing the production entrypoint.
 apply_simple_rtc_contract()
 import scripts.run_v42_formal_production_f2 as production  # noqa: E402
+from sewerrtc.v4.v42_formal_runtime import FormalEventInput  # noqa: E402
 
 # Re-apply after production import in case a legacy module rebound a global.
 apply_simple_rtc_contract()
@@ -35,6 +37,64 @@ orchestrator = production.orchestrator
 
 
 DEFAULT_STRATEGIES = ("Proposed", "No-control", "Internal", "Hold")
+
+
+def _load_core_calibration_events(project_root: Path) -> list[FormalEventInput]:
+    """Resolve Fresh Calibration12's three branch rows into 12 SWMM events."""
+    manifest = (
+        project_root
+        / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2"
+        / "pfv_only_v2/FRESH_PFV_ONLY_CALIBRATION_CASE_MANIFEST.csv"
+    )
+    if not manifest.exists():
+        raise FileNotFoundError(manifest)
+    frame = pd.read_csv(manifest, low_memory=False)
+    required = {
+        "event_id",
+        "rainfall_sha256",
+        "inp_path",
+        "rain_duration_min",
+        "simulation_duration_min",
+    }
+    missing = sorted(required - set(frame.columns))
+    if missing:
+        raise KeyError(f"Fresh Calibration manifest missing columns: {missing}")
+    events: list[FormalEventInput] = []
+    for (event_id, rainfall_sha), group in frame.groupby(
+        ["event_id", "rainfall_sha256"], sort=True
+    ):
+        if group["inp_path"].astype(str).nunique() != 1:
+            raise RuntimeError(
+                f"Fresh Calibration event has multiple INP inputs: {event_id}"
+            )
+        row = group.iloc[0]
+        inp = Path(str(row["inp_path"]))
+        if not inp.is_absolute():
+            inp = project_root / inp
+        inp = inp.resolve()
+        if not inp.exists():
+            raise FileNotFoundError(inp)
+        rain_duration = int(row["rain_duration_min"])
+        simulation_duration = int(row["simulation_duration_min"])
+        if simulation_duration < max(rain_duration, 240):
+            raise RuntimeError(
+                f"Fresh Calibration event has insufficient simulation duration: {event_id}"
+            )
+        events.append(
+            FormalEventInput(
+                role="calibration",
+                event_id=str(event_id),
+                rainfall_sha256=str(rainfall_sha),
+                inp_path=inp,
+                rain_duration_min=rain_duration,
+                simulation_duration_min=simulation_duration,
+            )
+        )
+    if len(events) != 12:
+        raise RuntimeError(
+            f"Fresh Calibration12 must resolve to 12 unique events, got {len(events)}"
+        )
+    return sorted(events, key=lambda event: (event.rainfall_sha256, event.event_id))
 
 
 def _event_map(results: list[dict[str, Any]]) -> dict[str, dict[str, dict[str, Any]]]:
@@ -205,13 +265,24 @@ def main() -> int:
     if "Proposed" not in strategies:
         raise ValueError("core RTC run must include Proposed")
 
+    legacy_loader = orchestrator.load_formal_event_inputs
+
+    def _load_core_events(project_root: Path, *, role: str):
+        if role == "calibration":
+            return _load_core_calibration_events(project_root)
+        return legacy_loader(project_root, role=role)
+
+    # The Fresh Calibration case manifest has one row per candidate branch;
+    # core RTC needs one authoritative SWMM input per event.
+    orchestrator.load_formal_event_inputs = _load_core_events
+
     # Set runner roots exactly as the Formal orchestrator expects, but do not
     # invoke the legacy Stage18 engineering gate or candidate-lineage blocker.
     orchestrator.OUTPUT_ROOT = root / "outputs/project6_dual_reference_v4/final_v4"
-    orchestrator.FORMAL_ROOT = orchestrator.OUTPUT_ROOT / "v42_paper/formal_f2"
     orchestrator.PAPER_ROOT = orchestrator.OUTPUT_ROOT / "v42_paper"
+    orchestrator.FORMAL_ROOT = orchestrator.PAPER_ROOT / "core_rtc"
     orchestrator.LEDGER = (
-        orchestrator.FORMAL_ROOT / "paper_execution/FORMAL_EXECUTION_LEDGER.csv"
+        orchestrator.FORMAL_ROOT / "FORMAL_EXECUTION_LEDGER.csv"
     )
 
     results = orchestrator._run_role(
