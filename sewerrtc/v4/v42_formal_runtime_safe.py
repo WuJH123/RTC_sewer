@@ -281,11 +281,20 @@ def run_proposed_event(
             raise FileNotFoundError(f"reusable Internal shadow detail not found: {shadow_path}")
         shadow_result = {"detail_path": str(shadow_path), "strategy": "Internal"}
         shadow_reused = True
-    shadow = pd.read_csv(shadow_result["detail_path"], low_memory=False)
     shadow_setting_cols = [f"setting:{aid}" for aid in ids]
-    missing_shadow = [c for c in shadow_setting_cols if c not in shadow.columns]
-    if missing_shadow:
-        raise KeyError(f"native Internal shadow detail missing readback columns: {missing_shadow[:5]}")
+    # The reusable shadow is a wide hydraulic detail file, but the controller
+    # only needs its causal clock and Engineering36 readbacks.  Avoid parsing
+    # thousands of unrelated hydraulic columns on every Proposed event.
+    try:
+        shadow = pd.read_csv(
+            shadow_result["detail_path"],
+            usecols=["elapsed_min", *shadow_setting_cols],
+            low_memory=False,
+        )
+    except ValueError as exc:
+        raise KeyError(
+            "native Internal shadow detail is missing elapsed_min or readback columns"
+        ) from exc
     shadow_times = pd.to_numeric(shadow["elapsed_min"], errors="coerce").to_numpy(float)
     shadow_actions = shadow[shadow_setting_cols].apply(pd.to_numeric, errors="coerce").to_numpy(float)
     if not np.isfinite(shadow_times).all() or not np.isfinite(shadow_actions).all():
