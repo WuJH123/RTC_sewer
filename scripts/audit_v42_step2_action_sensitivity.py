@@ -20,15 +20,23 @@ from sewerrtc.v4.v42_priority_contract import get_pfv_core_node_indices
 from sewerrtc.v4.v42_trajectory_builder import _load_graph_topology
 
 
+def _batch_indices(n: int, batch_size: int):
+    for start in range(0, n, batch_size):
+        yield np.arange(start, min(start + batch_size, n), dtype=np.int64)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--project-root", type=Path, required=True)
     ap.add_argument("--manifest", type=Path, required=True)
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--states", type=int, default=10)
+    ap.add_argument("--batch-size", type=int, default=16)
     ap.add_argument("--model-root", type=Path)
     ap.add_argument("--seeds", nargs="+", type=int, default=[17, 42, 73])
     args = ap.parse_args()
+    if args.batch_size < 1:
+        ap.error("--batch-size must be positive")
 
     frame = read_table(args.manifest)
     state_keys = sorted(frame["state_key"].astype(str).unique())[: max(1, args.states)]
@@ -47,7 +55,7 @@ def main() -> int:
         dtype=torch.long,
         device=device,
     )
-    batch = {key: value.to(device) for key, value in _tensorise(selected).items()}
+    tensor_data = _tensorise(selected)
 
     predictions = []
     model_root = args.model_root or (
@@ -68,16 +76,27 @@ def main() -> int:
         ).to(device)
         model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
         model.eval()
-        with torch.no_grad():
-            output = _forward(model, batch, graph_tensors, priority, device)
+        predicted_pfv = []
+        predicted_tfv = []
+        with torch.inference_mode():
+            for idx in _batch_indices(len(selected), args.batch_size):
+                ti = torch.as_tensor(idx, dtype=torch.long)
+                batch = {key: value.index_select(0, ti) for key, value in tensor_data.items()}
+                output = _forward(model, batch, graph_tensors, priority, device)
+                predicted_pfv.append(output["pfv_delta"].detach().cpu().numpy())
+                predicted_tfv.append(output["tfv_delta"].detach().cpu().numpy())
+        del output, batch
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
         predictions.append(
             {
                 "seed": seed,
                 "model_sha256": _hash_model(model),
-                "pfv_delta": output["pfv_delta"].detach().cpu().numpy(),
-                "tfv_delta": output["tfv_delta"].detach().cpu().numpy(),
+                "pfv_delta": np.concatenate(predicted_pfv),
+                "tfv_delta": np.concatenate(predicted_tfv),
             }
         )
+        del model, predicted_pfv, predicted_tfv
 
     pfv = np.stack([item["pfv_delta"] for item in predictions])
     tfv = np.stack([item["tfv_delta"] for item in predictions])
@@ -113,6 +132,7 @@ def main() -> int:
         "manifest": str(args.manifest),
         "model_seeds": [item["seed"] for item in predictions],
         "states_requested": int(args.states),
+        "batch_size": int(args.batch_size),
         "states_audited": len(rows),
         "rows_audited": int(len(selected)),
         "state_rows": rows,
