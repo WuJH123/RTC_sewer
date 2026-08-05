@@ -290,6 +290,7 @@ def _split_authority(project_root: Path, manifest: Path) -> Dict[str, Any]:
         reports.append({
             "seed": seed,
             "path": str(path),
+            "model_sha256": payload.get("surrogate_model_sha256"),
             "counts": {key: len(value) for key, value in groups.items()},
             "groups": groups,
             "within_report_overlap": {
@@ -319,6 +320,7 @@ def _split_authority(project_root: Path, manifest: Path) -> Dict[str, Any]:
             "calibration_rainfall_groups": groups,
             "manifest_group_overlap": len(set(groups) & frame_groups),
             "training_or_internal_validation_overlap_count": payload.get("training_or_internal_validation_overlap_count"),
+            "model_hashes": payload.get("model_hashes"),
             "model_sha256_by_seed": payload.get("model_sha256_by_seed"),
         })
     selected = next(
@@ -329,6 +331,14 @@ def _split_authority(project_root: Path, manifest: Path) -> Dict[str, Any]:
     if reports:
         model_train_val = set(reports[0]["groups"]["train_rainfall_groups"]) | set(reports[0]["groups"]["validation_rainfall_groups"])
     selected_groups = set(selected["calibration_rainfall_groups"]) if selected else set()
+    expected_model_hashes = {
+        str(item["seed"]): str(item.get("model_sha256") or "")
+        for item in reports
+    }
+    selected_model_hashes = {
+        str(key): str(value)
+        for key, value in dict(selected.get("model_hashes") or {}).items()
+    } if selected else {}
     return {
         "manifest": str(manifest),
         "manifest_rainfall_group_count": len(frame_groups),
@@ -346,6 +356,7 @@ def _split_authority(project_root: Path, manifest: Path) -> Dict[str, Any]:
             "overlap_with_model_train_or_validation": len(selected_groups & model_train_val),
             "model_report_calibration_group_count": reports[0]["counts"]["calibration_rainfall_groups"] if reports else None,
             "operational_calibration_group_count": len(selected_groups),
+            "model_hashes_match": bool(expected_model_hashes and expected_model_hashes == selected_model_hashes),
         },
         "authority_consistent": bool(
             reports
@@ -353,6 +364,7 @@ def _split_authority(project_root: Path, manifest: Path) -> Dict[str, Any]:
             and all(not any(item["within_report_overlap"].values()) for item in reports)
             and len(selected_groups & model_train_val) == 0
             and len(selected_groups) >= 12
+            and expected_model_hashes == selected_model_hashes
         ),
         "interpretation": (
             "Model reports use an internal 65/8/8 train/validation/calibration split; "
