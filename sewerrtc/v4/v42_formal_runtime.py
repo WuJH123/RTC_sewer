@@ -615,7 +615,11 @@ def reconstruct_history(
     if state_source != "gat_sparse_reconstruction":
         raise ValueError(f"unsupported Formal state source: {state_source}")
     if len(frames) < 25:
-        raise RuntimeError("sparse-GAT causal history requires t-120..t plant frames")
+        last_elapsed = frames[-1].get("elapsed_min") if frames else None
+        raise RuntimeError(
+            "sparse-GAT causal history requires t-120..t plant frames; "
+            f"observed_frames={len(frames)} last_elapsed_min={last_elapsed}"
+        )
     anchors = list(range(len(frames) - 13, len(frames)))
     n_nodes = bundle.graph.n_nodes
     sparse = np.zeros((13, 13, n_nodes), np.float32)
