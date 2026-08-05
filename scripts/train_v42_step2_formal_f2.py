@@ -16,6 +16,7 @@ trajectory; there is no independent KPI shortcut head.
 from __future__ import annotations
 
 import argparse
+import gc
 import hashlib
 import json
 import sys
@@ -135,6 +136,12 @@ def main() -> int:
         help="optional repair weight for PFV_CORE8 flooding supervision",
     )
     ap.add_argument(
+        "--action-effect-weight",
+        type=float,
+        default=0.0,
+        help="optional weight for candidate-vs-reference flooding effect supervision",
+    )
+    ap.add_argument(
         "--selection-metric",
         choices=("loss", "control"),
         default="loss",
@@ -154,6 +161,8 @@ def main() -> int:
         raise ValueError("--kpi-consistency-weight must be finite and non-negative")
     if args.priority_flooding_weight < 0.0 or not np.isfinite(args.priority_flooding_weight):
         raise ValueError("--priority-flooding-weight must be finite and non-negative")
+    if args.action_effect_weight < 0.0 or not np.isfinite(args.action_effect_weight):
+        raise ValueError("--action-effect-weight must be finite and non-negative")
 
     frame = read_table(args.manifest)
     if frame.empty:
@@ -204,6 +213,8 @@ def main() -> int:
     train = _tensorise(train_f)
     val = _tensorise(val_f)
     cal = _tensorise(cal_f)
+    del frame, train_f, val_f, cal_f
+    gc.collect()
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -247,6 +258,7 @@ def main() -> int:
             outfall_flow=0.35 if args.target_contract == "FULL_HYDRAULIC" else 0.0,
             kpi_consistency=args.kpi_consistency_weight,
             priority_flooding=args.priority_flooding_weight,
+            action_effect=args.action_effect_weight,
         ),
         require_storage_targets=True,
         require_facility_flow_targets=True,
@@ -338,6 +350,7 @@ def main() -> int:
         "model_selection_metric": args.selection_metric,
         "kpi_consistency_weight": args.kpi_consistency_weight,
         "priority_flooding_weight": args.priority_flooding_weight,
+        "action_effect_weight": args.action_effect_weight,
         "best_epoch": best_epoch,
         "seed": args.seed,
         "split_seed": args.split_seed,

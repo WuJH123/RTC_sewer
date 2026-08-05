@@ -40,3 +40,31 @@ def test_priority_flooding_weight_targets_selected_nodes() -> None:
         priority_node_indices=torch.tensor([0]),
     )
     assert float(loss.total(loss(pred, target))) > 0.0
+
+
+def test_action_effect_loss_is_zero_for_matching_candidate_reference_deltas() -> None:
+    shape = (1, 2, 3)
+    pred = {"branches": {}}
+    target = {}
+    for branch in HydraulicTrajectoryLoss.BRANCHES:
+        value = torch.full(shape, float(len(branch)))
+        pred["branches"][branch] = {
+            "node_depth": value,
+            "node_flooding_rate": value,
+        }
+        target[f"trajectory_depth_{branch}"] = value.clone()
+        target[f"trajectory_flood_{branch}"] = value.clone()
+    pred.update(
+        {"pfv_delta": torch.zeros(1), "tfv_delta": torch.zeros(1), "peak_delta": torch.zeros(1)}
+    )
+    target.update(
+        {"pfv_delta": torch.zeros(1), "tfv_delta": torch.zeros(1), "peak_delta": torch.zeros(1)}
+    )
+    loss_fn = HydraulicTrajectoryLoss(
+        HydraulicLossWeights(action_effect=1.0),
+        require_storage_targets=False,
+        require_facility_flow_targets=False,
+        require_outfall_flow_targets=False,
+    )
+    losses = loss_fn(pred, target)
+    assert float(losses["action_effect_trajectory"]) == 0.0

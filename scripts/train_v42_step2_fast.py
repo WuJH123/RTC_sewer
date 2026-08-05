@@ -12,6 +12,7 @@ F2 trainer; keep those helpers contract-aware and backward compatible.
 from __future__ import annotations
 
 import argparse
+import gc
 import hashlib
 import json
 import sys
@@ -188,7 +189,7 @@ def _evaluate(model, data, graph_tensors, priority_idx, device, batch_size, loss
     optional_true: dict[str, list[np.ndarray]] = {k: [] for k in optional_pred}
     kp_pred = {k: [] for k in ("pfv_delta", "tfv_delta", "peak_delta")}
     kp_true = {k: [] for k in kp_pred}
-    with torch.no_grad():
+    with torch.inference_mode():
         for idx in _batch_indices(len(next(iter(data.values()))), batch_size, shuffle=False, seed=0):
             batch = _slice(data, idx)
             pred = _forward(model, batch, graph_tensors, priority_idx, device)
@@ -285,6 +286,8 @@ def main() -> int:
     train_f, val_f, train_groups, val_groups = _split_groups(frame, args.seed)
     train = _tensorise(train_f)
     val = _tensorise(val_f)
+    del train_f, val_f
+    gc.collect()
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)

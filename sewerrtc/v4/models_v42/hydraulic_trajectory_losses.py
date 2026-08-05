@@ -21,6 +21,7 @@ class HydraulicLossWeights:
     outfall_flow: float = 0.5
     kpi_consistency: float = 0.2
     priority_flooding: float = 0.0
+    action_effect: float = 0.0
 
 
 class HydraulicTrajectoryLoss(nn.Module):
@@ -211,6 +212,18 @@ class HydraulicTrajectoryLoss(nn.Module):
         losses["priority_flooding_trajectory"] = (
             torch.stack(priority_terms).mean() if priority_terms else zero
         )
+        action_effect_terms: list[torch.Tensor] = []
+        candidate_flood = branches["candidate"]["node_flooding_rate"]
+        candidate_target_flood = target[self._target_key("candidate", "flood")]
+        for reference in ("no_control", "dynamic_internal", "hold_previous"):
+            action_effect_terms.append(
+                self._masked_smooth_l1(
+                    candidate_flood - branches[reference]["node_flooding_rate"],
+                    candidate_target_flood
+                    - target[self._target_key(reference, "flood")],
+                )
+            )
+        losses["action_effect_trajectory"] = torch.stack(action_effect_terms).mean()
         return losses
 
     def total(self, losses: dict[str, torch.Tensor]) -> torch.Tensor:
@@ -223,4 +236,5 @@ class HydraulicTrajectoryLoss(nn.Module):
             + w.outfall_flow * losses["outfall_flow_trajectory"]
             + w.kpi_consistency * losses["derived_kpi_consistency"]
             + w.priority_flooding * losses["priority_flooding_trajectory"]
+            + w.action_effect * losses["action_effect_trajectory"]
         )
