@@ -159,7 +159,20 @@ def main() -> int:
             predicted_budget_std = (
                 predicted_pfv - 0.05 * np.maximum(predicted_nc, 0.0)
             ).std(axis=0, ddof=1)
-            predicted_ucb = predicted_budget_mean + float(calibration["confidence_z"]) * predicted_budget_std
+            ucb_method = calibration.get(
+                "pfv_budget_metric_ucb_method",
+                "standardized_ensemble_conformal",
+            )
+            if ucb_method == "absolute_residual_one_sided_conformal":
+                predicted_ucb = predicted_budget_mean + float(
+                    calibration["pfv_budget_metric_residual_margin_m3"]
+                )
+            elif ucb_method == "standardized_ensemble_conformal":
+                predicted_ucb = predicted_budget_mean + float(
+                    calibration["confidence_z"]
+                ) * predicted_budget_std
+            else:
+                raise RuntimeError(f"unsupported PFV UCB calibration method: {ucb_method}")
             predicted_safe = np.isfinite(predicted_ucb) & (predicted_ucb <= 100.0)
         else:
             predicted_budget_std = np.zeros(len(frame), dtype=float)
@@ -253,6 +266,15 @@ def main() -> int:
         "calibration": str(args.calibration) if args.calibration else None,
         "calibration_model_hash_match": bool(calibration is not None and model_hashes == {str(k): str(v) for k, v in calibration.get("model_hashes", {}).items()}) if calibration else None,
         "calibration_confidence_z": float(calibration["confidence_z"]) if calibration else None,
+        "calibration_ucb_method": (
+            calibration.get("pfv_budget_metric_ucb_method")
+            if calibration else None
+        ),
+        "calibration_residual_margin_m3": (
+            float(calibration["pfv_budget_metric_residual_margin_m3"])
+            if calibration and "pfv_budget_metric_residual_margin_m3" in calibration
+            else None
+        ),
         "predicted_mean_safe_count": predicted_mean_safe_count,
         "predicted_budget_mean_quantiles_m3": (
             [float(x) for x in np.quantile(predicted_budget_mean, [0.0, 0.5, 0.9, 1.0])]
