@@ -129,6 +129,12 @@ def main() -> int:
         help="weight for trajectory-derived PFV/TFV/Peak consistency loss",
     )
     ap.add_argument(
+        "--priority-flooding-weight",
+        type=float,
+        default=0.0,
+        help="optional repair weight for PFV_CORE8 flooding supervision",
+    )
+    ap.add_argument(
         "--selection-metric",
         choices=("loss", "control"),
         default="loss",
@@ -146,6 +152,8 @@ def main() -> int:
 
     if args.kpi_consistency_weight < 0.0 or not np.isfinite(args.kpi_consistency_weight):
         raise ValueError("--kpi-consistency-weight must be finite and non-negative")
+    if args.priority_flooding_weight < 0.0 or not np.isfinite(args.priority_flooding_weight):
+        raise ValueError("--priority-flooding-weight must be finite and non-negative")
 
     frame = read_table(args.manifest)
     if frame.empty:
@@ -238,10 +246,12 @@ def main() -> int:
             facility_flow=0.35,
             outfall_flow=0.35 if args.target_contract == "FULL_HYDRAULIC" else 0.0,
             kpi_consistency=args.kpi_consistency_weight,
+            priority_flooding=args.priority_flooding_weight,
         ),
         require_storage_targets=True,
         require_facility_flow_targets=True,
         require_outfall_flow_targets=args.target_contract == "FULL_HYDRAULIC",
+        priority_node_indices=priority,
     )
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -327,6 +337,7 @@ def main() -> int:
         "surrogate_action_map_nonzero": int(torch.count_nonzero(action_map).item()),
         "model_selection_metric": args.selection_metric,
         "kpi_consistency_weight": args.kpi_consistency_weight,
+        "priority_flooding_weight": args.priority_flooding_weight,
         "best_epoch": best_epoch,
         "seed": args.seed,
         "split_seed": args.split_seed,

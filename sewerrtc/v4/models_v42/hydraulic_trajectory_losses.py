@@ -20,6 +20,7 @@ class HydraulicLossWeights:
     facility_flow: float = 0.5
     outfall_flow: float = 0.5
     kpi_consistency: float = 0.2
+    priority_flooding: float = 0.0
 
 
 class HydraulicTrajectoryLoss(nn.Module):
@@ -40,12 +41,18 @@ class HydraulicTrajectoryLoss(nn.Module):
         require_storage_targets: bool = True,
         require_facility_flow_targets: bool = True,
         require_outfall_flow_targets: bool = True,
+        priority_node_indices: torch.Tensor | None = None,
     ) -> None:
         super().__init__()
         self.weights = weights or HydraulicLossWeights()
         self.require_storage_targets = bool(require_storage_targets)
         self.require_facility_flow_targets = bool(require_facility_flow_targets)
         self.require_outfall_flow_targets = bool(require_outfall_flow_targets)
+        self.priority_node_indices = (
+            None
+            if priority_node_indices is None
+            else priority_node_indices.detach().to(dtype=torch.long).reshape(-1)
+        )
 
     @staticmethod
     def _masked_smooth_l1(
@@ -189,6 +196,21 @@ class HydraulicTrajectoryLoss(nn.Module):
         losses["derived_kpi_consistency"] = (
             torch.stack(kpi_terms).mean() if kpi_terms else zero
         )
+        priority_terms: list[torch.Tensor] = []
+        if self.priority_node_indices is not None and self.priority_node_indices.numel():
+            indices = self.priority_node_indices.to(
+                device=branches["candidate"]["node_flooding_rate"].device
+            )
+            for branch in self.BRANCHES:
+                priority_terms.append(
+                    self._masked_smooth_l1(
+                        branches[branch]["node_flooding_rate"].index_select(2, indices),
+                        target[self._target_key(branch, "flood")].index_select(2, indices),
+                    )
+                )
+        losses["priority_flooding_trajectory"] = (
+            torch.stack(priority_terms).mean() if priority_terms else zero
+        )
         return losses
 
     def total(self, losses: dict[str, torch.Tensor]) -> torch.Tensor:
@@ -200,4 +222,5 @@ class HydraulicTrajectoryLoss(nn.Module):
             + w.facility_flow * losses["facility_flow_trajectory"]
             + w.outfall_flow * losses["outfall_flow_trajectory"]
             + w.kpi_consistency * losses["derived_kpi_consistency"]
+            + w.priority_flooding * losses["priority_flooding_trajectory"]
         )
