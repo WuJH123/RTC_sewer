@@ -1336,6 +1336,24 @@ def policy_lock_payload(project_root: str | Path) -> dict[str, Any]:
     formal = root / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2"
     step1 = _read_json(root / "outputs/project6_dual_reference_v4/final_v4/v42_paper/step1_gat/evidence.json")
     step2 = _read_json(root / "outputs/project6_dual_reference_v4/final_v4/v42_paper/step2_surrogate/evidence.json")
+    preferred_step2_root = formal / "step2/models_action_diffusion_v1"
+    legacy_step2_root = formal / "step2/models"
+    step2_root = (
+        preferred_step2_root
+        if all(
+            (preferred_step2_root / f"seed_{seed}" / "formal_step2_report.json").exists()
+            for seed in (17, 42, 73)
+        )
+        else legacy_step2_root
+    )
+    step2_reports = [
+        _read_json(step2_root / f"seed_{seed}" / "formal_step2_report.json")
+        for seed in (17, 42, 73)
+    ]
+    primary_step2 = next(
+        (report for report in step2_reports if int(report.get("seed", -1)) == 42),
+        step2_reports[0],
+    )
     controller_files = [
         root / "sewerrtc/control/pfvfirst_mpc_v42.py",
         root / "sewerrtc/v4/v42_formal_runtime.py",
@@ -1351,8 +1369,7 @@ def policy_lock_payload(project_root: str | Path) -> dict[str, Any]:
         training_groups.update(map(str, report.get("train_rainfall_groups", [])))
         training_groups.update(map(str, report.get("validation_rainfall_groups", [])))
         training_groups.update(map(str, report.get("model_calibration_rainfall_groups", [])))
-    for path in sorted((formal / "step2/models").glob("seed_*/formal_step2_report.json")):
-        report = _read_json(path)
+    for report in step2_reports:
         training_groups.update(map(str, report.get("train_rainfall_groups", [])))
         training_groups.update(map(str, report.get("validation_rainfall_groups", [])))
         training_groups.update(map(str, report.get("calibration_rainfall_groups", [])))
@@ -1367,7 +1384,14 @@ def policy_lock_payload(project_root: str | Path) -> dict[str, Any]:
     sensor_layout = root / "sewerrtc/v4/v42_step1_dataset.py"
     return {
         "policy_sha256": policy_sha,
-        "model_sha256": str(step2["surrogate_model_sha256"]),
+        "model_sha256": str(
+            primary_step2.get("surrogate_model_sha256")
+            or step2["surrogate_model_sha256"]
+        ),
+        "step2_model_root": str(step2_root),
+        "surrogate_action_map_contract": str(
+            primary_step2.get("surrogate_action_map_contract", "")
+        ),
         "gat_model_sha256": str(step1["gat_model_sha256"]),
         "fallback_contract_sha256": sha256_file(fallback),
         "training_rainfall_sha256s": sorted(training_groups),

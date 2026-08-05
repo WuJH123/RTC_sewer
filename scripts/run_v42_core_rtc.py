@@ -439,6 +439,12 @@ def main() -> int:
         help="comma-separated strategies; core default is Proposed,No-control,Internal,Hold",
     )
     ap.add_argument("--output", type=Path, default=None)
+    ap.add_argument(
+        "--run-root",
+        type=Path,
+        default=None,
+        help="isolated Core output root; preserves earlier runs when supplied",
+    )
     args = ap.parse_args()
 
     root = args.project_root.resolve()
@@ -466,7 +472,11 @@ def main() -> int:
     # invoke the legacy Stage18 engineering gate or candidate-lineage blocker.
     orchestrator.OUTPUT_ROOT = root / "outputs/project6_dual_reference_v4/final_v4"
     orchestrator.PAPER_ROOT = orchestrator.OUTPUT_ROOT / "v42_paper"
-    orchestrator.FORMAL_ROOT = orchestrator.PAPER_ROOT / "core_rtc"
+    orchestrator.FORMAL_ROOT = (
+        args.run_root.resolve()
+        if args.run_root is not None
+        else orchestrator.PAPER_ROOT / "core_rtc"
+    )
     orchestrator.LEDGER = (
         orchestrator.FORMAL_ROOT / "FORMAL_EXECUTION_LEDGER.csv"
     )

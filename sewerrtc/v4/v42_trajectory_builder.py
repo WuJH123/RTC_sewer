@@ -71,11 +71,17 @@ def build_surrogate_action_node_map(
     neighbourhood with inverse-distance weights; training and inference share
     this deterministic map.
     """
-    n_nodes = int(graph["n_nodes"])
-    n_facilities = int(graph["n_facilities"])
-    node_ids = [str(x) for x in graph["node_ids"]]
+    def field(name: str):
+        try:
+            return graph[name]
+        except (KeyError, TypeError):
+            return getattr(graph, name)
+
+    n_nodes = int(field("n_nodes"))
+    n_facilities = int(field("n_facilities"))
+    node_ids = [str(x) for x in field("node_ids")]
     node_index = {node_id: i for i, node_id in enumerate(node_ids)}
-    edge_index = np.asarray(graph["edge_index"], dtype=np.int64)
+    edge_index = np.asarray(field("edge_index"), dtype=np.int64)
     if edge_index.shape[0] != 2:
         raise ValueError("graph edge_index must have shape [2, E]")
     adjacency = [set() for _ in range(n_nodes)]
@@ -87,9 +93,10 @@ def build_surrogate_action_node_map(
         adjacency[u].add(v)
         adjacency[v].add(u)
 
-    endpoints = graph.get("facility_endpoints", [])
-    if len(endpoints) != n_facilities:
-        raise ValueError("graph facility endpoint count differs from n_facilities")
+    try:
+        endpoints = graph.get("facility_endpoints", [])
+    except AttributeError:
+        endpoints = []
     influence = np.zeros((n_facilities, n_nodes), dtype=np.float32)
     for facility_index, endpoint in enumerate(endpoints):
         starts = [
@@ -114,6 +121,32 @@ def build_surrogate_action_node_map(
                     queue.append(neighbour)
         for node, distance in distances.items():
             influence[facility_index, node] = 1.0 / float(1 + distance)
+
+    if len(endpoints) != n_facilities:
+        # Step1GraphAssets retains the canonical endpoint-only action map but
+        # not the INP endpoint names. Recover the same start nodes directly
+        # from that map so runtime and training share one influence contract.
+        raw_map = np.asarray(field("action_node_map"), dtype=np.float32)
+        if raw_map.shape != (n_facilities, n_nodes):
+            raise ValueError("graph action_node_map shape differs from graph dimensions")
+        influence.fill(0.0)
+        for facility_index in range(n_facilities):
+            starts = np.flatnonzero(np.isfinite(raw_map[facility_index]) & (raw_map[facility_index] != 0.0)).tolist()
+            if not starts:
+                raise ValueError(f"facility {facility_index} has no action-map endpoint")
+            distances = {int(node): 0 for node in starts}
+            queue = deque(starts)
+            while queue:
+                node = queue.popleft()
+                distance = distances[node]
+                if distance >= int(radius):
+                    continue
+                for neighbour in adjacency[node]:
+                    if neighbour not in distances:
+                        distances[neighbour] = distance + 1
+                        queue.append(neighbour)
+            for node, distance in distances.items():
+                influence[facility_index, node] = 1.0 / float(1 + distance)
 
     if not np.isfinite(influence).all() or not np.any(influence):
         raise ValueError("surrogate action influence map is empty or nonfinite")

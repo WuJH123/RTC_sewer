@@ -34,7 +34,10 @@ from sewerrtc.v4.formal_f2 import FORMAL_GENERATION_ID, read_table, sha256_file
 from sewerrtc.v4.models_v42.hydraulic_multi_reference import MultiReferenceHydraulicSurrogate
 from sewerrtc.v4.v42_node_safety import priority_depth_limits_m
 from sewerrtc.v4.v42_priority_contract import get_pfv_core_node_indices
-from sewerrtc.v4.v42_trajectory_builder import _load_graph_topology
+from sewerrtc.v4.v42_trajectory_builder import (
+    _load_graph_topology,
+    build_surrogate_action_node_map,
+)
 
 PFV_ABSOLUTE_ALLOWANCE_M3 = 100.0
 PFV_RELATIVE_ALLOWANCE_FRACTION = 0.05
@@ -224,7 +227,12 @@ def main() -> int:
     graph = _load_graph_topology(args.project_root)
     edge_index = torch.from_numpy(graph["edge_index"].astype(np.int64)).to(device)
     node_static = torch.from_numpy(graph["node_static"].astype(np.float32)).to(device)
-    action_map = torch.from_numpy(graph["action_node_map"].astype(np.float32)).to(device)
+    # Calibration must use the same action-to-node influence contract as the
+    # action-diffusion models; the endpoint-only GAT map is not a valid
+    # surrogate input for PFV calibration.
+    action_map = torch.from_numpy(
+        build_surrogate_action_node_map(graph).astype(np.float32)
+    ).to(device)
     priority_idx = get_pfv_core_node_indices(list(graph["node_ids"]))
     priority = torch.as_tensor(priority_idx, dtype=torch.long, device=device)
     depth_limits = priority_depth_limits_m(
