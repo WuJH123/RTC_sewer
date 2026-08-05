@@ -23,7 +23,10 @@ from scripts.train_v42_step2_fast import _forward, _graph_indices, _hash_model, 
 from sewerrtc.v4.formal_f2 import read_table
 from sewerrtc.v4.models_v42.hydraulic_multi_reference import MultiReferenceHydraulicSurrogate
 from sewerrtc.v4.v42_priority_contract import get_pfv_core_node_indices
-from sewerrtc.v4.v42_trajectory_builder import _load_graph_topology
+from sewerrtc.v4.v42_trajectory_builder import (
+    _load_graph_topology,
+    build_surrogate_action_node_map,
+)
 
 
 def _arr(value: object) -> np.ndarray:
@@ -33,10 +36,11 @@ def _arr(value: object) -> np.ndarray:
 def _model_predictions(frame: pd.DataFrame, root: Path, model_root: Path, seed: int, batch_size: int) -> tuple[np.ndarray, np.ndarray, str]:
     graph = _load_graph_topology(root)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    action_map = build_surrogate_action_node_map(graph).astype(np.float32)
     graph_tensors = (
         torch.from_numpy(graph["edge_index"].astype(np.int64)).to(device),
         torch.from_numpy(graph["node_static"].astype(np.float32)).to(device),
-        torch.from_numpy(graph["action_node_map"].astype(np.float32)).to(device),
+        torch.from_numpy(action_map).to(device),
         _graph_indices(graph, "is_storage", device),
         _graph_indices(graph, "is_outfall", device),
     )
@@ -179,6 +183,8 @@ def main() -> int:
         "audit_id": "V42_STEP2_ORACLE_OPPORTUNITY_V1",
         "read_only": True,
         "new_swmm_started": False,
+        "action_map_source": "build_surrogate_action_node_map",
+        "action_map_nonzero": int(np.count_nonzero(build_surrogate_action_node_map(graph))),
         "manifest": str(args.manifest),
         "rows": int(len(frame)),
         "states": len(rows),

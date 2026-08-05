@@ -17,7 +17,10 @@ from scripts.train_v42_step2_fast import _forward, _graph_indices, _hash_model, 
 from sewerrtc.v4.formal_f2 import read_table
 from sewerrtc.v4.models_v42.hydraulic_multi_reference import MultiReferenceHydraulicSurrogate
 from sewerrtc.v4.v42_priority_contract import get_pfv_core_node_indices
-from sewerrtc.v4.v42_trajectory_builder import _load_graph_topology
+from sewerrtc.v4.v42_trajectory_builder import (
+    _load_graph_topology,
+    build_surrogate_action_node_map,
+)
 
 
 def _batch_indices(n: int, batch_size: int):
@@ -43,10 +46,11 @@ def main() -> int:
     selected = frame[frame["state_key"].astype(str).isin(state_keys)].reset_index(drop=True)
     graph = _load_graph_topology(args.project_root)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    action_map = build_surrogate_action_node_map(graph).astype(np.float32)
     graph_tensors = (
         torch.from_numpy(graph["edge_index"].astype(np.int64)).to(device),
         torch.from_numpy(graph["node_static"].astype(np.float32)).to(device),
-        torch.from_numpy(graph["action_node_map"].astype(np.float32)).to(device),
+        torch.from_numpy(action_map).to(device),
         _graph_indices(graph, "is_storage", device),
         _graph_indices(graph, "is_outfall", device),
     )
@@ -125,6 +129,18 @@ def main() -> int:
     predicted_pfv_median = float(
         np.median([x["predicted_pfv_range_m3"] for x in rows])
     )
+    ratio = predicted_pfv_median / max(label_pfv_median, 1.0e-12)
+    if ratio < 0.01:
+        interpretation = (
+            "candidate actions reach the model, but PFV action sensitivity remains "
+            "collapsed when predicted PFV variation is orders of magnitude below "
+            "within-state labels"
+        )
+    else:
+        interpretation = (
+            "candidate actions produce measurable PFV variation; safety classification "
+            "and within-state ranking require separate authoritative audit"
+        )
     result = {
         "audit_id": "V42_STEP2_ACTION_SENSITIVITY_V1",
         "read_only": True,
@@ -133,21 +149,18 @@ def main() -> int:
         "model_seeds": [item["seed"] for item in predictions],
         "states_requested": int(args.states),
         "batch_size": int(args.batch_size),
+        "action_map_source": "build_surrogate_action_node_map",
+        "action_map_nonzero": int(np.count_nonzero(action_map)),
         "states_audited": len(rows),
         "rows_audited": int(len(selected)),
         "state_rows": rows,
         "median_label_pfv_std_m3": label_pfv_median,
         "median_label_tfv_std_m3": float(np.median([x["label_tfv_std_m3"] for x in rows])),
         "median_predicted_pfv_range_m3": predicted_pfv_median,
-        "predicted_to_label_pfv_sensitivity_ratio": predicted_pfv_median
-        / max(label_pfv_median, 1.0e-12),
+        "predicted_to_label_pfv_sensitivity_ratio": ratio,
         "median_predicted_tfv_range_m3": float(np.median([x["predicted_tfv_range_m3"] for x in rows])),
         "model_hashes": {str(item["seed"]): item["model_sha256"] for item in predictions},
-        "interpretation": (
-            "candidate actions reach the model, but PFV action sensitivity remains "
-            "collapsed when predicted PFV variation is orders of magnitude below "
-            "within-state labels"
-        ),
+        "interpretation": interpretation,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2, allow_nan=False), encoding="utf-8")
