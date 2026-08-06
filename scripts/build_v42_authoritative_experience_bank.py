@@ -12,6 +12,7 @@ import json
 from collections import OrderedDict
 from pathlib import Path
 import sys
+import time
 from typing import Any
 
 import numpy as np
@@ -57,6 +58,14 @@ def _candidate_action(row: pd.Series) -> np.ndarray:
             except Exception:
                 pass
     raise ValueError("candidate row has no 2D action sequence")
+
+
+def canonical_action_identity(row: pd.Series) -> tuple[np.ndarray, str, str, bool]:
+    """Return executed action, canonical SHA, legacy SHA, and match flag."""
+    action = _candidate_action(row)
+    canonical_sha = action_sha256(action)
+    legacy_sha = str(row.get("candidate_action_sha256", "") or "").strip()
+    return action, canonical_sha, legacy_sha, bool(legacy_sha and legacy_sha == canonical_sha)
 
 
 def _sha256(path: Path) -> str:
@@ -133,13 +142,22 @@ def main() -> int:
     detail_cache_limit = 8
     detail_sha_cache: dict[str, str] = {}
     metric_cache: dict[tuple[str, float], dict[str, float]] = {}
+    started = time.perf_counter()
+    processed = 0
 
     def detail(path: str) -> pd.DataFrame:
         if path in detail_cache:
             frame = detail_cache.pop(path)
             detail_cache[path] = frame
             return frame
-        frame = pd.read_csv(path, low_memory=False)
+        # Metrics only use elapsed_min and flood:*; parsing the wide hydraulic
+        # and actuator columns was the dominant cost for this read-only audit.
+        frame = pd.read_csv(
+            path,
+            usecols=lambda column: column == "elapsed_min" or str(column).startswith("flood:"),
+            low_memory=False,
+            memory_map=True,
+        )
         if path in reference_paths:
             detail_cache[path] = frame
             while len(detail_cache) > detail_cache_limit:
@@ -162,7 +180,11 @@ def main() -> int:
     rows: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
     seen: dict[tuple[str, str], str] = {}
+    legacy_sha_mismatch_rows = 0
+    legacy_sha_missing_rows = 0
+    duplicate_collapsed = 0
     for index, candidate_row in candidates.iterrows():
+        processed += 1
         state_key = str(candidate_row["state_key"])
         if state_key not in states.index:
             failures.append({"row": int(index), "state_key": state_key, "error": "missing_state_manifest"})
@@ -170,12 +192,11 @@ def main() -> int:
         state_row = states.loc[state_key]
         try:
             checkpoint = float(candidate_row.get("checkpoint_min", state_row.get("checkpoint_min")))
-            action = _candidate_action(candidate_row)
-            computed_action_sha = action_sha256(action)
-            stored_action_sha = str(candidate_row.get("candidate_action_sha256", "")).strip()
-            if stored_action_sha and stored_action_sha != computed_action_sha:
-                raise ValueError("stored candidate_action_sha256 differs from canonical action hash")
-            action_sha = computed_action_sha
+            action, action_sha, stored_action_sha, legacy_sha_matches = canonical_action_identity(candidate_row)
+            if not stored_action_sha:
+                legacy_sha_missing_rows += 1
+            elif not legacy_sha_matches:
+                legacy_sha_mismatch_rows += 1
             identity = (state_key, action_sha)
             candidate_path = _first_existing(candidate_row, ["source_detail_path_candidate", "candidate_detail", "detail_path"])
             no_control_path = _first_existing(candidate_row, ["source_detail_path_no_control", "no_control_detail"])
@@ -232,6 +253,8 @@ def main() -> int:
             if identity in seen:
                 if seen[identity] != fingerprint:
                     failures.append({"row": int(index), "state_key": state_key, "error": "duplicate_identity_conflict", "candidate_action_sha256": action_sha})
+                else:
+                    duplicate_collapsed += 1
                 continue
             seen[identity] = fingerprint
             tfv_internal = float(internal_metric["TFV"])
@@ -275,6 +298,10 @@ def main() -> int:
                         "source_detail_path_no_control": no_control_path,
                         "source_detail_path_dynamic_internal": internal_path,
                         "candidate_detail_sha256": str(candidate_row.get("candidate_detail_sha256", "")).strip(),
+                        "legacy_candidate_action_sha256": stored_action_sha,
+                        "canonical_candidate_action_sha256": action_sha,
+                        "legacy_sha_matches_canonical": legacy_sha_matches if stored_action_sha else None,
+                        "duplicate_collapsed": False,
                         "no_control_detail_sha256": detail_sha(no_control_path),
                         "dynamic_internal_detail_sha256": detail_sha(internal_path),
                         "candidate_action_sha256_verified": True,
@@ -290,6 +317,22 @@ def main() -> int:
             )
         except Exception as exc:
             failures.append({"row": int(index), "state_key": state_key, "error": repr(exc)})
+        if processed % 100 == 0 or processed == len(candidates):
+            elapsed = max(time.perf_counter() - started, 1.0e-9)
+            print(
+                json.dumps(
+                    {
+                        "stage": "experience_bank",
+                        "processed": processed,
+                        "total": int(len(candidates)),
+                        "accepted": len(rows),
+                        "failed": len(failures),
+                        "rows_per_sec": round(processed / elapsed, 3),
+                    },
+                    ensure_ascii=False,
+                ),
+                flush=True,
+            )
 
     output = pd.DataFrame(rows)
     if output.empty:
@@ -311,6 +354,9 @@ def main() -> int:
         "input_candidate_rows": int(len(candidates)),
         "output_unique_rows": int(len(output)),
         "input_unique_action_identities": int(len(seen)),
+        "duplicate_collapsed": int(duplicate_collapsed),
+        "legacy_sha_mismatch_rows": int(legacy_sha_mismatch_rows),
+        "legacy_sha_missing_rows": int(legacy_sha_missing_rows),
         "states": int(output["state_key"].nunique()),
         "pfv_safe_rows": int(output["pfv_feasible"].sum()),
         "tfv_improving_rows": int((output["tfv_reduction_pct"] > 0).sum()),
