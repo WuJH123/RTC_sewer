@@ -71,7 +71,17 @@ def _horizon(detail: pd.DataFrame, checkpoint_min: float, steps: int) -> pd.Data
     if "elapsed_min" not in detail.columns:
         raise ValueError("detail is missing elapsed_min")
     times = pd.to_numeric(detail["elapsed_min"], errors="coerce")
-    future = detail[times >= float(checkpoint_min) - 1.0e-6].sort_values("elapsed_min", kind="stable").head(int(steps)).copy()
+    # Frozen Round2 manifests store future H120 at t+10, ..., t+120.
+    targets = float(checkpoint_min) + 10.0 * np.arange(1, int(steps) + 1, dtype=float)
+    values = detail.copy()
+    values["_elapsed_numeric"] = times
+    rows = []
+    for target in targets:
+        matches = values[(values["_elapsed_numeric"] - target).abs() <= 1.0e-6]
+        if len(matches) != 1:
+            raise ValueError(f"detail does not have one exact 10-minute row at {target:g} min")
+        rows.append(matches.iloc[0])
+    future = pd.DataFrame(rows).drop(columns=["_elapsed_numeric"], errors="ignore")
     if len(future) != int(steps):
         raise ValueError(f"detail has {len(future)} rows after checkpoint; expected {steps}")
     if future["elapsed_min"].duplicated().any():
@@ -100,7 +110,20 @@ def _prefix(detail: pd.DataFrame, checkpoint_min: float) -> pd.DataFrame:
     if "elapsed_min" not in detail.columns:
         raise ValueError("detail is missing elapsed_min")
     times = pd.to_numeric(detail["elapsed_min"], errors="coerce")
-    return detail[times < float(checkpoint_min) - 1.0e-6].sort_values("elapsed_min", kind="stable").copy()
+    checkpoint = float(checkpoint_min)
+    delta = (times - checkpoint) / 10.0
+    on_control_grid = np.isclose(delta, np.round(delta), rtol=0.0, atol=1.0e-6)
+    mask = (times < checkpoint - 1.0e-6) & on_control_grid
+    return detail[mask].sort_values("elapsed_min", kind="stable").copy()
+
+
+def _detail_metrics(detail: pd.DataFrame, priority_nodes: Iterable[str], *, dt_sec: float) -> dict[str, float]:
+    flood_columns = _flood_columns(detail)
+    if not flood_columns:
+        raise ValueError("detail has no flood columns")
+    node_ids = [column.split(":", 1)[1] for column in flood_columns]
+    priority_indices = [node_ids.index(str(node)) for node in priority_nodes if str(node) in node_ids]
+    return trajectory_metrics(detail[flood_columns].to_numpy(float), priority_indices, dt_sec=dt_sec)
 
 
 def realised_prefix_budget_metric(
@@ -111,20 +134,8 @@ def realised_prefix_budget_metric(
     relative_margin: float,
     dt_sec: float = DT_SEC,
 ) -> float:
-    candidate = detail_horizon_metrics(
-        candidate_prefix,
-        priority_nodes,
-        checkpoint_min=-float("inf"),
-        steps=len(candidate_prefix),
-        dt_sec=dt_sec,
-    ) if len(candidate_prefix) else {"PFV": 0.0}
-    reference = detail_horizon_metrics(
-        no_control_prefix,
-        priority_nodes,
-        checkpoint_min=-float("inf"),
-        steps=len(no_control_prefix),
-        dt_sec=dt_sec,
-    ) if len(no_control_prefix) else {"PFV": 0.0}
+    candidate = _detail_metrics(candidate_prefix, priority_nodes, dt_sec=dt_sec) if len(candidate_prefix) else {"PFV": 0.0}
+    reference = _detail_metrics(no_control_prefix, priority_nodes, dt_sec=dt_sec) if len(no_control_prefix) else {"PFV": 0.0}
     return float(candidate["PFV"] - (1.0 + float(relative_margin)) * reference["PFV"])
 
 
@@ -208,4 +219,3 @@ def causal_prefix_matches(
         "max_action_error": max_action,
         "max_rainfall_error": rain_error,
     }
-

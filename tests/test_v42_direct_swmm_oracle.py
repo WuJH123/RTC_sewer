@@ -56,7 +56,7 @@ def test_authoritative_detail_metrics_match_array_metrics_and_prefix_semantics()
         {"PFV": 2100.0, "TFV": 4500.0, "peak_TFV_rate": 3.0}
     )
     assert detail_horizon_metrics(detail, priority_nodes=("n0",), checkpoint_min=10.0, steps=2) == pytest.approx(
-        {"PFV": 900.0, "TFV": 2100.0, "peak_TFV_rate": 3.0}
+        {"PFV": 1800.0, "TFV": 3600.0, "peak_TFV_rate": 3.0}
     )
     assert realised_prefix_budget_metric(
         detail.iloc[:2], detail.iloc[:2], priority_nodes=("n0",), relative_margin=0.05
