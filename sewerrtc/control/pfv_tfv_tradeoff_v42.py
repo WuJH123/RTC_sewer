@@ -1,20 +1,27 @@
 """PFV-relaxation versus TFV-benefit trade-off analysis for V4.2.
 
-All functions operate on authoritative candidate outcomes.  They do not alter
-online safety thresholds.  The purpose is to quantify how much extra TFV
-benefit would become available if the PFV non-inferiority contract were relaxed
-and to expose state-wise Pareto-efficient actions.
+All functions operate on authoritative candidate outcomes. They do not alter
+online safety thresholds. The purpose is to quantify how much extra TFV benefit
+would become available if the PFV non-inferiority contract were relaxed and to
+expose state-wise Pareto-efficient actions.
+
+PFV trade-off calculations use the same rolling composition as online MPC when
+the canonical bank provides it: realised event prefix + candidate H120 versus
+the same No-control prefix + H120. This avoids comparing a future-only PFV cost
+against an event-level safety contract.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Sequence
+from typing import Sequence
 
 import numpy as np
 import pandas as pd
 
 
-TRADEOFF_CONTRACT = "V42_PFV_TFV_EXCHANGE_PARETO_V1"
+TRADEOFF_CONTRACT = "V42_PFV_TFV_EXCHANGE_PARETO_V2_ROLLING_PREFIX"
+CANDIDATE_COMPOSED = "pfv_candidate_composed_prefix_plus_h120_m3"
+NO_CONTROL_COMPOSED = "pfv_no_control_composed_prefix_plus_h120_m3"
 
 
 @dataclass(frozen=True)
@@ -27,6 +34,12 @@ class PfvContract:
         reference = np.asarray(pfv_no_control_m3, dtype=float)
         metric = candidate - (1.0 + float(self.relative_margin_fraction)) * reference
         return metric <= float(self.absolute_margin_m3) + 1.0e-9
+
+
+def _pfv_columns(frame: pd.DataFrame) -> tuple[str, str, str]:
+    if CANDIDATE_COMPOSED in frame.columns and NO_CONTROL_COMPOSED in frame.columns:
+        return CANDIDATE_COMPOSED, NO_CONTROL_COMPOSED, "realised_prefix_plus_H120"
+    return "pfv_candidate_m3", "pfv_no_control_m3", "H120_only_legacy_fallback"
 
 
 def add_tradeoff_columns(frame: pd.DataFrame) -> pd.DataFrame:
@@ -42,13 +55,28 @@ def add_tradeoff_columns(frame: pd.DataFrame) -> pd.DataFrame:
     if missing:
         raise KeyError(f"tradeoff table missing columns: {missing}")
     work = frame.copy()
-    for column in required - {"state_key", "candidate_action_sha256"}:
+    candidate_pfv_column, reference_pfv_column, pfv_scope = _pfv_columns(work)
+    numeric = {
+        "pfv_candidate_m3",
+        "pfv_no_control_m3",
+        "tfv_candidate_m3",
+        "tfv_internal_m3",
+        candidate_pfv_column,
+        reference_pfv_column,
+    }
+    for column in numeric:
         work[column] = pd.to_numeric(work[column], errors="coerce")
-    work = work[np.isfinite(work[["pfv_candidate_m3", "pfv_no_control_m3", "tfv_candidate_m3", "tfv_internal_m3"]]).all(axis=1)].copy()
-    work["pfv_excess_vs_no_control_m3"] = work["pfv_candidate_m3"] - work["pfv_no_control_m3"]
+    finite_columns = [candidate_pfv_column, reference_pfv_column, "tfv_candidate_m3", "tfv_internal_m3"]
+    work = work[np.isfinite(work[finite_columns]).all(axis=1)].copy()
+    work["pfv_tradeoff_candidate_m3"] = work[candidate_pfv_column]
+    work["pfv_tradeoff_no_control_m3"] = work[reference_pfv_column]
+    work["pfv_tradeoff_scope"] = pfv_scope
+    work["pfv_excess_vs_no_control_m3"] = (
+        work["pfv_tradeoff_candidate_m3"] - work["pfv_tradeoff_no_control_m3"]
+    )
     work["pfv_relative_excess_fraction"] = np.where(
-        work["pfv_no_control_m3"].abs() > 1.0e-9,
-        work["pfv_excess_vs_no_control_m3"] / work["pfv_no_control_m3"],
+        work["pfv_tradeoff_no_control_m3"].abs() > 1.0e-9,
+        work["pfv_excess_vs_no_control_m3"] / work["pfv_tradeoff_no_control_m3"],
         np.nan,
     )
     work["tfv_benefit_m3"] = work["tfv_internal_m3"] - work["tfv_candidate_m3"]
@@ -63,7 +91,7 @@ def add_tradeoff_columns(frame: pd.DataFrame) -> pd.DataFrame:
 def state_pareto_frontier(frame: pd.DataFrame) -> pd.DataFrame:
     """Return actions not dominated in PFV cost and TFV benefit for each state.
 
-    Lower PFV excess is better; higher TFV benefit is better.  Negative PFV
+    Lower PFV excess is better; higher TFV benefit is better. Negative PFV
     excess is retained because it means the candidate also improves PFV.
     """
     work = add_tradeoff_columns(frame)
@@ -75,13 +103,15 @@ def state_pareto_frontier(frame: pd.DataFrame) -> pd.DataFrame:
             kind="stable",
         )
         best_benefit = -np.inf
+        state_rank = 0
         for row in ordered.itertuples(index=False):
             benefit = float(row.tfv_benefit_m3)
             if benefit > best_benefit + 1.0e-9:
                 payload = row._asdict()
                 payload["state_key"] = str(state_key)
-                payload["pareto_rank"] = len(output)
+                payload["pareto_rank"] = state_rank
                 output.append(payload)
+                state_rank += 1
                 best_benefit = benefit
     return pd.DataFrame(output)
 
@@ -117,12 +147,13 @@ def contract_scan(
     relative_margins: Sequence[float] = (0.0, 0.025, 0.05, 0.075, 0.10, 0.15),
     absolute_margins_m3: Sequence[float] = (0.0, 100.0, 250.0, 500.0, 1000.0, 2000.0),
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Evaluate best authoritative TFV under a grid of PFV contracts.
+    """Evaluate best authoritative TFV under a grid of rolling PFV contracts.
 
-    Returns (state_contract_rows, aggregate_rows).  Aggregate output reports
+    Returns (state_contract_rows, aggregate_rows). Aggregate output reports
     both admitted-only summaries and all-state summaries where an unavailable
-    safe action contributes zero controllable benefit, avoiding the misleading
-    conditional-median shift seen in earlier audits.
+    or non-improving safe action contributes zero controllable benefit. This
+    prevents a changing admitted-state population from creating a misleading
+    median improvement.
     """
     work = add_tradeoff_columns(frame)
     state_keys = sorted(work["state_key"].astype(str).unique())
@@ -131,7 +162,10 @@ def contract_scan(
     for relative in relative_margins:
         for absolute in absolute_margins_m3:
             contract = PfvContract(float(relative), float(absolute))
-            admitted = contract.admits(work["pfv_candidate_m3"], work["pfv_no_control_m3"])
+            admitted = contract.admits(
+                work["pfv_tradeoff_candidate_m3"],
+                work["pfv_tradeoff_no_control_m3"],
+            )
             subset = work[admitted].copy()
             best_by_state: dict[str, dict] = {}
             for state_key, group in subset.groupby(subset["state_key"].astype(str), sort=False):
@@ -143,7 +177,8 @@ def contract_scan(
                         "relative_margin_fraction": float(relative),
                         "absolute_margin_m3": float(absolute),
                         "contract_budget_metric_m3": float(
-                            best["pfv_candidate_m3"] - (1.0 + float(relative)) * best["pfv_no_control_m3"]
+                            best["pfv_tradeoff_candidate_m3"]
+                            - (1.0 + float(relative)) * best["pfv_tradeoff_no_control_m3"]
                         ),
                     }
                 )
@@ -165,6 +200,7 @@ def contract_scan(
                 {
                     "relative_margin_fraction": float(relative),
                     "absolute_margin_m3": float(absolute),
+                    "pfv_tradeoff_scope": str(work["pfv_tradeoff_scope"].iloc[0]),
                     "total_states": len(state_keys),
                     "admitted_states": len(best_by_state),
                     "admitted_fraction": len(best_by_state) / max(len(state_keys), 1),
@@ -196,7 +232,6 @@ def select_knee_points(frontier: pd.DataFrame) -> pd.DataFrame:
             y = ordered["tfv_benefit_m3"].to_numpy(float)
             xn = (x - x.min()) / max(x.max() - x.min(), 1.0e-9)
             yn = (y - y.min()) / max(y.max() - y.min(), 1.0e-9)
-            # Distance above the straight line connecting the two extremes.
             x0, y0 = xn[0], yn[0]
             x1, y1 = xn[-1], yn[-1]
             denom = max(np.hypot(y1 - y0, x1 - x0), 1.0e-9)
