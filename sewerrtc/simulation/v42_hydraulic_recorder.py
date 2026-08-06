@@ -17,6 +17,53 @@ from typing import Any
 import numpy as np
 
 
+def storage_volume_from_depth_v42(
+    depth: Any,
+    *,
+    shape: str,
+    functional_params: Sequence[float] | None = None,
+    curve_depth: Sequence[float] | None = None,
+    curve_area: Sequence[float] | None = None,
+) -> np.ndarray:
+    """Recover SWMM storage volume from depth for a frozen geometry.
+
+    ``FUNCTIONAL`` uses SWMM's ``Area = A0 + A1 * depth ** A2`` form; the
+    input-file parameter order is ``A1 A2 A0``.  ``TABULAR`` curves are
+    depth-area points and are integrated piecewise linearly.  This helper is
+    only a geometry transform; callers must validate it against recorded
+    authoritative volume before using it for target recovery.
+    """
+    d = np.asarray(depth, dtype=np.float64)
+    out = np.full(d.shape, np.nan, dtype=np.float64)
+    finite = np.isfinite(d) & (d >= 0.0)
+    kind = str(shape).strip().upper()
+    if kind == "FUNCTIONAL":
+        if functional_params is None or len(functional_params) < 3:
+            raise ValueError("FUNCTIONAL storage requires A1, A2, A0")
+        a1, a2, a0 = (float(functional_params[i]) for i in range(3))
+        if a2 <= -1.0:
+            raise ValueError("FUNCTIONAL A2 must be greater than -1")
+        out[finite] = a0 * d[finite] + a1 * np.power(d[finite], a2 + 1.0) / (a2 + 1.0)
+        return out
+    if kind != "TABULAR" or curve_depth is None or curve_area is None:
+        raise ValueError(f"unsupported storage geometry: {shape!r}")
+    x = np.asarray(curve_depth, dtype=np.float64)
+    y = np.asarray(curve_area, dtype=np.float64)
+    if x.ndim != 1 or y.ndim != 1 or len(x) != len(y) or len(x) < 2:
+        raise ValueError("TABULAR storage requires at least two depth-area points")
+    if not np.isfinite(x).all() or not np.isfinite(y).all() or np.any(np.diff(x) <= 0.0):
+        raise ValueError("TABULAR storage curve must be finite and strictly increasing")
+    if x[0] > 0.0:
+        x = np.concatenate(([0.0], x))
+        y = np.concatenate(([y[0]], y))
+    if np.any(d[finite] > x[-1] + 1.0e-8):
+        raise ValueError("depth exceeds TABULAR storage curve")
+    cumulative = np.zeros_like(x)
+    cumulative[1:] = np.cumsum(np.diff(x) * (y[:-1] + y[1:]) * 0.5)
+    out[finite] = np.interp(d[finite], x, cumulative)
+    return out
+
+
 def _finite_or_nan(value: Any) -> float:
     try:
         out = float(value)
