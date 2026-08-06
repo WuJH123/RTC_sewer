@@ -79,6 +79,7 @@ def main() -> int:
     end = datetime.now().timestamp()
     overall_round2 = float(table.round2_reduction_pct.median())
     overall_direct = float(table.final_direct_reduction_pct.median())
+    paired_gain = table.final_direct_reduction_pct - table.round2_reduction_pct
     thresholds = {str(t): int((table.final_direct_reduction_pct >= t).sum()) for t in (5, 10, 15, 20)}
     saturated = table[table.gain_over_round2_pp < 2].event_id.tolist()
     refine = table[table.gain_over_round2_pp >= 2].event_id.tolist()
@@ -106,7 +107,7 @@ def main() -> int:
             "mean_runtime_s_per_new_evaluation": float(np.mean(runtimes)) if runtimes else None,
             "observed_wall_clock_s_from_smoke_to_report": float(end - smoke_start),
         },
-        "round2_vs_direct": {"overall_round2_median_pct": overall_round2, "overall_direct_median_pct": overall_direct, "direct_gain_median_pp": overall_direct - overall_round2, "direct_fraction_ge_threshold": thresholds},
+        "round2_vs_direct": {"overall_round2_median_pct": overall_round2, "overall_direct_median_pct": overall_direct, "paired_gain_median_pp": float(paired_gain.median()), "paired_gain_mean_pp": float(paired_gain.mean()), "direct_fraction_ge_threshold": thresholds},
         "search_diagnosis": {"saturated_states": saturated, "refine_states": refine, "stage_b_improved_states": stage_b_improved, "stage_c_run": False, "stage_c_reason": "Stage B improved the two REFINE states but did not establish a further boundary-triggered refinement case"},
         "verdict": "FAST_C_MIXED",
         "verdict_basis": "Two MODERATE states exposed different outcomes: one remained at 0%, one reached 32.05%; the other six frozen states gained <2 percentage points. Control potential is state-specific, not uniformly search-limited.",
@@ -120,7 +121,7 @@ def main() -> int:
         f"- Git: `{report['git']['branch']}` / `{report['git']['local_head']}` / working tree clean={report['git']['working_tree']}",
         f"- Frozen plan: 8 states (LOW 2, MODERATE 3, NEAR 1, SEVERE 2), SHA `{plan_lock.get('plan_sha256')}`",
         f"- New SWMM: Stage A {stage_a_new}, Stage B {stage_b_new}; smoke QA {smoke_new}; 16 workers; failed=0",
-        f"- Overall median: Round2 shared {overall_round2:.3f}% → direct {overall_direct:.3f}%",
+        f"- Overall median: Round2 shared {overall_round2:.3f}% → direct {overall_direct:.3f}%; paired median gain {paired_gain.median():.3f} pp",
         "", "## State results", "", "| Event | Regime | Round2 % | Stage A % | Stage B % | Final % | Gain pp | PFV |", "|---|---|---:|---:|---:|---:|---:|---|",
     ]
     for row in final_rows:
