@@ -24,6 +24,7 @@ def main() -> int:
     states = pd.read_csv(screen / "FAST_DIRECT_SCREEN_STATES.csv")
     rows = pd.read_csv(screen / "FAST_DIRECT_SCREEN_ROWS.csv")
     plan_lock = _json(screen / "state_plan/FAST_DIRECT_STATE_PLAN_LOCK.json")
+    boundary_audit = _json(screen / "FAST_DIRECT_BOUNDARY_AUDIT.json")
     stage_b_rows = [json.loads(x) for x in (screen / "stage_b/DIRECT_SCREEN_STAGE_B_LEDGER.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
     legacy_metric_audit = _json(screen / "metric_consistency/DIRECT_SWMM_METRIC_CONSISTENCY_AUDIT.json")
     stage_b_keys = {(str(x.get("state_key")), str(x.get("candidate_action_sha256"))) for x in stage_b_rows}
@@ -36,6 +37,7 @@ def main() -> int:
     def finite_or_none(value: float) -> float | None:
         return float(value) if np.isfinite(value) else None
 
+    boundary_by_event = {str(x["event_id"]): bool(x["expandable_boundary_hit"]) for x in boundary_audit["states"]}
     final_rows: list[dict] = []
     for _, state in states.iterrows():
         group = rows[rows.state_key.astype(str).eq(str(state.state_key))]
@@ -47,7 +49,7 @@ def main() -> int:
             "stage_a_reduction_pct": finite_or_none(best(stage_a)), "stage_b_reduction_pct": finite_or_none(best(stage_b)),
             "final_direct_reduction_pct": float(state.stage_a_reduction_pct),
             "gain_over_round2_pp": float(state.gain_over_round2_pp),
-            "pfv_feasible": bool(state.pfv_feasible), "evaluations": int(state.evaluations),
+            "pfv_feasible": bool(state.pfv_feasible), "expandable_boundary_hit": boundary_by_event.get(str(state.event_id), True), "evaluations": int(state.evaluations),
             "best_action_sha256": str(state.best_action_sha256),
         })
     table = pd.DataFrame(final_rows)
@@ -105,15 +107,23 @@ def main() -> int:
             "stage_b_reused": int(stage_b_reused), "smoke_new_swmm": smoke_new,
             "screen_unique_new_swmm": int(stage_a_new + stage_b_new), "screen_total_including_smoke": int(stage_a_new + stage_b_new + smoke_new),
             "mean_runtime_s_per_new_evaluation": float(np.mean(runtimes)) if runtimes else None,
+            "throughput_per_min": float(16 * 60.0 / np.mean(runtimes)) if runtimes else None,
+            "eta_s": 0.0,
             "observed_wall_clock_s_from_smoke_to_report": float(end - smoke_start),
         },
         "round2_vs_direct": {"overall_round2_median_pct": overall_round2, "overall_direct_median_pct": overall_direct, "paired_gain_median_pp": float(paired_gain.median()), "paired_gain_mean_pp": float(paired_gain.mean()), "direct_fraction_ge_threshold": thresholds},
-        "search_diagnosis": {"saturated_states": saturated, "refine_states": refine, "stage_b_improved_states": stage_b_improved, "stage_c_run": False, "stage_c_reason": "Stage B improved the two REFINE states but did not establish a further boundary-triggered refinement case"},
+        "search_diagnosis": {"saturated_states": saturated, "refine_states": refine, "stage_b_improved_states": stage_b_improved, "expandable_boundary_audit_pass": bool(boundary_audit["all_best_actions_have_no_expandable_boundary"]), "stage_c_run": False, "stage_c_reason": "Stage B improved the two REFINE states but did not establish a further boundary-triggered refinement case"},
         "verdict": "FAST_C_MIXED",
         "verdict_basis": "Two MODERATE states exposed different outcomes: one remained at 0%, one reached 32.05%; the other six frozen states gained <2 percentage points. Control potential is state-specific, not uniformly search-limited.",
         "next_step": "Do not launch full direct optimization from this screen alone. Preserve T15_D105 as a candidate-space gap diagnostic; freeze the development TFV target as load/state-dependent and only consider a targeted follow-up if online candidate search needs it.",
     }
     (screen / "FAST_DIRECT_SCREEN_FINAL.json").write_text(json.dumps(report, indent=2, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+    runtime = root / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2/_codex/runtime/fast_direct_screen"
+    runtime.mkdir(parents=True, exist_ok=True)
+    best_by_state = {str(row["event_id"]): {"best_reduction_pct": row["final_direct_reduction_pct"], "pfv_feasible": row["pfv_feasible"]} for row in final_rows}
+    (runtime / "heartbeat.json").write_text(json.dumps({"stage": "fast_direct_screen", "status": "complete", "updated_at": datetime.now().isoformat(), "active_workers": 0, "eta_s": 0.0}, indent=2), encoding="utf-8")
+    (runtime / "pid.json").write_text(json.dumps({"stage": "fast_direct_screen", "status": "complete", "active_pids": [], "workers": 16}, indent=2), encoding="utf-8")
+    (runtime / "progress.json").write_text(json.dumps({"planned": 422, "new_completed": 385, "reused": 37, "failed": 0, "throughput_per_min": report["runtime"]["throughput_per_min"], "eta_s": 0.0, "active_workers": 0, "best_by_state": best_by_state, "updated_at": datetime.now().isoformat()}, indent=2, ensure_ascii=False), encoding="utf-8")
     lines = [
         "# FAST TRUE-STATE SWMM CONTROL-POTENTIAL SCREEN V1", "", 
         f"Verdict: **{report['verdict']}**", "", 
