@@ -1,0 +1,83 @@
+{
+  "contract_id": "PROJECT6_V42_EXPERIENCE_GRADIENT_MPC_V1",
+  "development_status": "opt_in_until_local_validation_and_policy_lock",
+  "scientific_flow": [
+    "sparse_sensing",
+    "causal_full_state_reconstruction",
+    "differentiable_action_effect_surrogate",
+    "authoritative_experience_guidance",
+    "state_adaptive_continuous_gradient_search",
+    "engineering36_projection_and_deduplication",
+    "rolling_pfv_ucb_hard_admission",
+    "minimum_tfv_selection",
+    "first_10min_execution",
+    "write_readback_and_replan"
+  ],
+  "history_bank": {
+    "authority": "authoritative_SWMM_detail_csv_only",
+    "legacy_stored_kpi_labels_are_authority": false,
+    "online_future_truth_allowed": false,
+    "use": [
+      "same_state_action_effect_training",
+      "nearest_state_warm_start_retrieval",
+      "facility_importance_diagnostics",
+      "development_only_active_learning"
+    ]
+  },
+  "search": {
+    "mandatory_coverage_retained": true,
+    "continuous_search": "multi_start_gradient",
+    "binary_pumps": ["ADD301.2", "ADD301.3"],
+    "binary_semantics": "exact_0_or_1_outer_modes",
+    "coarse_stage": "selected_continuous_facilities_constant_over_H3",
+    "refinement_stage": "top_facilities_independent_over_three_H3_steps",
+    "H4_H12": "current_readback",
+    "gradient_search_is_safety_authority": false
+  },
+  "hydraulic_safety": {
+    "sole_online_hydraulic_gate": "rolling_one_sided_PFV_UCB",
+    "event_contract": "PFV_candidate_total <= 1.05 * PFV_no_control_total + 100_m3",
+    "realised_prefix_included": true,
+    "allowance_reinitialised_each_decision": false,
+    "global_peak": "report_only",
+    "priority_depth": "diagnostic_only"
+  },
+  "objective": {
+    "inside_admitted_set": "minimise_TFV",
+    "action_penalty": false,
+    "peak_penalty": false,
+    "uncertainty_penalty": false
+  },
+  "pfv_tfv_tradeoff_analysis": {
+    "purpose": "development_and_paper_sensitivity_only",
+    "changes_online_contract": false,
+    "relative_margin_grid": [0.0, 0.025, 0.05, 0.075, 0.10, 0.15],
+    "absolute_margin_m3_grid": [0.0, 100.0, 250.0, 500.0, 1000.0, 2000.0],
+    "pareto_axes": {
+      "cost": "PFV_candidate_minus_PFV_no_control_m3",
+      "benefit": "TFV_internal_minus_TFV_candidate_m3"
+    },
+    "report": [
+      "state_wise_pareto_frontier",
+      "marginal_TFV_benefit_per_extra_PFV_m3",
+      "knee_point",
+      "contract_grid_state_coverage",
+      "contract_grid_all_state_benefit"
+    ]
+  },
+  "required_before_policy_lock": [
+    "canonical_recompute_of_all_historical_candidate_metrics",
+    "step2_candidate_relative_accuracy_and_ranking_acceptance",
+    "local_gradient_direction_validation_against_authoritative_SWMM",
+    "independent_operational_PFV_calibration",
+    "bounded_gradient_candidate_authoritative_recovery_test",
+    "rolling_PFV_closed_loop_micro_validation"
+  ],
+  "forbidden": [
+    "future_SWMM_state_online",
+    "realised_future_rainfall_online",
+    "using_gradient_barrier_as_final_safety_gate",
+    "relaxing_PFV_contract_to_force_TFV_improvement",
+    "using_challenge_locked_or_final_events_for_active_learning"
+  ]
+}
