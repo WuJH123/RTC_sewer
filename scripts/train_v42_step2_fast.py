@@ -41,7 +41,17 @@ def _arr(value: str) -> np.ndarray:
 
 
 def _stack(frame: pd.DataFrame, column: str) -> torch.Tensor:
-    return torch.from_numpy(np.stack([_arr(v) for v in frame[column]], axis=0))
+    cache: dict[str, np.ndarray] = {}
+    arrays = []
+    for value in frame[column]:
+        key = str(value)
+        array = cache.get(key)
+        if array is None:
+            array = _arr(value)
+            if len(cache) < 512:
+                cache[key] = array
+        arrays.append(array)
+    return torch.from_numpy(np.stack(arrays, axis=0))
 
 
 def _hash_model(model: torch.nn.Module) -> str:
@@ -100,6 +110,12 @@ def _tensorise(frame: pd.DataFrame) -> dict[str, torch.Tensor]:
     for quantity, tensor_prefix in optional.items():
         if not _all_branch_columns(frame, quantity):
             continue
+        availability_columns = [
+            f"trajectory_{quantity}_{branch}_available" for branch in BRANCHES
+        ]
+        if all(column in frame.columns for column in availability_columns):
+            if not bool(frame[availability_columns].astype(bool).all().all()):
+                continue
         for branch in BRANCHES:
             data[f"{tensor_prefix}_{branch}"] = _stack(
                 frame, f"trajectory_{quantity}_{branch}"
