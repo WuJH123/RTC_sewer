@@ -21,6 +21,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from sewerrtc.v4.v42_priority_contract import get_pfv_core_node_indices
 from sewerrtc.v4.v42_trajectory_builder import _load_graph_topology
+from sewerrtc.control.authoritative_control_metrics_v42 import trajectory_metrics
 
 
 DT_SEC = 600.0
@@ -76,9 +77,13 @@ def _non_hold(row: pd.Series) -> bool:
 def _reference_metrics(row: pd.Series, priority: Sequence[int]) -> Dict[str, Any]:
     no_control_flood = _array(row["trajectory_flood_no_control"])
     internal_flood = _array(row["trajectory_flood_dynamic_internal"])
-    no_control_pfv = float(no_control_flood[:, priority].sum() * DT_SEC)
-    internal_tfv = float(internal_flood.sum() * DT_SEC)
-    internal_peak = float(np.sum(internal_flood, axis=1).max())
+    candidate_flood = _array(row["trajectory_flood_candidate"])
+    no_control_metrics = trajectory_metrics(no_control_flood, priority, dt_sec=DT_SEC)
+    internal_metrics = trajectory_metrics(internal_flood, priority, dt_sec=DT_SEC)
+    candidate_metrics = trajectory_metrics(candidate_flood, priority, dt_sec=DT_SEC)
+    no_control_pfv = no_control_metrics["PFV"]
+    internal_tfv = internal_metrics["TFV"]
+    internal_peak = internal_metrics["peak_TFV_rate"]
     flooded_count = (internal_flood > 0.0).sum(axis=1)
     node_count = max(1, int(internal_flood.shape[1]))
     storage_max = None
@@ -88,9 +93,9 @@ def _reference_metrics(row: pd.Series, priority: Sequence[int]) -> Dict[str, Any
             storage_max = float(np.sum(_array(row[storage_column]), axis=1).max())
         except (TypeError, ValueError):
             storage_max = None
-    candidate_pfv = no_control_pfv + float(row["pfv_delta"])
-    candidate_tfv = internal_tfv + float(row["tfv_delta"])
-    candidate_peak = internal_peak + float(row["peak_delta"])
+    candidate_pfv = candidate_metrics["PFV"]
+    candidate_tfv = candidate_metrics["TFV"]
+    candidate_peak = candidate_metrics["peak_TFV_rate"]
     return {
         "event_id": str(row["event_id"]),
         "rainfall_sha256": str(row["rainfall_sha256"]),
