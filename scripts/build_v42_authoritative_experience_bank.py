@@ -21,6 +21,9 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from sewerrtc.control.authoritative_control_metrics_v42 import (
+    DT_SEC,
+    _detail_metrics,
+    _prefix,
     action_sha256,
     detail_horizon_metrics,
     rolling_pfv_budget_metric,
@@ -129,17 +132,34 @@ def main() -> int:
             for path in (candidate_path, no_control_path, internal_path):
                 if not Path(path).exists():
                     raise FileNotFoundError(path)
+            candidate_detail = detail(candidate_path)
+            nc_detail = detail(no_control_path)
             candidate_metric = h120(candidate_path, checkpoint)
             nc_metric = h120(no_control_path, checkpoint)
             internal_metric = h120(internal_path, checkpoint)
+            candidate_prefix = _prefix(candidate_detail, checkpoint)
+            nc_prefix = _prefix(nc_detail, checkpoint)
+            candidate_prefix_metric = (
+                _detail_metrics(candidate_prefix, priority_nodes, dt_sec=DT_SEC) if len(candidate_prefix) else {"PFV": 0.0}
+            )
+            nc_prefix_metric = (
+                _detail_metrics(nc_prefix, priority_nodes, dt_sec=DT_SEC) if len(nc_prefix) else {"PFV": 0.0}
+            )
+            candidate_prefix_pfv = float(candidate_prefix_metric["PFV"])
+            nc_prefix_pfv = float(nc_prefix_metric["PFV"])
+            candidate_composed_pfv = candidate_prefix_pfv + float(candidate_metric["PFV"])
+            nc_composed_pfv = nc_prefix_pfv + float(nc_metric["PFV"])
             rolling_metric = rolling_pfv_budget_metric(
-                detail(candidate_path),
-                detail(no_control_path),
+                candidate_detail,
+                nc_detail,
                 priority_nodes=priority_nodes,
                 checkpoint_min=checkpoint,
                 relative_margin=float(args.relative_margin),
                 steps=12,
             )
+            reconstructed_rolling = candidate_composed_pfv - (1.0 + float(args.relative_margin)) * nc_composed_pfv
+            if abs(float(rolling_metric) - float(reconstructed_rolling)) > 1.0e-6:
+                raise RuntimeError("rolling PFV component reconstruction mismatch")
             tfv_internal = float(internal_metric["TFV"])
             reduction = (
                 100.0 * (tfv_internal - float(candidate_metric["TFV"])) / tfv_internal
@@ -173,6 +193,10 @@ def main() -> int:
                         "checkpoint_min": checkpoint,
                         "relative_margin_fraction": float(args.relative_margin),
                         "absolute_margin_m3": float(args.absolute_margin_m3),
+                        "pfv_candidate_prefix_m3": candidate_prefix_pfv,
+                        "pfv_no_control_prefix_m3": nc_prefix_pfv,
+                        "pfv_candidate_composed_prefix_plus_h120_m3": candidate_composed_pfv,
+                        "pfv_no_control_composed_prefix_plus_h120_m3": nc_composed_pfv,
                         "source_detail_path_candidate": candidate_path,
                         "source_detail_path_no_control": no_control_path,
                         "source_detail_path_dynamic_internal": internal_path,
@@ -200,6 +224,7 @@ def main() -> int:
         "new_swmm_started": False,
         "legacy_stored_labels_used": False,
         "metric_source": "detail.csv_shared_authoritative_h120_plus_rolling_pfv",
+        "pfv_tradeoff_basis": "realised_prefix_plus_H120_candidate_vs_same_no_control_composition",
         "input_candidate_rows": int(len(candidates)),
         "output_unique_rows": int(len(output)),
         "states": int(output["state_key"].nunique()),
