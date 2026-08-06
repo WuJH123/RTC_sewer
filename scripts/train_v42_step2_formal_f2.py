@@ -199,6 +199,11 @@ def main() -> int:
         / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2/step2/FORMAL_F2_STEP2_CONTROL_CORE_MANIFEST.parquet",
     )
     ap.add_argument("--output-dir", type=Path, required=True)
+    ap.add_argument(
+        "--development-only",
+        action="store_true",
+        help="allow a non-Formal diagnostic manifest and label the report development-only",
+    )
     ap.add_argument("--epochs", type=int, default=30)
     ap.add_argument("--patience", type=int, default=6)
     ap.add_argument("--batch-size", type=int, default=4)
@@ -256,6 +261,15 @@ def main() -> int:
         default="CONTROL_CORE",
     )
     args = ap.parse_args()
+
+    formal_manifest = (
+        PROJECT_ROOT
+        / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2/step2/FORMAL_F2_STEP2_CONTROL_CORE_MANIFEST.parquet"
+    ).resolve()
+    if not args.development_only and args.manifest.resolve() != formal_manifest:
+        raise RuntimeError(
+            "non-Formal Step2 manifests require --development-only; no diagnostic data may silently become Formal"
+        )
 
     if args.kpi_consistency_weight < 0.0 or not np.isfinite(args.kpi_consistency_weight):
         raise ValueError("--kpi-consistency-weight must be finite and non-negative")
@@ -463,8 +477,10 @@ def main() -> int:
         "formal_generation_id": FORMAL_GENERATION_ID,
         "stage": "formal_f2_step2_single_seed",
         "status": "pass",
-        "development_only": False,
+        "development_only": bool(args.development_only),
         "formal_mainline_authorized": False,
+        "source_manifest": str(args.manifest.resolve()),
+        "source_manifest_sha256": hashlib.sha256(args.manifest.read_bytes()).hexdigest(),
         "formal_model": "MultiReferenceHydraulicSurrogate",
         "four_reference_shared_model": True,
         "trajectory_first_kpi_derivation": True,
