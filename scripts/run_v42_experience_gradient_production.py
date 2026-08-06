@@ -26,6 +26,8 @@ from sewerrtc.v4.v42_experience_gradient_runtime import (
 
 
 ENTRYPOINT_CONTRACT = "PROJECT6_V42_EXPERIENCE_GRADIENT_PRODUCTION_ENTRYPOINT_V1"
+_BASE_PRODUCTION_POLICY_SHA = production._production_policy_sha
+_BASE_POLICY_LOCK_PAYLOAD = production._production_policy_lock_payload
 
 
 def _patch_runtime_selector() -> None:
@@ -35,7 +37,7 @@ def _patch_runtime_selector() -> None:
 
 
 def _extended_policy_sha(project_root: Path) -> str:
-    base_sha = production._production_policy_sha(project_root)
+    base_sha = _BASE_PRODUCTION_POLICY_SHA(project_root)
     files = [
         project_root / "sewerrtc/control/experience_bank_v42.py",
         project_root / "sewerrtc/control/differentiable_hybrid_search_v42.py",
@@ -57,7 +59,7 @@ def _extended_policy_sha(project_root: Path) -> str:
 
 def _experience_policy_lock_payload(project_root: str | Path):
     root = Path(project_root)
-    payload = production._production_policy_lock_payload(root)
+    payload = _BASE_POLICY_LOCK_PAYLOAD(root)
     payload["policy_sha256"] = _extended_policy_sha(root)
     payload["production_runtime"] = "scripts/run_v42_experience_gradient_production.py"
     payload["candidate_search_scope"] = "global_coverage_plus_authoritative_experience_plus_gradient_refinement"
