@@ -30,7 +30,17 @@ def array(value: object) -> np.ndarray:
 def write_json(path: Path, payload: dict) -> None:
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(payload, indent=2, ensure_ascii=False, allow_nan=False), encoding="utf-8")
-    temporary.replace(path)
+    for _ in range(20):
+        try:
+            temporary.replace(path)
+            return
+        except PermissionError:
+            time.sleep(0.1)
+    # Windows readers can briefly hold the destination open.  The final
+    # progress write is recoverable; do not turn completed SWMM results into
+    # a failed campaign because a telemetry file was locked.
+    path.write_text(temporary.read_text(encoding="utf-8"), encoding="utf-8")
+    temporary.unlink(missing_ok=True)
 
 
 def main() -> int:
