@@ -27,6 +27,7 @@ def main() -> int:
     boundary_audit = _json(screen / "FAST_DIRECT_BOUNDARY_AUDIT.json")
     stage_b_rows = [json.loads(x) for x in (screen / "stage_b/DIRECT_SCREEN_STAGE_B_LEDGER.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
     legacy_metric_audit = _json(screen / "metric_consistency/DIRECT_SWMM_METRIC_CONSISTENCY_AUDIT.json")
+    shared_metric_audit = _json(screen / "FAST_DIRECT_SHARED_METRIC_CONSISTENCY.json")
     stage_b_keys = {(str(x.get("state_key")), str(x.get("candidate_action_sha256"))) for x in stage_b_rows}
     rows["is_stage_b"] = [(str(x.state_key), str(x.candidate_action_sha256)) in stage_b_keys for x in rows.itertuples()]
 
@@ -98,6 +99,10 @@ def main() -> int:
             "legacy_stored_label_audit_status": legacy_metric_audit.get("status"),
             "legacy_stored_label_audit_pass": bool(legacy_metric_audit.get("metric_consistency_pass")),
             "legacy_same_prefix_pass": bool(legacy_metric_audit.get("same_prefix_consistency_pass")),
+            "shared_metric_consistency_status": shared_metric_audit.get("status"),
+            "shared_metric_consistency_pass": shared_metric_audit.get("status") == "pass",
+            "shared_metric_rows_tested": int(shared_metric_audit.get("rows_tested", 0)),
+            "shared_metric_max_abs_error": float(shared_metric_audit.get("max_abs_error", 0.0)),
             "screen_metric_source": "shared_actual_detail_authoritative_h120_and_rolling_pfv",
             "screen_did_not_use_legacy_stored_metrics": True,
         },
