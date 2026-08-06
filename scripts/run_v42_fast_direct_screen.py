@@ -74,22 +74,53 @@ def _build_sequence(current: np.ndarray, continuous: list[str], ids: list[str], 
     return sequence
 
 
+def _authoritative_seed_rows(group: pd.DataFrame, source: pd.Series, checkpoint: float, priority_nodes: list[str]) -> pd.DataFrame:
+    """Rank existing actions with the same metric used by the screen.
+
+    ponytail: bounded selected-state scan; avoid trusting stale manifest labels,
+    and do not generalize this expensive read to the full 7,908-row population.
+    """
+    rows: list[dict[str, Any]] = []
+    reference = Path(str(source.source_detail_path_no_control))
+    for _, row in group.drop_duplicates("candidate_action_sha256", keep="first").iterrows():
+        raw = row.get("action_candidate_readback")
+        path = Path(str(row.get("source_detail_path_candidate", "")))
+        if pd.isna(raw) or not path.exists() or not reference.exists():
+            continue
+        try:
+            metrics = _detail_metrics(path, reference, checkpoint, priority_nodes)
+        except Exception:
+            continue
+        item = row.to_dict()
+        item["_seed_safe"] = bool(metrics["pfv_feasible"])
+        item["_seed_tfv"] = float(metrics["tfv_candidate_m3"])
+        item["_seed_budget"] = float(metrics["pfv_budget_metric_m3"])
+        rows.append(item)
+    if not rows:
+        return group
+    return pd.DataFrame(rows).sort_values(
+        ["_seed_safe", "_seed_tfv", "_seed_budget"],
+        ascending=[False, True, True],
+        kind="stable",
+    )
+
+
 def _state_jobs(state: pd.Series, group: pd.DataFrame, importance: pd.DataFrame, ids: list[str], actuators: pd.DataFrame, priority_nodes: list[str], output_root: Path, existing_hashes: set[str], count: int = 48) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     source = group.iloc[0]
     current = _array(source["action_hold_previous_readback"])[0]
     continuous = importance[(importance.state_key == str(state.state_key)) & (~importance.binary)].sort_values(["frequency", "best_tfv_gain_pct", "facility_id"], ascending=[False, False, True], na_position="last", kind="stable").head(6)["facility_id"].astype(str).tolist()
     binary = importance[(importance.state_key == str(state.state_key)) & importance.binary & (importance.safe_improving_change_count >= 2)].sort_values(["frequency", "best_tfv_gain_pct", "facility_id"], ascending=[False, False, True], kind="stable")["facility_id"].astype(str).tolist()
     seeds: list[np.ndarray] = [np.tile(current, (12, 1)).astype(np.float32)]
-    seed_rows = group.copy()
-    if "pfv_delta" in seed_rows:
-        pfv = pd.to_numeric(seed_rows["pfv_delta"], errors="coerce")
-        tfv = pd.to_numeric(seed_rows["tfv_delta"], errors="coerce")
-        seed_rows = seed_rows.assign(_seed_pfv=pfv, _seed_tfv=tfv)
-        seed_rows = pd.concat([
-            seed_rows.loc[pfv.le(100.0)].assign(_seed_order=0).sort_values("_seed_tfv", kind="stable", na_position="last"),
-            seed_rows.assign(_seed_order=1).sort_values("_seed_tfv", kind="stable", na_position="last"),
-            seed_rows.assign(_seed_order=2),
-        ], ignore_index=True)
+    seed_rows = _authoritative_seed_rows(group, source, float(state.checkpoint_min), priority_nodes)
+    canonical_rows: dict[str, pd.Series] = {}
+    for _, existing_row in group.iterrows():
+        raw = existing_row.get("action_candidate_readback")
+        if pd.isna(raw):
+            continue
+        try:
+            canonical_rows[action_sha256(_array(raw))] = existing_row
+        except Exception:
+            continue
     seen_seed_hashes: set[str] = set()
     for _, seed_row in seed_rows.iterrows():
         raw = seed_row.get("action_candidate_readback")
@@ -130,6 +161,8 @@ def _state_jobs(state: pd.Series, group: pd.DataFrame, importance: pd.DataFrame,
         }
         if candidate_sha in existing_hashes:
             row = group[group.candidate_action_sha256.astype(str).eq(candidate_sha)].head(1)
+            if row.empty and candidate_sha in canonical_rows:
+                row = pd.DataFrame([canonical_rows[candidate_sha]])
             reused.append({**base, "status": "reused", "detail_path": str(row.iloc[0].source_detail_path_candidate) if not row.empty else ""})
         elif ordinal == 0:
             reused.append({**base, "status": "reused", "detail_path": str(source.source_detail_path_hold_previous), "candidate_family": "hold_reference_reuse"})
@@ -174,7 +207,15 @@ def main() -> int:
     graph = _load_graph_topology(args.project_root)
     node_ids = [str(x) for x in graph["node_ids"]]
     priority_nodes = [node_ids[int(i)] for i in get_pfv_core_node_indices(node_ids)]
-    existing_by_state = {str(key): set(group.candidate_action_sha256.dropna().astype(str)) for key, group in manifest.groupby(manifest.state_key.astype(str), sort=False)}
+    existing_by_state: dict[str, set[str]] = {}
+    for key, group in manifest.groupby(manifest.state_key.astype(str), sort=False):
+        hashes = set(group.candidate_action_sha256.dropna().astype(str))
+        for raw in group.action_candidate_readback.dropna():
+            try:
+                hashes.add(action_sha256(_array(raw)))
+            except Exception:
+                continue
+        existing_by_state[str(key)] = hashes
     output_root = args.output_dir / "evaluations"
     output_root.mkdir(parents=True, exist_ok=True)
     jobs: list[dict[str, Any]] = []
@@ -216,7 +257,7 @@ def main() -> int:
                     result = {"status": "fail", "state_key": job["state_key"], "candidate_action_sha256": job["candidate_action_sha256"], "error": repr(exc)}
                 if result.get("status") == "fail":
                     failed += 1
-                result["reused"] = False
+                result["reused"] = bool(result.get("status") == "reused")
                 results.append(result)
                 ledger.write(json.dumps(result, ensure_ascii=False, allow_nan=False) + "\n")
                 ledger.flush()
@@ -224,7 +265,7 @@ def main() -> int:
                 if result.get("status") == "pass":
                     best[state_key] = {"candidate_action_sha256": result.get("candidate_action_sha256"), "status": "completed"}
                 _write_progress(progress_path, planned=len(jobs) + len(reused), completed=len(results) - len(reused), reused=len(reused), failed=failed, running=max(0, len(futures) - len(results) + len(reused)), started=started, best=best)
-    summary = {"stage": args.stage, "development_only": True, "online_deployable": False, "workers": args.workers, "planned": len(jobs) + len(reused), "new_jobs": len(jobs), "reused": len(reused), "failed": failed, "new_swmm_started": bool(jobs), "ledger": str(ledger_path), "status": "pass" if failed == 0 else "fail"}
+    summary = {"stage": args.stage, "development_only": True, "online_deployable": False, "workers": args.workers, "planned": len(jobs) + len(reused), "new_jobs": len(jobs), "reused": sum(bool(item.get("reused")) for item in results), "failed": failed, "new_swmm_started": any(item.get("status") == "pass" and not item.get("reused") for item in results), "ledger": str(ledger_path), "status": "pass" if failed == 0 else "fail"}
     (args.output_dir / f"DIRECT_SCREEN_{args.stage.upper()}_SUMMARY.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     print(json.dumps(summary, indent=2, ensure_ascii=False), flush=True)
     return 0 if failed == 0 else 3
