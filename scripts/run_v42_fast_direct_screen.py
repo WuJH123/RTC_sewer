@@ -182,6 +182,7 @@ def main() -> int:
     with ledger_path.open("a", encoding="utf-8") as ledger:
         for item in reused:
             item["detail_path"] = item.pop("detail_path", "")
+            item.pop("actuators", None)
             item["reused"] = True
             results.append(item)
             ledger.write(json.dumps(item, ensure_ascii=False) + "\n")
