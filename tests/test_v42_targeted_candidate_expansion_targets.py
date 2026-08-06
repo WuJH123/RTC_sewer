@@ -40,3 +40,17 @@ def test_targeted_horizon_fails_closed_without_storage_targets():
             storage_node_ids=["S1"],
             actuator_ids=["P1"],
         )
+
+
+def test_targeted_horizon_starts_after_checkpoint_row():
+    detail = _detail(with_targets=True)
+    detail["storage_volume:S1"] = np.arange(12.0)
+    detail = pd.concat([detail, detail.iloc[[-1]].assign(elapsed_min=130.0, **{"storage_volume:S1": 12.0})], ignore_index=True)
+    arrays = _horizon_arrays(
+        detail,
+        checkpoint=10.0,
+        node_ids=["J1", "S1"],
+        storage_node_ids=["S1"],
+        actuator_ids=["P1"],
+    )
+    assert arrays["storage"][0, 0] == 1.0

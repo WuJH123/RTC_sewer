@@ -394,7 +394,10 @@ def _horizon_arrays(
     storage_node_ids: list[str],
     actuator_ids: list[str],
 ) -> dict[str, Any]:
-    horizon = detail[detail["elapsed_min"] >= float(checkpoint) - 1.0e-6].sort_values("elapsed_min").head(12)
+    # The action at ``checkpoint`` is the pre-action readback.  The first
+    # executed 10-minute result is the next elapsed row; including the
+    # checkpoint row shifts PFV/TFV labels one control step backward.
+    horizon = detail[detail["elapsed_min"] > float(checkpoint) + 1.0e-6].sort_values("elapsed_min").head(12)
     if len(horizon) != 12:
         raise RuntimeError(f"candidate detail has {len(horizon)} H120 rows, expected 12")
     flood_cols = [f"flood:{node_id}" for node_id in node_ids]
