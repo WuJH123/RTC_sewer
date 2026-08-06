@@ -21,7 +21,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from sewerrtc.v4.v42_priority_contract import get_pfv_core_node_indices
 from sewerrtc.v4.v42_trajectory_builder import _load_graph_topology
-from sewerrtc.control.authoritative_control_metrics_v42 import trajectory_metrics
+from sewerrtc.control.authoritative_control_metrics_v42 import action_sha256, trajectory_metrics
 
 
 DT_SEC = 600.0
@@ -113,12 +113,73 @@ def _reference_metrics(row: pd.Series, priority: Sequence[int]) -> Dict[str, Any
         "max_flooded_node_fraction_internal": float(flooded_count.max() / node_count),
         "storage_volume_sum_max_no_control": storage_max,
         "candidate_non_hold": _non_hold(row),
-        "candidate_action_sha256": str(row.get("candidate_action_sha256", "")),
+        "candidate_action_sha256": action_sha256(_array(row["action_candidate_readback"])),
     }
+
+
+def _load_bank_states(frame: pd.DataFrame, project_root: Path) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """Use the already-canonicalized bank without reparsing wide trajectories."""
+    required = {
+        "state_key", "event_id", "rainfall_sha256", "checkpoint_min",
+        "pfv_candidate_m3", "pfv_no_control_m3", "tfv_candidate_m3", "tfv_internal_m3",
+        "candidate_action_json", "global_peak_candidate", "global_peak_internal",
+    }
+    missing = sorted(required - set(frame.columns))
+    if missing:
+        raise KeyError(f"experience bank missing required columns: {missing}")
+    formal = project_root / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2"
+    state_manifest = formal / "step2/FORMAL_F2_STEP2_CONTROL_CORE_MANIFEST.parquet"
+    hold = pd.read_parquet(state_manifest, columns=["state_key", "action_hold_previous_readback"])
+    hold["state_key"] = hold["state_key"].astype(str)
+    hold = hold.drop_duplicates("state_key").set_index("state_key")
+    work = frame.copy()
+    work["state_key"] = work["state_key"].astype(str)
+    work["candidate_action_sha256"] = work.get("canonical_candidate_action_sha256", work["candidate_action_sha256"]).astype(str)
+    work["candidate_non_hold"] = [
+        bool(np.max(np.abs(_array(action)[:3] - _array(hold.loc[str(state), "action_hold_previous_readback"])[:3])) > 1.0e-6)
+        for state, action in zip(work["state_key"], work["candidate_action_json"])
+    ]
+    work["pfv_excess_m3"] = work["pfv_candidate_m3"].astype(float) - work["pfv_no_control_m3"].astype(float)
+    work["global_peak_candidate_rate"] = work["global_peak_candidate"].astype(float)
+    work["global_peak_internal_rate"] = work["global_peak_internal"].astype(float)
+    work["max_flooded_node_fraction_internal"] = np.nan
+    work["storage_volume_sum_max_no_control"] = np.nan
+    variables = ["pfv_no_control_m3", "tfv_internal_m3", "global_peak_internal_rate"]
+    state_records: List[Dict[str, Any]] = []
+    for state_key, group in work.groupby("state_key", sort=True):
+        first = group.iloc[0]
+        values = np.asarray([float(first[name]) for name in variables], dtype=float)
+        state_records.append({
+            "state_key": str(state_key),
+            "event_id": str(first["event_id"]),
+            "rainfall_sha256": str(first["rainfall_sha256"]),
+            "load_values": values,
+            "candidate_count": int(len(group)),
+        })
+    state_table = pd.DataFrame(state_records)
+    rank = np.full((len(state_table), len(variables)), np.nan, dtype=float)
+    for column_index in range(len(variables)):
+        values = np.asarray([row[column_index] for row in state_table["load_values"]], dtype=float)
+        mask = np.isfinite(values)
+        if mask.any():
+            rank[mask, column_index] = _percentile_rank(values[mask])
+    state_table["hydraulic_load_index"] = np.nanmean(rank, axis=1)
+    state_table["load_regime"] = pd.qcut(
+        state_table["hydraulic_load_index"].rank(method="first"),
+        q=4,
+        labels=["LOW_LOAD", "MODERATE_LOAD", "NEAR_CAPACITY", "SEVERE_OVERLOAD"],
+    ).astype(str)
+    lookup = state_table.set_index("state_key")[["hydraulic_load_index", "load_regime"]].to_dict(orient="index")
+    work["hydraulic_load_index"] = [lookup[key]["hydraulic_load_index"] for key in work["state_key"]]
+    work["load_regime"] = [lookup[key]["load_regime"] for key in work["state_key"]]
+    work["tfv_reduction_pct"] = 100.0 * (work["tfv_internal_m3"].astype(float) - work["tfv_candidate_m3"].astype(float)) / work["tfv_internal_m3"].abs().clip(lower=1.0e-9)
+    return work, {"input_rows": int(len(work)), "input_states": int(work["state_key"].nunique()), "input_rainfall_groups": int(work["rainfall_sha256"].nunique()), "priority_node_count": None}
 
 
 def _load_states(manifest: Path, project_root: Path) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     frame = pd.read_parquet(manifest).reset_index(drop=True)
+    if "experience_contract" in frame.columns:
+        return _load_bank_states(frame, project_root)
     required = {
         "state_key",
         "event_id",
@@ -486,11 +547,11 @@ def main() -> int:
             aggregate = _aggregate(state_rows, candidate_rows, relative, absolute)
             grid_rows.append(aggregate)
             candidate_rows = candidate_rows.copy()
-            candidate_rows.insert(0, "absolute_margin_m3", absolute)
-            candidate_rows.insert(0, "relative_margin_fraction", relative)
+            candidate_rows["absolute_margin_m3"] = absolute
+            candidate_rows["relative_margin_fraction"] = relative
             state_rows = state_rows.copy()
-            state_rows.insert(0, "absolute_margin_m3", absolute)
-            state_rows.insert(0, "relative_margin_fraction", relative)
+            state_rows["absolute_margin_m3"] = absolute
+            state_rows["relative_margin_fraction"] = relative
             candidate_rows_all.append(candidate_rows)
             state_rows_all.append(state_rows)
 
