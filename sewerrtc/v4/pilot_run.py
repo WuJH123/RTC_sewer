@@ -37,7 +37,6 @@ BRANCH_CONTEXT_COLUMNS = (
     "reference_identity_json",
 )
 
-
 def attach_branch_context(
     candidate_plan: pd.DataFrame,
     branch_plan: pd.DataFrame,

@@ -55,13 +55,12 @@ def _write(path: Path, payload: dict[str, Any]) -> None:
 def _audit_no_control(root: Path, candidates: pd.DataFrame, output_dir: Path) -> dict[str, Any]:
     facility_ids = _load_engineering36_ids(root)
     setting_columns = [f"setting:{item}" for item in facility_ids]
-    paths = sorted(
-        {
-            str(value).strip()
-            for value in candidates["source_detail_path_no_control"].dropna()
-            if str(value).strip()
-        }
-    )
+    path_checkpoints: dict[str, set[float]] = {}
+    for _, row in candidates[["source_detail_path_no_control", "checkpoint_min"]].dropna().iterrows():
+        path = str(row["source_detail_path_no_control"]).strip()
+        if path:
+            path_checkpoints.setdefault(path, set()).add(float(row["checkpoint_min"]))
+    paths = sorted(path_checkpoints)
     rows: list[dict[str, Any]] = []
     for path_text in paths:
         path = Path(path_text)
@@ -79,18 +78,30 @@ def _audit_no_control(root: Path, candidates: pd.DataFrame, output_dir: Path) ->
                 rows.append(result)
                 continue
             frame = pd.read_csv(path, usecols=["elapsed_min", *setting_columns], low_memory=False)
-            values = frame[setting_columns].to_numpy(dtype=float)
-            finite = bool(np.isfinite(values).all())
-            all_open = bool(finite and np.allclose(values, 1.0, atol=1.0e-7, rtol=0.0))
+            checks = []
+            for checkpoint_min in sorted(path_checkpoints[path_text]):
+                post = frame[frame["elapsed_min"].astype(float) >= checkpoint_min - 1.0e-7]
+                values = post[setting_columns].to_numpy(dtype=float)
+                finite = bool(values.size and np.isfinite(values).all())
+                all_open = bool(finite and np.allclose(values, 1.0, atol=1.0e-7, rtol=0.0))
+                checks.append(
+                    {
+                        "checkpoint_min": checkpoint_min,
+                        "prefix_rows_excluded": int(len(frame) - len(post)),
+                        "post_action_rows": int(len(post)),
+                        "finite": finite,
+                        "all_engineering36_settings_equal_1": all_open,
+                        "min_setting": float(np.nanmin(values)) if values.size else None,
+                        "max_setting": float(np.nanmax(values)) if values.size else None,
+                        "pass": bool(len(post) > 0 and all_open),
+                    }
+                )
             result.update(
                 {
                     "rows": int(len(frame)),
                     "setting_columns": int(len(setting_columns)),
-                    "finite": finite,
-                    "all_engineering36_settings_equal_1": all_open,
-                    "min_setting": float(np.nanmin(values)) if values.size else None,
-                    "max_setting": float(np.nanmax(values)) if values.size else None,
-                    "pass": bool(len(frame) > 0 and all_open),
+                    "checks": checks,
+                    "pass": bool(checks and all(bool(item["pass"]) for item in checks)),
                 }
             )
         except Exception as exc:
@@ -99,7 +110,7 @@ def _audit_no_control(root: Path, candidates: pd.DataFrame, output_dir: Path) ->
     report = {
         "contract": "PROJECT6_V42_NO_CONTROL_ALL_OPEN_V1",
         "status": "pass" if paths and all(bool(row.get("pass")) for row in rows) else "fail",
-        "definition": "all_engineering36_settings_equal_1.0",
+        "definition": "all_engineering36_settings_equal_1.0_after_checkpoint_min",
         "engineering36_count": len(facility_ids),
         "unique_no_control_detail_files": len(paths),
         "passed_detail_files": sum(bool(row.get("pass")) for row in rows),
@@ -118,7 +129,7 @@ def main() -> int:
     args = parser.parse_args()
     base = args.project_root / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2"
     candidate_columns = [
-        "state_key", "event_id", "rainfall_sha256", "source_detail_path_no_control",
+        "state_key", "event_id", "rainfall_sha256", "checkpoint_min", "source_detail_path_no_control",
         "source_detail_path_candidate", "source_detail_path_dynamic_internal",
         "state_source", "history_input_contract", "reconstructor_contract",
         "reconstructed_history_contract", "authoritative_swmm_history_used_as_online_input",
