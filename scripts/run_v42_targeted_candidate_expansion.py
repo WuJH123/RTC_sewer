@@ -93,10 +93,24 @@ def _role_map(actuators: pd.DataFrame) -> dict[str, str]:
     return {str(value): "" for value in actuators["actuator_id"]}
 
 
-def _templates(group: pd.DataFrame, current: np.ndarray, ids: list[str]) -> list[dict[str, object]]:
+def _templates(
+    group: pd.DataFrame,
+    current: np.ndarray,
+    ids: list[str],
+    *,
+    ranked_ids: list[str] | None = None,
+    refine: bool = False,
+) -> list[dict[str, object]]:
     templates: list[dict[str, object]] = []
     seen: set[tuple[str, ...]] = set()
-    for raw in group.get("action_candidate_readback", []):
+    source_group = group
+    if refine and "tfv_delta" in group.columns:
+        source_group = group.sort_values(
+            ["tfv_delta", "candidate_action_sha256"],
+            kind="stable",
+            na_position="last",
+        )
+    for raw in source_group.get("action_candidate_readback", []):
         candidate = _array(raw)
         if candidate.shape != (12, len(ids)):
             continue
@@ -108,12 +122,30 @@ def _templates(group: pd.DataFrame, current: np.ndarray, ids: list[str]) -> list
         if key in seen:
             continue
         seen.add(key)
+        template_ids = [ids[int(i)] for i in changed]
+        template_deltas = [float(delta[int(i)]) for i in changed]
         templates.append({
-            "actuator_ids": [ids[int(i)] for i in changed],
-            "deltas": [float(delta[int(i)]) for i in changed],
+            "actuator_ids": template_ids,
+            "deltas": template_deltas,
             "profile": "constant_h3",
         })
-    return templates[:12]
+        if refine and ranked_ids:
+            available = [aid for aid in ranked_ids if aid not in template_ids]
+            if available:
+                templates.append({
+                    "actuator_ids": [available[0], *template_ids[1:]],
+                    "deltas": template_deltas,
+                    "profile": "constant_h3",
+                })
+            if len(template_ids) >= 2 and len(available) >= 2:
+                templates.append({
+                    "actuator_ids": [*template_ids, *available[:2]],
+                    "deltas": [*template_deltas, template_deltas[0], template_deltas[0]],
+                    "profile": "constant_h3",
+                })
+        if len(templates) >= (24 if refine else 12):
+            break
+    return templates[: (24 if refine else 12)]
 
 
 def _make_tail_schedule(path: Path, detail_path: Path, ids: list[str], current: np.ndarray) -> None:
@@ -202,7 +234,7 @@ def _run_one(job: dict[str, Any]) -> dict[str, Any]:
         control_step_sec=600,
         override_target_sequence=target_sequence,
         post_override_nominal_detail_csv=tail_schedule,
-        policy_id=f"targeted_candidate_expansion_round1:{job['candidate_label']}",
+        policy_id=f"targeted_candidate_expansion_round{job.get('candidate_round', 1)}:{job['candidate_label']}",
         cleanup_swmm_artifacts=True,
     )
     prefix = _prefix_audit(detail_path, no_control, float(job["checkpoint_min"]), ids)
@@ -220,6 +252,7 @@ def _run_one(job: dict[str, Any]) -> dict[str, Any]:
         "rainfall_sha256": str(job["rainfall_sha256"]),
         "checkpoint_min": float(job["checkpoint_min"]),
         "candidate_label": str(job["candidate_label"]),
+        "candidate_round": int(job.get("candidate_round", 1)),
         "candidate_family": str(job["candidate_family"]),
         "candidate_action_sha256": str(job["candidate_action_sha256"]),
         "candidate_action": sequence.tolist(),
@@ -257,6 +290,19 @@ def _build_jobs(args: argparse.Namespace) -> tuple[list[dict[str, Any]], pd.Data
     if set(plan["state_key"].astype(str)) != {str(x["state_key"]) for x in lock["selected_states"]}:
         raise RuntimeError("target plan state list differs from frozen lock")
 
+    existing_hashes_by_state: dict[str, set[str]] = {}
+    if args.existing_manifest:
+        existing = pd.read_parquet(
+            args.existing_manifest,
+            columns=["state_key", "candidate_action_sha256"],
+        )
+        for state_key, existing_group in existing.groupby(
+            existing["state_key"].astype(str), sort=False
+        ):
+            existing_hashes_by_state[str(state_key)] = set(
+                existing_group["candidate_action_sha256"].dropna().astype(str)
+            )
+
     jobs: list[dict[str, Any]] = []
     for _, planned in plan.iterrows():
         state_key = str(planned["state_key"])
@@ -269,7 +315,14 @@ def _build_jobs(args: argparse.Namespace) -> tuple[list[dict[str, Any]], pd.Data
         if _prefix_hash(source) != str(planned["prefix_state_sha256"]):
             raise RuntimeError(f"prefix hash mismatch: {state_key}")
         current = _array(source["action_hold_previous_readback"])[0]
-        templates = _templates(group, current, ids)
+        round_no = int(args.candidate_round)
+        templates = _templates(
+            group,
+            current,
+            ids,
+            ranked_ids=ranked,
+            refine=round_no >= 2,
+        )
         candidates = generate_targeted_candidate_sequences(
             current_action=current,
             actuator_ids=ids,
@@ -287,6 +340,8 @@ def _build_jobs(args: argparse.Namespace) -> tuple[list[dict[str, Any]], pd.Data
                 break
             sequence = np.asarray(candidate["sequence"], dtype=np.float32)
             candidate_sha = _sha_sequence(sequence)
+            if candidate_sha in existing_hashes_by_state.get(state_key, set()):
+                continue
             output = Path(args.output_root) / state_key / candidate_sha
             jobs.append({
                 "state_key": state_key,
@@ -305,6 +360,7 @@ def _build_jobs(args: argparse.Namespace) -> tuple[list[dict[str, Any]], pd.Data
                 "source_detail_path_hold_previous": str(source["source_detail_path_hold_previous"]),
                 "output_dir": str(output),
                 "resume": bool(args.resume),
+                "candidate_round": round_no,
             })
     if args.states_limit:
         allowed = set(plan.head(int(args.states_limit))["state_key"].astype(str))
@@ -363,13 +419,14 @@ def _build_expanded_manifest(results: list[dict[str, Any]], source: pd.DataFrame
         candidate_action = arrays["action"]
         hold = _array(row["action_hold_previous_readback"]).astype(float)
         actual_k = int(np.count_nonzero(np.abs(candidate_action[:3] - hold[:3]) > 1.0e-6))
-        candidate_id = f"targeted_round1__{state_key}__{result['candidate_action_sha256']}"
+        round_no = int(result.get("candidate_round", 1))
+        candidate_id = f"targeted_round{round_no}__{state_key}__{result['candidate_action_sha256']}"
         row.update({
-            "formal_generation_id": "PROJECT6_V42_TARGETED_CANDIDATE_EXPANSION_R1",
+            "formal_generation_id": f"PROJECT6_V42_TARGETED_CANDIDATE_EXPANSION_R{round_no}",
             "development_only": True,
             "formal_mainline_authorized": False,
             "training_admission_authorized": False,
-            "source_dataset": "targeted_candidate_expansion_round1",
+            "source_dataset": f"targeted_candidate_expansion_round{round_no}",
             "case_id": candidate_id,
             "case_uid": hashlib.sha256(candidate_id.encode("utf-8")).hexdigest(),
             "candidate_action_sha256": str(result["candidate_action_sha256"]),
@@ -408,6 +465,7 @@ def _build_expanded_manifest(results: list[dict[str, Any]], source: pd.DataFrame
             "facility_flow_finite_fraction_candidate": 0.0,
             "outfall_flow_finite_fraction_candidate": 0.0,
             "candidate_expansion_family": str(result.get("candidate_family", "")),
+            "candidate_expansion_round": round_no,
             "candidate_reference_reuse": True,
         })
         rows.append(row)
@@ -426,12 +484,16 @@ def main() -> int:
     parser.add_argument("--candidate-limit", type=int, default=0)
     parser.add_argument("--states-limit", type=int, default=0)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--candidate-round", type=int, default=1)
+    parser.add_argument("--existing-manifest", type=Path)
     args = parser.parse_args()
     jobs, plan, source_manifest, _ = _build_jobs(args)
     args.output_root.mkdir(parents=True, exist_ok=True)
     results: list[dict[str, Any]] = []
     total = len(jobs)
-    print(json.dumps({"stage": "targeted_candidate_expansion_round1", "planned_candidates": total, "workers": int(args.workers)}, ensure_ascii=False), flush=True)
+    round_label = f"ROUND{int(args.candidate_round)}"
+    stage = f"targeted_candidate_expansion_round{int(args.candidate_round)}"
+    print(json.dumps({"stage": stage, "planned_candidates": total, "workers": int(args.workers)}, ensure_ascii=False), flush=True)
     if int(args.workers) <= 1:
         for index, job in enumerate(jobs, 1):
             try:
@@ -439,7 +501,7 @@ def main() -> int:
             except Exception as exc:
                 result = {"status": "fail", "state_key": job["state_key"], "candidate_action_sha256": job["candidate_action_sha256"], "error": repr(exc)}
             results.append(result)
-            print(json.dumps({"stage": "targeted_candidate_expansion_round1", "completed": index, "total": total, "status": result.get("status"), "state_key": result.get("state_key")}, ensure_ascii=False), flush=True)
+            print(json.dumps({"stage": stage, "completed": index, "total": total, "status": result.get("status"), "state_key": result.get("state_key")}, ensure_ascii=False), flush=True)
     else:
         with ProcessPoolExecutor(max_workers=int(args.workers)) as pool:
             futures = {pool.submit(_run_one, job): job for job in jobs}
@@ -450,14 +512,14 @@ def main() -> int:
                 except Exception as exc:
                     result = {"status": "fail", "state_key": job["state_key"], "candidate_action_sha256": job["candidate_action_sha256"], "error": repr(exc)}
                 results.append(result)
-                print(json.dumps({"stage": "targeted_candidate_expansion_round1", "completed": index, "total": total, "status": result.get("status"), "state_key": result.get("state_key")}, ensure_ascii=False), flush=True)
+                print(json.dumps({"stage": stage, "completed": index, "total": total, "status": result.get("status"), "state_key": result.get("state_key")}, ensure_ascii=False), flush=True)
     result_frame = pd.DataFrame(results)
-    result_frame.to_csv(args.output_root / "TARGETED_CANDIDATE_ROUND1_FUNNEL.csv", index=False)
+    result_frame.to_csv(args.output_root / f"TARGETED_CANDIDATE_{round_label}_FUNNEL.csv", index=False)
     if not result_frame.empty and (result_frame["status"].isin(["pass", "reused"])).any():
         expanded = _build_expanded_manifest(results, source_manifest, args.project_root)
-        expanded.to_parquet(args.output_root / "TARGETED_CANDIDATE_ROUND1_MANIFEST.parquet", index=False)
+        expanded.to_parquet(args.output_root / f"TARGETED_CANDIDATE_{round_label}_MANIFEST.parquet", index=False)
     audit = {
-        "audit_id": "V42_TARGETED_CANDIDATE_ROUND1_AUDIT_V1",
+        "audit_id": f"V42_TARGETED_CANDIDATE_{round_label}_AUDIT_V1",
         "development_only": True,
         "formal_mainline_authorized": False,
         "planned_candidates": total,
@@ -467,15 +529,16 @@ def main() -> int:
         "failed_candidates": int((result_frame.get("status", pd.Series(dtype=str)) == "fail").sum()),
         "reference_reuse_required": True,
         "new_reference_runs": False,
+        "candidate_round": int(args.candidate_round),
         "workers": int(args.workers),
         "candidate_families": {
             str(key): int(value)
             for key, value in result_frame.get("candidate_family", pd.Series(dtype=str)).value_counts().items()
         },
-        "output_funnel": str(args.output_root / "TARGETED_CANDIDATE_ROUND1_FUNNEL.csv"),
-        "output_manifest": str(args.output_root / "TARGETED_CANDIDATE_ROUND1_MANIFEST.parquet"),
+        "output_funnel": str(args.output_root / f"TARGETED_CANDIDATE_{round_label}_FUNNEL.csv"),
+        "output_manifest": str(args.output_root / f"TARGETED_CANDIDATE_{round_label}_MANIFEST.parquet"),
     }
-    (args.output_root / "TARGETED_CANDIDATE_ROUND1_AUDIT.json").write_text(json.dumps(audit, indent=2, ensure_ascii=False), encoding="utf-8")
+    (args.output_root / f"TARGETED_CANDIDATE_{round_label}_AUDIT.json").write_text(json.dumps(audit, indent=2, ensure_ascii=False), encoding="utf-8")
     if audit["failed_candidates"]:
         return 2
     return 0

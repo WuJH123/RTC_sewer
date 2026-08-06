@@ -89,6 +89,7 @@ def _select_states(
     *,
     states_per_regime: int,
     positive_controls: int,
+    regimes: tuple[str, ...],
 ) -> pd.DataFrame:
     work = states.copy()
     work["state_key"] = work["state_key"].astype(str)
@@ -129,7 +130,9 @@ def _select_states(
 
     # Low/moderate states are the strongest test of missing candidate coverage:
     # they should have controllability but currently fail the 20% target.
-    for regime in ("LOW_LOAD", "MODERATE_LOAD"):
+    for regime in regimes:
+        if regime not in ("LOW_LOAD", "MODERATE_LOAD"):
+            continue
         subset = work[work["load_regime"] == regime].copy()
         subset["no_improving_candidate"] = (
             subset["actual_safe_tfv_improving_count"] <= 0
@@ -151,7 +154,9 @@ def _select_states(
 
     # Near/severe states are diagnostic controls.  They establish whether the
     # oracle ceiling contracts under high loading after candidate expansion.
-    for regime in ("NEAR_CAPACITY", "SEVERE_OVERLOAD"):
+    for regime in regimes:
+        if regime not in ("NEAR_CAPACITY", "SEVERE_OVERLOAD"):
+            continue
         subset = work[work["load_regime"] == regime].sort_values(
             ["actual_safe_candidate_count", "candidate_count"],
             ascending=[False, True],
@@ -182,6 +187,8 @@ def main() -> int:
     parser.add_argument("--absolute-margin-m3", type=float, default=100.0)
     parser.add_argument("--states-per-regime", type=int, default=6)
     parser.add_argument("--positive-controls", type=int, default=4)
+    parser.add_argument("--regimes", default="LOW_LOAD,MODERATE_LOAD,NEAR_CAPACITY,SEVERE_OVERLOAD")
+    parser.add_argument("--candidate-round", type=int, default=1)
     args = parser.parse_args()
 
     states = pd.read_csv(args.states_csv)
@@ -207,10 +214,12 @@ def main() -> int:
     margin_states = _margin_slice(
         states, args.relative_margin, args.absolute_margin_m3
     )
+    regimes = tuple(item.strip() for item in str(args.regimes).split(",") if item.strip())
     plan = _select_states(
         margin_states,
         states_per_regime=args.states_per_regime,
         positive_controls=args.positive_controls,
+        regimes=regimes,
     )
 
     action_examples = (
@@ -284,6 +293,8 @@ def main() -> int:
         "audit_id": "V42_TARGETED_CANDIDATE_EXPANSION_PLAN_V1",
         "read_only": True,
         "new_swmm_started": False,
+        "candidate_round": int(args.candidate_round),
+        "regimes": list(regimes),
         "relative_margin_fraction": float(args.relative_margin),
         "absolute_margin_m3": float(args.absolute_margin_m3),
         "input_states_at_margin": int(len(margin_states)),
@@ -323,6 +334,8 @@ def main() -> int:
     lock = {
         "lock_id": "V42_TARGETED_CANDIDATE_EXPANSION_PLAN_LOCK_V1",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "candidate_round": int(args.candidate_round),
+        "regimes": list(regimes),
         "git_sha": git_sha,
         "plan_sha256": _sha256(plan_path),
         "pareto_source_sha256": {
