@@ -163,7 +163,11 @@ def _load_states(manifest: Path, project_root: Path) -> Tuple[pd.DataFrame, Dict
         labels=["LOW_LOAD", "MODERATE_LOAD", "NEAR_CAPACITY", "SEVERE_OVERLOAD"],
     ).astype(str)
     states = states.drop(columns=["candidate_count"], errors="ignore")
-    state_lookup = states.set_index("state_key").to_dict(orient="index")
+    # Keep row-level candidate metrics from the current manifest row.  The
+    # state table is built from the first row only for load stratification;
+    # copying the whole record here silently replaced every candidate's PFV
+    # and TFV with that first candidate.
+    state_lookup = states.set_index("state_key")[["hydraulic_load_index", "load_regime"]].to_dict(orient="index")
     row_records: List[Dict[str, Any]] = []
     for _, row in frame.iterrows():
         item = _reference_metrics(row, priority)
@@ -254,22 +258,31 @@ def _aggregate(states: pd.DataFrame, rows: pd.DataFrame, relative: float, absolu
 
 def _rolling_semantics(project_root: Path) -> Dict[str, Any]:
     runtime = (project_root / "sewerrtc/v4/v42_formal_runtime.py").read_text(encoding="utf-8")
+    safe_runtime = (project_root / "sewerrtc/v4/v42_formal_runtime_safe.py").read_text(encoding="utf-8")
     patch = (project_root / "sewerrtc/v4/v42_pfv_tfv_runtime_patch.py").read_text(encoding="utf-8")
+    rolling = (project_root / "sewerrtc/control/rolling_pfv_budget_v42.py").read_text(encoding="utf-8")
+    integrated = all(
+        token in safe_runtime + patch + rolling
+        for token in ("RollingPfvBudgetState", "rolling_pfv_budget_state", "realised_prefix_budget_metric_m3")
+    )
     return {
-        "online_pfv_candidate_scope": "predicted_H120_candidate_branch",
-        "online_pfv_no_control_scope": "predicted_H120_no_control_branch",
-        "realized_prefix_in_online_pfv": False,
+        "online_pfv_candidate_scope": "realised_causal_prefix_plus_predicted_H120" if integrated else "predicted_H120_candidate_branch",
+        "online_pfv_no_control_scope": "realised_causal_prefix_plus_predicted_H120" if integrated else "predicted_H120_no_control_branch",
+        "realized_prefix_in_online_pfv": integrated,
         "decision_replan_interval": "10_min",
-        "allowance_reinitialized_each_decision": "_pfv_budget_metric_ucb is recomputed per predict_and_decide call",
-        "cumulative_event_pfv_budget_tracking": bool(
-            any(token in runtime + patch for token in ("cumulative_pfv", "pfv_budget_remaining", "budget_remaining_m3", "spent_pfv"))
-        ),
+        "allowance_reinitialized_each_decision": False if integrated else "_pfv_budget_metric_ucb is recomputed per predict_and_decide call",
+        "cumulative_event_pfv_budget_tracking": integrated,
         "whole_event_authoritative_pfv_recomputed_after_run": "compute_kpis" in runtime and "PFV" in runtime,
         "online_future_hydraulic_truth_used": False,
         "online_realized_future_rainfall_used": False,
-        "semantic_alignment": False,
-        "status": "FAIL_CLOSED_REVIEW_REQUIRED",
-        "reason": "H120 PFV admission is reset at each decision and no cumulative event-level allowance is tracked online; whole-event SWMM PFV is only audited after the run.",
+        "semantic_alignment": integrated,
+        "status": "IMPLEMENTED_CODE_AUDIT_ONLY" if integrated else "FAIL_CLOSED_REVIEW_REQUIRED",
+        "reason": (
+            "Cumulative PFV state includes realised causal prefix and predicted future allowance; "
+            "this audit did not start SWMM, so runtime evidence remains pending."
+            if integrated else
+            "H120 PFV admission is reset at each decision and no cumulative event-level allowance is tracked online."
+        ),
     }
 
 
@@ -488,12 +501,10 @@ def main() -> int:
     if first_any_20 is None:
         path_decision = "PATH_C"
     else:
-        low_mod_values = []
-        for regime in ("LOW_LOAD", "MODERATE_LOAD"):
-            value = first_any_20.get(regime, {}).get("oracle_median_reduction_pct")
-            if value is not None:
-                low_mod_values.append(float(value))
-        path_decision = "PATH_A" if low_mod_values and float(np.mean(low_mod_values)) >= 20.0 else "PATH_B"
+        # A few favorable states do not establish the stated low/moderate
+        # loading target.  Require both strata to reach the 20% median at one
+        # tested margin; otherwise the next step is candidate expansion.
+        path_decision = "PATH_A" if low_moderate_20 is not None else "PATH_B"
     rolling = _rolling_semantics(args.project_root)
     split_authority = _split_authority(args.project_root, args.manifest)
     summary: Dict[str, Any] = {
@@ -510,7 +521,7 @@ def main() -> int:
         "grid_summary": grid_rows,
         "twenty_pct_first_any_state_margin": first_any_20,
         "twenty_pct_low_moderate_median_margin": low_moderate_20,
-        "twenty_pct_physically_supported": first_any_20 is not None,
+        "twenty_pct_physically_supported": low_moderate_20 is not None,
         "path_decision": path_decision,
         "engineering_acceptability": "not_accepted_automatically; inspect safe PFV excess P90/max and rolling semantics before any contract change",
         "rolling_semantics_path": "PFV_ROLLING_NONINFERIORITY_SEMANTICS.json",

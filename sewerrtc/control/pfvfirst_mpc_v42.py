@@ -27,7 +27,7 @@ violation.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Mapping, Sequence
 
 import numpy as np
@@ -321,10 +321,23 @@ def decide_pfvfirst_mpc(
     margins: SafetyMargins | None = None,
     weights: MPCWeights | None = None,
     expected_fallback_contract_hash: str | None = None,
+    rolling_pfv_budget_state: object | None = None,
 ) -> MPCDecision:
     """Return the first action of the best admitted candidate or fallback."""
     margins = margins or SafetyMargins()
     weights = weights or MPCWeights()
+    if rolling_pfv_budget_state is not None:
+        candidates = tuple(
+            replace(
+                candidate,
+                pfv_budget_metric_ucb_m3=float(
+                    rolling_pfv_budget_state.cumulative_budget_metric_ucb_m3(
+                        candidate.pfv_budget_metric_ucb_m3
+                    )
+                ),
+            )
+            for candidate in candidates
+        )
     try:
         selected, audits, objective = select_safe_candidate(
             candidates,
