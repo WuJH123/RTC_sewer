@@ -19,6 +19,7 @@ import scripts.run_v42_formal_production_f2 as production
 from sewerrtc.v4 import v42_formal_runtime as base_runtime
 from sewerrtc.v4 import v42_formal_runtime_safe as safe_runtime
 from sewerrtc.v4 import v42_formal_surrogate_closed_loop as surrogate_runtime
+from sewerrtc.v4.v42_simple_rtc_contract import apply_simple_rtc_contract
 from sewerrtc.v4.v42_experience_gradient_runtime import (
     DEFAULT_BANK_RELATIVE_PATH,
     predict_and_decide as experience_gradient_predict_and_decide,
@@ -78,6 +79,7 @@ def install_experience_gradient_production_contract(project_root: str | Path = P
         raise FileNotFoundError(
             f"authoritative experience bank missing: {bank}; build and freeze it before this production entrypoint"
         )
+    apply_simple_rtc_contract()
     _patch_runtime_selector()
     production._production_policy_sha = _extended_policy_sha
     production._production_policy_lock_payload = _experience_policy_lock_payload

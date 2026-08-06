@@ -125,26 +125,12 @@ def predict_and_decide(
         config=gradient_search_config or DifferentiableSearchConfig(),
     )
 
-    # Preserve complete global single/binary coverage from the corrected
-    # selector, then append the small gradient-refined population. Projection,
-    # exact executed-sequence deduplication and the PFV-UCB gate remain in the
-    # legacy corrected selector and therefore cannot be bypassed here.
-    original_generator = legacy._global_tfv_sequences
-
-    def hybrid_generator(base, actuator_frame):
-        coverage = list(original_generator(base, actuator_frame))
-        return [*coverage, *gradient_candidates]
-
     requested = int(kwargs.pop("max_candidate_sequences", DEFAULT_FINAL_CANDIDATE_BUDGET))
-    previous = legacy._global_tfv_sequences
-    legacy._global_tfv_sequences = hybrid_generator
-    try:
-        action, info = legacy.predict_and_decide(
-            **kwargs,
-            max_candidate_sequences=max(requested, DEFAULT_FINAL_CANDIDATE_BUDGET),
-        )
-    finally:
-        legacy._global_tfv_sequences = previous
+    action, info = legacy.predict_and_decide(
+        **kwargs,
+        max_candidate_sequences=max(requested, DEFAULT_FINAL_CANDIDATE_BUDGET),
+        extra_candidate_sequences=gradient_candidates,
+    )
 
     info = dict(info)
     info.update(

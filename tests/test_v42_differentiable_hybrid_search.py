@@ -23,7 +23,9 @@ def test_prepare_starts_keeps_h4_h12_at_current_readback() -> None:
     )
     assert starts
     for sequence in starts:
-        np.testing.assert_allclose(sequence[3:], current[None, :])
+        np.testing.assert_allclose(
+            sequence[3:], np.broadcast_to(current[None, :], sequence[3:].shape)
+        )
 
 
 def test_prepare_starts_enforces_binary_outer_modes() -> None:

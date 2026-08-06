@@ -170,12 +170,12 @@ class AuthoritativeExperienceBank:
         """Return diverse, authoritative warm starts from nearby causal states."""
         distance = self._distance(signature)
         work = self.frame.copy()
-        work["_distance"] = distance
+        work["retrieval_distance"] = distance
         if config.require_pfv_feasible:
             work = work[work["pfv_feasible"]]
         if work.empty:
             return []
-        state_distance = work.groupby("state_key", sort=False)["_distance"].min().sort_values()
+        state_distance = work.groupby("state_key", sort=False)["retrieval_distance"].min().sort_values()
         state_keys = state_distance.head(max(1, int(config.nearest_states))).index.astype(str).tolist()
         work = work[work["state_key"].isin(state_keys)].copy()
         work["_improving"] = (work["tfv_reduction_pct"] > 0.0).astype(int)
@@ -184,7 +184,7 @@ class AuthoritativeExperienceBank:
         if config.prefer_tfv_improving:
             sort_columns.append("_improving")
             ascending.append(False)
-        sort_columns += ["tfv_reduction_pct", "_distance", "candidate_action_sha256"]
+        sort_columns += ["tfv_reduction_pct", "retrieval_distance", "candidate_action_sha256"]
         ascending += [False, True, True]
         work = work.sort_values(sort_columns, ascending=ascending, kind="stable")
         work = work.groupby("state_key", sort=False).head(max(1, int(config.actions_per_state)))
@@ -210,7 +210,7 @@ class AuthoritativeExperienceBank:
                     "sequence": sequence.astype(np.float32),
                     "tfv_reduction_pct": float(row.tfv_reduction_pct),
                     "pfv_feasible": bool(row.pfv_feasible),
-                    "retrieval_distance": float(row._distance),
+                    "retrieval_distance": float(row.retrieval_distance),
                 }
             )
             if len(selected) >= int(config.max_warm_starts):
