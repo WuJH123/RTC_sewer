@@ -20,6 +20,7 @@ legacy evidence readers can coexist while the active control path stays simple.
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, Sequence
 
 import numpy as np
@@ -161,6 +162,7 @@ def decide_simple_pfv_tfv_mpc(
     margins: SafetyMargins | None = None,
     weights: MPCWeights | None = None,
     expected_fallback_contract_hash: str | None = None,
+    rolling_pfv_budget_state: Any | None = None,
 ) -> MPCDecision:
     """Select minimum predicted TFV subject only to the PFV-UCB budget.
 
@@ -176,6 +178,15 @@ def decide_simple_pfv_tfv_mpc(
     audits: list[CandidateAudit] = []
     admitted: list[tuple[float, str, Any]] = []
     for candidate in candidates:
+        if rolling_pfv_budget_state is not None:
+            candidate = replace(
+                candidate,
+                pfv_budget_metric_ucb_m3=float(
+                    rolling_pfv_budget_state.cumulative_budget_metric_ucb_m3(
+                        candidate.pfv_budget_metric_ucb_m3
+                    )
+                ),
+            )
         audit = _candidate_audit(candidate, margins=margins)
         if not audit.safe:
             audits.append(audit)

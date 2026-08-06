@@ -36,6 +36,7 @@ from sewerrtc.control.pfvfirst_mpc_v42 import (
     SafetyMargins,
     decide_pfvfirst_mpc,
 )
+from sewerrtc.control.rolling_pfv_budget_v42 import RollingPfvBudgetState
 from sewerrtc.v4 import v42_formal_runtime as base_runtime
 
 
@@ -210,6 +211,7 @@ def predict_and_decide(
     internal_current_action: np.ndarray,
     gat_ood_score: float,
     max_candidate_sequences: int = 64,
+    rolling_pfv_budget_state: RollingPfvBudgetState | None = None,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """Run the corrected global candidate pool and calibrated PFV-budget selector."""
     ids = actuators["actuator_id"].astype(str).tolist()
@@ -420,6 +422,7 @@ def predict_and_decide(
         margins=SafetyMargins(),
         weights=MPCWeights(),
         expected_fallback_contract_hash=bundle.fallback_contract_sha256,
+        rolling_pfv_budget_state=rolling_pfv_budget_state,
     )
     audit_rows = [
         {
@@ -445,6 +448,8 @@ def predict_and_decide(
         "canonical_pfvfirst_mpc_v42": True,
         "control_objective_contract": base_runtime.FORMAL_OBJECTIVE_CONTRACT,
         "pfv_budget_applied": True,
+        "rolling_pfv_budget_applied": rolling_pfv_budget_state is not None,
+        "rolling_pfv_allowance_reinitialised_each_decision": False,
         "pfv_safety_statistic": "candidate_minus_1p05_no_control",
         "uncertainty_used_for_pfv_ucb": True,
         "priority_depth_hard_gate": False,

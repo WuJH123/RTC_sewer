@@ -50,6 +50,7 @@ from sewerrtc.v4.v42_formal_runtime import (
     sha256_file,
 )
 from sewerrtc.v4.v42_fast_e2e import make_causal_rainfall_forecast
+from sewerrtc.control.rolling_pfv_budget_v42 import RollingPfvBudgetState
 
 
 def build_rule_free_runtime_inp(source: str | Path, target: str | Path) -> Path:
@@ -134,6 +135,26 @@ def _write_and_verify_target(
             "PySWMM target_setting write/readback mismatch; refusing Formal execution"
         )
     return written
+
+
+def _priority_flood_interval_m3(
+    rows: list[dict[str, Any]],
+    *,
+    start_exclusive_min: float,
+    end_inclusive_min: float,
+    priority_nodes: list[str],
+) -> float:
+    """Integrate only causal PFV rows in one already-realised interval."""
+    total_rate = 0.0
+    for row in rows:
+        elapsed = float(row["elapsed_min"])
+        if not (start_exclusive_min < elapsed <= end_inclusive_min):
+            continue
+        rate = sum(float(row[f"flood:{node}"]) for node in priority_nodes)
+        if not np.isfinite(rate) or rate < -1.0e-9:
+            raise RuntimeError("PFV interval contains nonfinite or negative flooding")
+        total_rate += max(rate, 0.0)
+    return float(total_rate * STATE_STEP_SEC)
 
 
 def _runtime_dwell_guard(
@@ -261,6 +282,8 @@ def run_proposed_event(
     decision_step = 0
     target_write_verified_count = 0
     runtime_dwell_fallback_count = 0
+    rolling_pfv_budget_state = RollingPfvBudgetState()
+    rolling_last_accounted_elapsed = -1.0e-6
     started = time.time()
 
     # PySWMM cannot host two Simulation objects in one Python process. Run the
@@ -282,13 +305,14 @@ def run_proposed_event(
         shadow_result = {"detail_path": str(shadow_path), "strategy": "Internal"}
         shadow_reused = True
     shadow_setting_cols = [f"setting:{aid}" for aid in ids]
+    shadow_flood_cols = [f"flood:{node}" for node in priority_nodes]
     # The reusable shadow is a wide hydraulic detail file, but the controller
     # only needs its causal clock and Engineering36 readbacks.  Avoid parsing
     # thousands of unrelated hydraulic columns on every Proposed event.
     try:
         shadow = pd.read_csv(
             shadow_result["detail_path"],
-            usecols=["elapsed_min", *shadow_setting_cols],
+            usecols=["elapsed_min", *shadow_setting_cols, *shadow_flood_cols],
             low_memory=False,
         )
     except ValueError as exc:
@@ -302,6 +326,7 @@ def run_proposed_event(
     if len(np.unique(shadow_times)) != len(shadow_times):
         raise RuntimeError("native Internal shadow has duplicate elapsed_min rows")
     shadow_by_time = {round(float(t), 6): shadow_actions[i].astype(np.float32) for i, t in enumerate(shadow_times)}
+    shadow_pfv_rows = shadow[["elapsed_min", *shadow_flood_cols]].to_dict("records")
     shadow_initial = shadow_by_time[min(shadow_by_time)]
 
     with Simulation(str(runtime_event.inp_path)) as sim:
@@ -337,6 +362,31 @@ def run_proposed_event(
                 command = internal_current.copy()
                 _write_and_verify_target(link_objs, ids, command)
             elif _is_decision_time(elapsed):
+                current_row = _record_row(
+                    frame=pre,
+                    event_id=event.event_id,
+                    strategy="Proposed",
+                    command=current_action,
+                    readback=current_action,
+                    node_objs=node_objs,
+                    link_objs=link_objs,
+                    actuator_ids=ids,
+                )
+                rolling_pfv_budget_state = rolling_pfv_budget_state.update(
+                    candidate_interval_pfv_m3=_priority_flood_interval_m3(
+                        [*records, current_row],
+                        start_exclusive_min=rolling_last_accounted_elapsed,
+                        end_inclusive_min=elapsed,
+                        priority_nodes=priority_nodes,
+                    ),
+                    no_control_interval_pfv_m3=_priority_flood_interval_m3(
+                        shadow_pfv_rows,
+                        start_exclusive_min=rolling_last_accounted_elapsed,
+                        end_inclusive_min=elapsed,
+                        priority_nodes=priority_nodes,
+                    ),
+                )
+                rolling_last_accounted_elapsed = elapsed
                 history, uncertainty, ood_score = reconstruct_history(
                     frames, bundle, state_source=state_source
                 )
@@ -356,6 +406,7 @@ def run_proposed_event(
                     internal_current_action=internal_current,
                     gat_ood_score=ood_score,
                     max_candidate_sequences=max_candidate_sequences,
+                    rolling_pfv_budget_state=rolling_pfv_budget_state,
                 )
                 command, dwell_pass, dwell_violations = _runtime_dwell_guard(
                     command,
@@ -402,6 +453,7 @@ def run_proposed_event(
                         "target_write_verified": bool(
                             np.allclose(written, command, atol=1.0e-6, rtol=0.0)
                         ),
+                        "rolling_pfv_budget": rolling_pfv_budget_state.audit_payload(),
                     }
                 )
                 decisions.append(info)
@@ -470,6 +522,8 @@ def run_proposed_event(
         ),
         "runtime_dwell_fallback_count": runtime_dwell_fallback_count,
         "runtime_cross_decision_dwell_enforced": True,
+        "rolling_pfv_budget": rolling_pfv_budget_state.audit_payload(),
+        "rolling_pfv_allowance_reinitialised_each_decision": False,
         "runtime_sec": time.time() - started,
     }
     (out_dir / "run_result.json").write_text(
