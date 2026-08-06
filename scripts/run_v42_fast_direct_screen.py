@@ -33,6 +33,7 @@ from sewerrtc.v4.v42_trajectory_builder import _load_graph_topology
 _MANIFEST_COLUMNS = [
     "state_key", "event_id", "rainfall_sha256", "checkpoint_min",
     "candidate_action_sha256", "action_candidate_readback",
+    "pfv_delta", "tfv_delta",
     "source_detail_path_candidate", "source_detail_path_no_control",
     "source_detail_path_hold_previous", "action_hold_previous_readback",
 ]
@@ -79,9 +80,27 @@ def _state_jobs(state: pd.Series, group: pd.DataFrame, importance: pd.DataFrame,
     continuous = importance[(importance.state_key == str(state.state_key)) & (~importance.binary)].sort_values(["frequency", "best_tfv_gain_pct", "facility_id"], ascending=[False, False, True], na_position="last", kind="stable").head(6)["facility_id"].astype(str).tolist()
     binary = importance[(importance.state_key == str(state.state_key)) & importance.binary & (importance.safe_improving_change_count >= 2)].sort_values(["frequency", "best_tfv_gain_pct", "facility_id"], ascending=[False, False, True], kind="stable")["facility_id"].astype(str).tolist()
     seeds: list[np.ndarray] = [np.tile(current, (12, 1)).astype(np.float32)]
-    for raw in group["action_candidate_readback"].dropna().astype(str):
+    seed_rows = group.copy()
+    if "pfv_delta" in seed_rows:
+        pfv = pd.to_numeric(seed_rows["pfv_delta"], errors="coerce")
+        tfv = pd.to_numeric(seed_rows["tfv_delta"], errors="coerce")
+        seed_rows = seed_rows.assign(_seed_pfv=pfv, _seed_tfv=tfv)
+        seed_rows = pd.concat([
+            seed_rows.loc[pfv.le(100.0)].assign(_seed_order=0).sort_values("_seed_tfv", kind="stable", na_position="last"),
+            seed_rows.assign(_seed_order=1).sort_values("_seed_tfv", kind="stable", na_position="last"),
+            seed_rows.assign(_seed_order=2),
+        ], ignore_index=True)
+    seen_seed_hashes: set[str] = set()
+    for _, seed_row in seed_rows.iterrows():
+        raw = seed_row.get("action_candidate_readback")
+        if pd.isna(raw):
+            continue
         candidate = _array(raw)
         if candidate.shape == (12, len(ids)):
+            seed_sha = action_sha256(candidate)
+            if seed_sha in seen_seed_hashes:
+                continue
+            seen_seed_hashes.add(seed_sha)
             seeds.append(candidate)
         if len(seeds) >= 12:
             break
