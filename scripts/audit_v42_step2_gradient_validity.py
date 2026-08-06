@@ -20,13 +20,19 @@ from sewerrtc.v4.v42_priority_contract import get_pfv_core_node_indices
 from sewerrtc.v4.v42_trajectory_builder import _load_graph_topology, build_surrogate_action_node_map
 
 
-def _first_states(manifest: Path, state_count: int, batch_size: int):
+def _first_states(
+    manifest: Path,
+    state_count: int,
+    batch_size: int,
+    requested_keys: list[str] | None = None,
+):
     import pandas as pd
 
-    wanted = set(
-        sorted(pd.read_parquet(manifest, columns=["state_key"])["state_key"].astype(str).unique())
-        [: max(1, state_count)]
-    )
+    available = set(pd.read_parquet(manifest, columns=["state_key"])["state_key"].astype(str).unique())
+    wanted = set(requested_keys or sorted(available)[: max(1, state_count)])
+    missing = sorted(wanted - available)
+    if missing:
+        raise KeyError(f"manifest missing requested state keys: {missing}")
     rows: list[dict] = []
     for batch in _iter_manifest_batches(manifest, wanted, batch_size):
         for _, row in batch[batch["state_key"].isin(wanted)].iterrows():
@@ -49,11 +55,12 @@ def main() -> int:
     parser.add_argument("--states", type=int, default=12)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--seeds", nargs="+", type=int, default=[17, 42, 73])
+    parser.add_argument("--state-keys", nargs="*")
     parser.add_argument("--finite-difference-samples", type=int, default=16)
     parser.add_argument("--epsilon", type=float, default=0.01)
     args = parser.parse_args()
 
-    frame = _first_states(args.manifest, args.states, args.batch_size)
+    frame = _first_states(args.manifest, args.states, args.batch_size, args.state_keys)
     graph = _load_graph_topology(args.project_root)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     action_map = build_surrogate_action_node_map(graph).astype(np.float32)
@@ -120,7 +127,8 @@ def main() -> int:
 
     payload = {
         "audit_id": "V42_STEP2_GRADIENT_VALIDITY_V1", "read_only": True, "new_swmm_started": False,
-        "manifest": str(args.manifest), "states_audited": int(len(frame)), "model_seeds": list(args.seeds),
+        "manifest": str(args.manifest), "states_audited": int(len(frame)),
+        "state_keys": sorted(frame["state_key"].astype(str).unique()), "model_seeds": list(args.seeds),
         "action_map_source": "build_surrogate_action_node_map", "action_map_nonzero": int(np.count_nonzero(action_map)),
         "epsilon": float(args.epsilon), "results": results,
         "finite_gradient_all_seeds": bool(all(item["finite_gradients"] for item in results)),
