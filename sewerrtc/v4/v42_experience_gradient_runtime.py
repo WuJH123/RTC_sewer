@@ -11,6 +11,7 @@ search only proposes actions; it cannot bypass PFV admission or write/readback.
 """
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -30,15 +31,36 @@ from sewerrtc.v4 import v42_pfv_tfv_runtime_patch as legacy
 
 EXPERIENCE_GRADIENT_RUNTIME_CONTRACT = "PROJECT6_V42_EXPERIENCE_GRADIENT_PFV_TFV_MPC_V1"
 DEFAULT_FINAL_CANDIDATE_BUDGET = 160
+DEFAULT_BANK_RELATIVE_PATH = Path(
+    "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2/diagnostics/"
+    "experience_gradient/AUTHORITATIVE_EXPERIENCE_BANK.parquet"
+)
 
 
-def _load_bank(path: str | Path | None) -> AuthoritativeExperienceBank | None:
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _resolve_bank_path(bundle: Any, path: str | Path | None) -> Path | None:
+    if path is not None:
+        source = Path(path)
+        if not source.is_absolute():
+            source = Path(bundle.project_root) / source
+        return source
+    default = Path(bundle.project_root) / DEFAULT_BANK_RELATIVE_PATH
+    return default if default.exists() else None
+
+
+def _load_bank(path: Path | None) -> AuthoritativeExperienceBank | None:
     if path is None:
         return None
-    source = Path(path)
-    if not source.exists():
-        raise FileNotFoundError(source)
-    return AuthoritativeExperienceBank.load(source)
+    if not path.exists():
+        raise FileNotFoundError(path)
+    return AuthoritativeExperienceBank.load(path)
 
 
 def predict_and_decide(
@@ -74,7 +96,8 @@ def predict_and_decide(
     rolling_state = kwargs.get("rolling_pfv_budget_state")
     actuator_ids = actuators["actuator_id"].astype(str).tolist()
 
-    bank = _load_bank(experience_bank_path)
+    resolved_bank_path = _resolve_bank_path(bundle, experience_bank_path)
+    bank = _load_bank(resolved_bank_path)
     warm_records: list[dict[str, Any]] = []
     if bank is not None:
         signature = state_signature(
@@ -103,7 +126,7 @@ def predict_and_decide(
     )
 
     # Preserve complete global single/binary coverage from the corrected
-    # selector, then append the small gradient-refined population.  Projection,
+    # selector, then append the small gradient-refined population. Projection,
     # exact executed-sequence deduplication and the PFV-UCB gate remain in the
     # legacy corrected selector and therefore cannot be bypassed here.
     original_generator = legacy._global_tfv_sequences
@@ -129,6 +152,8 @@ def predict_and_decide(
             "runtime_contract": EXPERIENCE_GRADIENT_RUNTIME_CONTRACT,
             "candidate_search": "coverage_plus_experience_plus_differentiable_refinement",
             "experience_bank_used": bank is not None,
+            "experience_bank_path": str(resolved_bank_path) if resolved_bank_path else None,
+            "experience_bank_sha256": _sha256(resolved_bank_path) if resolved_bank_path else None,
             "experience_warm_start_count": len(warm_records),
             "experience_warm_start_state_keys": [str(x["state_key"]) for x in warm_records],
             "gradient_search": gradient_info,
