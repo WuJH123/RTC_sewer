@@ -20,6 +20,7 @@ from .action_policies import (
     phase_from_time,
 )
 from .kpi_metrics import compute_kpis
+from .v42_hydraulic_recorder import record_v42_hydraulic_targets
 from .runtime_contracts import (
     analyze_recovery,
     checkpoint_targets,
@@ -2827,6 +2828,8 @@ def run_swmm_no_control_action_ablation(
     post_override_nominal_detail_csv: str | Path | None = None,
     policy_id: str = "no_control_single_actuator_ablation",
     cleanup_swmm_artifacts: bool = False,
+    storage_node_ids: list[str] | None = None,
+    outfall_node_ids: list[str] | None = None,
 ) -> dict:
     """Replay No-control and branch one absolute actuator at one time.
 
@@ -2930,6 +2933,15 @@ def run_swmm_no_control_action_ablation(
                 except Exception:
                     row[f"flow:{aid}"] = np.nan
                     row[f"setting:{aid}"] = np.nan
+            record_v42_hydraulic_targets(
+                row=row,
+                node_objects=node_objs,
+                facility_link_objects=link_objs,
+                graph_node_ids=node_ids,
+                storage_node_ids=storage_node_ids or [],
+                facility_ids=actuator_ids,
+                outfall_node_ids=outfall_node_ids or [],
+            )
             records.append(row)
             previous = reference_action
             step_i += 1

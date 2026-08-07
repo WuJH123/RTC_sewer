@@ -314,13 +314,20 @@ def main() -> int:
     groups = (
         int(out["split_group_key"].astype(str).nunique()) if not out.empty else 0
     )
-    status = "pass" if groups >= args.min_rainfall_groups else "fail"
+    status = (
+        "pass"
+        if groups >= args.min_rainfall_groups
+        and not failures
+        and len(out) == len(frame)
+        else "fail"
+    )
     audit = {
         "stage": "step2_target_contract_materialization",
         "status": status,
         "target_contract": args.target_contract,
         "input_rows": int(len(frame)),
         "accepted_rows": int(len(out)),
+        "all_input_rows_accepted": bool(len(out) == len(frame) and not failures),
         "accepted_rainfall_groups": groups,
         "minimum_rainfall_groups": int(args.min_rainfall_groups),
         "failed_rows": int(len(failures)),

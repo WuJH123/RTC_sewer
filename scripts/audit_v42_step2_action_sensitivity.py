@@ -7,13 +7,14 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import torch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.train_v42_step2_fast import _forward, _graph_indices, _hash_model, _tensorise
+from scripts.train_v42_step2_fast import BRANCHES, _forward, _graph_indices, _hash_model, _tensorise
 from sewerrtc.v4.formal_f2 import read_table
 from sewerrtc.v4.models_v42.hydraulic_multi_reference import MultiReferenceHydraulicSurrogate
 from sewerrtc.v4.v42_priority_contract import get_pfv_core_node_indices
@@ -26,6 +27,33 @@ from sewerrtc.v4.v42_trajectory_builder import (
 def _batch_indices(n: int, batch_size: int):
     for start in range(0, n, batch_size):
         yield np.arange(start, min(start + batch_size, n), dtype=np.int64)
+
+
+def _required_columns(manifest: Path) -> list[str]:
+    import pyarrow.parquet as pq
+
+    names = set(pq.ParquetFile(manifest).schema.names)
+    columns = ["state_key", "history_depth", "history_actions_readback", "rainfall_forecast", "pfv_delta", "tfv_delta", "peak_delta"]
+    for branch in BRANCHES:
+        action = "action_dynamic_internal_input_readback" if branch == "dynamic_internal" and "action_dynamic_internal_input_readback" in names else f"action_{branch}_readback"
+        columns.extend([action, f"trajectory_depth_{branch}", f"trajectory_flood_{branch}"])
+    missing = sorted(set(columns) - names)
+    if missing:
+        raise KeyError(f"manifest missing chunk columns: {missing}")
+    return list(dict.fromkeys(columns))
+
+
+def _iter_manifest_batches(manifest: Path, state_keys: set[str], batch_size: int):
+    import pyarrow.parquet as pq
+
+    parquet = pq.ParquetFile(manifest)
+    columns = _required_columns(manifest)
+    for batch in parquet.iter_batches(batch_size=int(batch_size), columns=columns, use_threads=True):
+        frame = batch.to_pandas()
+        frame["state_key"] = frame["state_key"].astype(str)
+        selected = frame[frame["state_key"].isin(state_keys)].reset_index(drop=True)
+        if not selected.empty:
+            yield selected
 
 
 def main() -> int:
@@ -41,9 +69,21 @@ def main() -> int:
     if args.batch_size < 1:
         ap.error("--batch-size must be positive")
 
-    frame = read_table(args.manifest)
-    state_keys = sorted(frame["state_key"].astype(str).unique())[: max(1, args.states)]
-    selected = frame[frame["state_key"].astype(str).isin(state_keys)].reset_index(drop=True)
+    if args.manifest.suffix.lower() == ".parquet":
+        import pyarrow.parquet as pq
+
+        state_frame = pd.read_parquet(args.manifest, columns=["state_key"])
+        state_keys = set(sorted(state_frame["state_key"].astype(str).unique())[: max(1, args.states)])
+        meta_parts = []
+        for batch in _iter_manifest_batches(args.manifest, state_keys, args.batch_size):
+            meta_parts.append(batch[["state_key", "pfv_delta", "tfv_delta"]].copy())
+        selected = pd.concat(meta_parts, ignore_index=True)
+        batch_factory = lambda: _iter_manifest_batches(args.manifest, state_keys, args.batch_size)
+    else:
+        frame = read_table(args.manifest)
+        state_keys = set(sorted(frame["state_key"].astype(str).unique())[: max(1, args.states)])
+        selected = frame[frame["state_key"].astype(str).isin(state_keys)].reset_index(drop=True)
+        batch_factory = lambda: [selected]
     graph = _load_graph_topology(args.project_root)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     action_map = build_surrogate_action_node_map(graph).astype(np.float32)
@@ -59,8 +99,6 @@ def main() -> int:
         dtype=torch.long,
         device=device,
     )
-    tensor_data = _tensorise(selected)
-
     predictions = []
     model_root = args.model_root or (
         args.project_root
@@ -83,13 +121,12 @@ def main() -> int:
         predicted_pfv = []
         predicted_tfv = []
         with torch.inference_mode():
-            for idx in _batch_indices(len(selected), args.batch_size):
-                ti = torch.as_tensor(idx, dtype=torch.long)
-                batch = {key: value.index_select(0, ti) for key, value in tensor_data.items()}
-                output = _forward(model, batch, graph_tensors, priority, device)
+            for frame_batch in batch_factory():
+                tensor_data = _tensorise(frame_batch)
+                output = _forward(model, tensor_data, graph_tensors, priority, device)
                 predicted_pfv.append(output["pfv_delta"].detach().cpu().numpy())
                 predicted_tfv.append(output["tfv_delta"].detach().cpu().numpy())
-        del output, batch
+        del output, tensor_data
         if device.type == "cuda":
             torch.cuda.empty_cache()
         predictions.append(

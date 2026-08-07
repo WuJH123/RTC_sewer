@@ -29,6 +29,7 @@ from sewerrtc.control.targeted_candidate_expansion_v42 import (
     generate_targeted_candidate_sequences,
 )
 from sewerrtc.v4.v42_formal_runtime import load_actuators
+from sewerrtc.v4.v42_node_safety import load_node_physical_contract
 from sewerrtc.v4.v42_priority_contract import get_pfv_core_node_indices
 from sewerrtc.v4.v42_trajectory_builder import (
     _load_graph_topology,
@@ -192,7 +193,16 @@ def _run_one(job: dict[str, Any]) -> dict[str, Any]:
     if job["resume"] and detail_path.exists() and result_path.exists():
         try:
             old = json.loads(result_path.read_text(encoding="utf-8"))
-            if old.get("status") == "pass" and old.get("candidate_action_sha256") == job["candidate_action_sha256"]:
+            header = pd.read_csv(detail_path, nrows=0)
+            required_targets = {
+                *[f"storage_volume:{node_id}" for node_id in job["storage_node_ids"]],
+                *[f"flow:{actuator_id}" for actuator_id in job["actuator_ids"]],
+            }
+            if (
+                old.get("status") == "pass"
+                and old.get("candidate_action_sha256") == job["candidate_action_sha256"]
+                and required_targets.issubset(header.columns)
+            ):
                 old["status"] = "reused"
                 return old
         except Exception:
@@ -236,6 +246,8 @@ def _run_one(job: dict[str, Any]) -> dict[str, Any]:
         post_override_nominal_detail_csv=tail_schedule,
         policy_id=f"targeted_candidate_expansion_round{job.get('candidate_round', 1)}:{job['candidate_label']}",
         cleanup_swmm_artifacts=True,
+        storage_node_ids=list(job["storage_node_ids"]),
+        outfall_node_ids=list(job["outfall_node_ids"]),
     )
     prefix = _prefix_audit(detail_path, no_control, float(job["checkpoint_min"]), ids)
     detail = pd.read_csv(detail_path)
@@ -281,6 +293,11 @@ def _build_jobs(args: argparse.Namespace) -> tuple[list[dict[str, Any]], pd.Data
     plan = pd.read_csv(args.plan_csv)
     manifest = pd.read_parquet(args.source_manifest)
     actuators = load_actuators(args.project_root)
+    physical = load_node_physical_contract(args.project_root)
+    graph = _load_graph_topology(args.project_root)
+    node_ids = [str(value) for value in graph["node_ids"]]
+    storage_node_ids = [node_ids[index] for index in physical.storage_indices]
+    outfall_node_ids = [node_ids[index] for index in physical.outfall_indices]
     ids = actuators["actuator_id"].astype(str).tolist()
     ranked, priority_nodes = _ranked_actuators(args.project_root, actuators)
     roles = _role_map(actuators)
@@ -355,6 +372,8 @@ def _build_jobs(args: argparse.Namespace) -> tuple[list[dict[str, Any]], pd.Data
                 "current_action": current.tolist(),
                 "actuator_ids": ids,
                 "priority_nodes": priority_nodes,
+                "storage_node_ids": storage_node_ids,
+                "outfall_node_ids": outfall_node_ids,
                 "actuators": actuators,
                 "source_detail_path_no_control": str(source["source_detail_path_no_control"]),
                 "source_detail_path_hold_previous": str(source["source_detail_path_hold_previous"]),
@@ -368,20 +387,37 @@ def _build_jobs(args: argparse.Namespace) -> tuple[list[dict[str, Any]], pd.Data
     return jobs, plan, manifest, actuators
 
 
-def _horizon_arrays(detail: pd.DataFrame, checkpoint: float, node_ids: list[str], actuator_ids: list[str]) -> dict[str, Any]:
-    horizon = detail[detail["elapsed_min"] >= float(checkpoint) - 1.0e-6].sort_values("elapsed_min").head(12)
+def _horizon_arrays(
+    detail: pd.DataFrame,
+    checkpoint: float,
+    node_ids: list[str],
+    storage_node_ids: list[str],
+    actuator_ids: list[str],
+) -> dict[str, Any]:
+    # The action at ``checkpoint`` is the pre-action readback.  The first
+    # executed 10-minute result is the next elapsed row; including the
+    # checkpoint row shifts PFV/TFV labels one control step backward.
+    horizon = detail[detail["elapsed_min"] > float(checkpoint) + 1.0e-6].sort_values("elapsed_min").head(12)
     if len(horizon) != 12:
         raise RuntimeError(f"candidate detail has {len(horizon)} H120 rows, expected 12")
     flood_cols = [f"flood:{node_id}" for node_id in node_ids]
     depth_cols = [f"h:{node_id}" for node_id in node_ids]
     setting_cols = [f"setting:{actuator_id}" for actuator_id in actuator_ids]
-    missing = [column for column in flood_cols + depth_cols + setting_cols if column not in horizon]
+    storage_cols = [f"storage_volume:{node_id}" for node_id in storage_node_ids]
+    flow_cols = [f"flow:{actuator_id}" for actuator_id in actuator_ids]
+    missing = [
+        column
+        for column in flood_cols + depth_cols + setting_cols + storage_cols + flow_cols
+        if column not in horizon
+    ]
     if missing:
         raise RuntimeError(f"candidate detail missing required columns: {missing[:5]}")
     arrays = {
         "flood": horizon[flood_cols].to_numpy(dtype=np.float64),
         "depth": horizon[depth_cols].to_numpy(dtype=np.float64),
         "action": horizon[setting_cols].to_numpy(dtype=np.float64),
+        "storage": horizon[storage_cols].to_numpy(dtype=np.float64),
+        "facility_flow": horizon[flow_cols].to_numpy(dtype=np.float64),
         "elapsed_min": horizon["elapsed_min"].to_numpy(dtype=np.float64),
     }
     if not all(np.isfinite(value).all() for key, value in arrays.items() if key != "elapsed_min"):
@@ -394,6 +430,8 @@ def _build_expanded_manifest(results: list[dict[str, Any]], source: pd.DataFrame
     node_ids = [str(value) for value in _graph_field(graph, "node_ids")]
     priority = get_pfv_core_node_indices(node_ids)
     actuator_ids = load_actuators(project_root)["actuator_id"].astype(str).tolist()
+    physical = load_node_physical_contract(project_root)
+    storage_node_ids = [node_ids[index] for index in physical.storage_indices]
     rows: list[dict[str, Any]] = []
     for result in results:
         if result.get("status") not in {"pass", "reused"}:
@@ -404,7 +442,13 @@ def _build_expanded_manifest(results: list[dict[str, Any]], source: pd.DataFrame
             raise RuntimeError(f"cannot build expanded manifest: unknown state {state_key}")
         row = source_rows.iloc[0].to_dict()
         detail = pd.read_csv(result["candidate_detail"])
-        arrays = _horizon_arrays(detail, float(result["checkpoint_min"]), node_ids, actuator_ids)
+        arrays = _horizon_arrays(
+            detail,
+            float(result["checkpoint_min"]),
+            node_ids,
+            storage_node_ids,
+            actuator_ids,
+        )
         no_control_flood = _array(row["trajectory_flood_no_control"]).astype(float)
         internal_flood = _array(row["trajectory_flood_dynamic_internal"]).astype(float)
         candidate_flood = arrays["flood"]
@@ -455,14 +499,14 @@ def _build_expanded_manifest(results: list[dict[str, Any]], source: pd.DataFrame
             "label_validity_pfv": True,
             "label_validity_tfv": True,
             "label_validity_peak": True,
-            "trajectory_storage_volume_candidate": None,
-            "trajectory_facility_flow_candidate": None,
+            "trajectory_storage_volume_candidate": json.dumps(arrays["storage"].tolist(), separators=(",", ":")),
+            "trajectory_facility_flow_candidate": json.dumps(arrays["facility_flow"].tolist(), separators=(",", ":")),
             "trajectory_outfall_flow_candidate": None,
-            "trajectory_storage_volume_candidate_available": False,
-            "trajectory_facility_flow_candidate_available": False,
+            "trajectory_storage_volume_candidate_available": True,
+            "trajectory_facility_flow_candidate_available": True,
             "trajectory_outfall_flow_candidate_available": False,
-            "storage_finite_fraction_candidate": 0.0,
-            "facility_flow_finite_fraction_candidate": 0.0,
+            "storage_finite_fraction_candidate": float(np.isfinite(arrays["storage"]).mean()),
+            "facility_flow_finite_fraction_candidate": float(np.isfinite(arrays["facility_flow"]).mean()),
             "outfall_flow_finite_fraction_candidate": 0.0,
             "candidate_expansion_family": str(result.get("candidate_family", "")),
             "candidate_expansion_round": round_no,

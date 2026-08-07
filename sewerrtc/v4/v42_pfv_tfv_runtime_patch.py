@@ -212,6 +212,7 @@ def predict_and_decide(
     gat_ood_score: float,
     max_candidate_sequences: int = 64,
     rolling_pfv_budget_state: RollingPfvBudgetState | None = None,
+    extra_candidate_sequences: list[dict[str, Any]] | None = None,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """Run the corrected global candidate pool and calibrated PFV-budget selector."""
     ids = actuators["actuator_id"].astype(str).tolist()
@@ -222,6 +223,8 @@ def predict_and_decide(
     # putting global coverage first prevents a local alias from stealing the
     # mandatory rank and then being discarded by the post-projection cap.
     generated = _global_tfv_sequences(base, actuators)
+    if extra_candidate_sequences:
+        generated.extend(extra_candidate_sequences)
     generated.extend(
         generate_action_sequences(
             base,

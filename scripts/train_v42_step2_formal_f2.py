@@ -31,6 +31,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.train_v42_step2_fast import (
+    BRANCHES,
     _all_branch_columns,
     _batch_indices,
     _evaluate,
@@ -199,6 +200,11 @@ def main() -> int:
         / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2/step2/FORMAL_F2_STEP2_CONTROL_CORE_MANIFEST.parquet",
     )
     ap.add_argument("--output-dir", type=Path, required=True)
+    ap.add_argument(
+        "--development-only",
+        action="store_true",
+        help="allow a non-Formal diagnostic manifest and label the report development-only",
+    )
     ap.add_argument("--epochs", type=int, default=30)
     ap.add_argument("--patience", type=int, default=6)
     ap.add_argument("--batch-size", type=int, default=4)
@@ -257,6 +263,15 @@ def main() -> int:
     )
     args = ap.parse_args()
 
+    formal_manifest = (
+        PROJECT_ROOT
+        / "outputs/project6_dual_reference_v4/final_v4/v42_paper/formal_f2/step2/FORMAL_F2_STEP2_CONTROL_CORE_MANIFEST.parquet"
+    ).resolve()
+    if not args.development_only and args.manifest.resolve() != formal_manifest:
+        raise RuntimeError(
+            "non-Formal Step2 manifests require --development-only; no diagnostic data may silently become Formal"
+        )
+
     if args.kpi_consistency_weight < 0.0 or not np.isfinite(args.kpi_consistency_weight):
         raise ValueError("--kpi-consistency-weight must be finite and non-negative")
     if args.priority_flooding_weight < 0.0 or not np.isfinite(args.priority_flooding_weight):
@@ -273,12 +288,28 @@ def main() -> int:
     frame = read_table(args.manifest)
     if frame.empty:
         raise ValueError("formal Step2 target manifest is empty")
+    for quantity in ("storage_volume", "facility_flow"):
+        availability_columns = [
+            f"trajectory_{quantity}_{branch}_available" for branch in BRANCHES
+        ]
+        if not all(column in frame.columns for column in availability_columns):
+            raise RuntimeError(
+                f"CONTROL_CORE target availability columns missing for {quantity}"
+            )
+        complete = frame[availability_columns].astype(bool).all(axis=1)
+        if not bool(complete.all()):
+            raise RuntimeError(
+                f"CONTROL_CORE target coverage incomplete for {quantity}: "
+                f"{int((~complete).sum())}/{len(frame)} rows missing; no imputation allowed"
+            )
     frame = _add_causal_dynamic_internal_input(frame, args.project_root)
     for column in (
         "training_admission_authorized",
         "raw_independent_oracle_all_pass",
         "actual_readback_verified",
     ):
+        if column == "training_admission_authorized" and args.development_only:
+            continue
         if column not in frame or not bool(frame[column].astype(bool).all()):
             raise RuntimeError(f"formal Step2 requires all {column}=True")
     for column, expected in {
@@ -318,6 +349,9 @@ def main() -> int:
     train_f, val_f, cal_f, train_groups, val_groups, cal_groups = _split(
         frame, args.split_seed, args.min_train_groups
     )
+    training_admission_all = bool(
+        frame["training_admission_authorized"].astype(bool).all()
+    ) if "training_admission_authorized" in frame else False
     state_codes = {
         state: i for i, state in enumerate(sorted(frame["state_key"].astype(str).unique()))
     }
@@ -463,12 +497,14 @@ def main() -> int:
         "formal_generation_id": FORMAL_GENERATION_ID,
         "stage": "formal_f2_step2_single_seed",
         "status": "pass",
-        "development_only": False,
+        "development_only": bool(args.development_only),
         "formal_mainline_authorized": False,
+        "source_manifest": str(args.manifest.resolve()),
+        "source_manifest_sha256": hashlib.sha256(args.manifest.read_bytes()).hexdigest(),
         "formal_model": "MultiReferenceHydraulicSurrogate",
         "four_reference_shared_model": True,
         "trajectory_first_kpi_derivation": True,
-        "training_admission_authorized": True,
+        "training_admission_authorized": training_admission_all,
         "raw_independent_oracle_all_pass": True,
         "action_authority": "actual_readback_setting",
         "history_input_contract": "gat_compatible_causal_state",

@@ -8,6 +8,7 @@ import pandas as pd
 from sewerrtc.simulation.v42_hydraulic_recorder import (
     formal_target_columns,
     record_v42_hydraulic_targets,
+    storage_volume_from_depth_v42,
 )
 from sewerrtc.v4.v42_hydraulic_target_audit import audit_detail_targets
 
@@ -136,3 +137,15 @@ def test_formal_column_contract_is_explicit():
     assert columns["node_flooding_rate"] == ["flood:J1", "flood:O1"]
     assert columns["managed_facility_flow"] == ["flow:P1"]
     assert columns["outfall_flow"] == ["outfall_flow:O1"]
+
+
+def test_storage_volume_recovery_matches_functional_and_tabular_geometry():
+    depth = np.asarray([0.0, 1.0, 2.0], dtype=float)
+    functional = storage_volume_from_depth_v42(
+        depth, shape="FUNCTIONAL", functional_params=[0.0, 0.0, 4932.7]
+    )
+    tabular = storage_volume_from_depth_v42(
+        depth, shape="TABULAR", curve_depth=[0.0, 2.0], curve_area=[100.0, 100.0]
+    )
+    np.testing.assert_allclose(functional, [0.0, 4932.7, 9865.4])
+    np.testing.assert_allclose(tabular, [0.0, 100.0, 200.0])
